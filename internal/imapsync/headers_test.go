@@ -27,7 +27,8 @@ func dial(t *testing.T, srv *imaptest.Server) *imapsync.Conn {
 }
 
 func msg(id string) []byte {
-	return fmt.Appendf(nil, "From: a@example.com\r\nMessage-ID: <%s>\r\nSubject: s\r\n\r\nbody %s\r\n", id, id)
+	return fmt.Appendf(nil, "From: a@example.com\r\nTo: b@example.com\r\nMessage-ID: <%s>\r\nX-Other: x\r\n"+
+		"Subject: s\r\nDate: Mon, 1 Jun 2026 12:00:00 +0200\r\n\r\nbody %s\r\n", id, id)
 }
 
 func TestListHeaders(t *testing.T) {
@@ -45,7 +46,7 @@ func TestListHeaders(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv.ResetCommands()
-	if err := imapsync.ListHeaders(conn, 0, func(imapsync.Header) error { t.Error("header in an empty folder"); return nil }); err != nil {
+	if err := imapsync.ListHeaders(conn, 0, 0, func(imapsync.Header) error { t.Error("header in an empty folder"); return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if c := srv.Commands(); len(c) != 0 {
@@ -57,14 +58,16 @@ func TestListHeaders(t *testing.T) {
 	}
 	srv.ResetCommands()
 	var got []imapsync.Header
-	if err := imapsync.ListHeaders(conn, 1, func(h imapsync.Header) error { got = append(got, h); return nil }); err != nil {
+	if err := imapsync.ListHeaders(conn, 1, 0, func(h imapsync.Header) error { got = append(got, h); return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 2 || got[0].UID != 2 || got[1].UID != 3 {
 		t.Fatalf("headers %+v", got)
 	}
-	if string(got[0].MessageID) != "Message-ID: <m2@example.com>\r\n\r\n" {
-		t.Errorf("message id %q", got[0].MessageID)
+	// The four fields a fill compares (#4 of the security fixes), and no
+	// other.
+	if want := "From: a@example.com\r\nMessage-ID: <m2@example.com>\r\nSubject: s\r\nDate: Mon, 1 Jun 2026 12:00:00 +0200\r\n\r\n"; string(got[0].Fields) != want {
+		t.Errorf("fields %q, want %q", got[0].Fields, want)
 	}
 	if !got[0].InternalDate.Equal(at.Add(time.Hour)) {
 		t.Errorf("internal date %v, want %v", got[0].InternalDate, at.Add(time.Hour))
@@ -78,7 +81,7 @@ func TestListHeaders(t *testing.T) {
 
 	// "4:*" answers the last message (UID 3); it is not listed.
 	got = nil
-	if err := imapsync.ListHeaders(conn, 3, func(h imapsync.Header) error { got = append(got, h); return nil }); err != nil {
+	if err := imapsync.ListHeaders(conn, 3, 0, func(h imapsync.Header) error { got = append(got, h); return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 0 {

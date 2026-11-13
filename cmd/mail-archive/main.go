@@ -12,6 +12,8 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
+
+	"github.com/pklnx/mail-archive/internal/config"
 )
 
 var version = "dev"
@@ -36,12 +38,15 @@ func main() {
 		newMigrateCmd(),
 		newPrepareDataCmd(),
 		newKeygenCmd(),
+		newSecretKeyCmd(),
+		newSetupCmd(),
 		newAccountCmd(),
 		newUserCmd(),
 		newGroupCmd(),
 		newAuditorCmd(),
 		newSyncCmd(),
 		newStatusCmd(),
+		newUsageCmd(),
 		newReindexCmd(),
 		newVerifyCmd(),
 		newExportCmd(),
@@ -81,6 +86,21 @@ func exitStatus(ctx context.Context, err error) (int, string) {
 	}
 	if err == nil {
 		return 0, ""
+	}
+	// A failed migration or a refused start-up check (#396).
+	var coded *codedError
+	if errors.As(err, &coded) {
+		return coded.code, err.Error()
+	}
+	// A refused secret key (#396): its configuration or its check.
+	var keyErr *config.SecretKeyError
+	if errors.As(err, &keyErr) {
+		return exitStartRefused, err.Error()
+	}
+	// A refused setup token (#396, part 3).
+	var tokenErr *config.SetupTokenError
+	if errors.As(err, &tokenErr) {
+		return exitStartRefused, err.Error()
 	}
 	var exitErr *exitError
 	if !errors.As(err, &exitErr) {

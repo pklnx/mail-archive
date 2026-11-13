@@ -20,12 +20,12 @@ afterEach(cleanup);
 const names = (el: HTMLElement) => within(el).getAllByRole("link").map((l) => l.textContent);
 
 describe("ShellNav", () => {
-  it("shows Users and Retention only to admins", () => {
+  it("shows Users, Retention and Storage only to admins", () => {
     const user = nav().nav;
     expect(names(user)).toEqual([t.allMail, t.navAccounts, t.log, t.profile]);
     cleanup();
     const admin = nav({ admin: true }).nav;
-    expect(names(admin)).toEqual([t.allMail, t.navAccounts, t.users, t.log, t.retention, t.profile]);
+    expect(names(admin)).toEqual([t.allMail, t.navAccounts, t.users, t.log, t.retention, t.storage, t.profile]);
   });
 
   it("is Carbon's rail from lg up and an overlay below", () => {
@@ -100,7 +100,7 @@ describe("ShellNav", () => {
       const de = messagesFor("de");
       const el = nav({ admin: true, gone: 2 }).nav;
       expect(el.getAttribute("aria-label")).toBe(de.mainNavigation);
-      expect(names(el)).toEqual([de.allMail, `${de.onlyInArchive} 2`, de.navAccounts, de.users, de.log, de.retention, de.profile]);
+      expect(names(el)).toEqual([de.allMail, `${de.onlyInArchive} 2`, de.navAccounts, de.users, de.log, de.retention, de.storage, de.profile]);
       expect(document.body.innerHTML).not.toMatch(/All mail|Accounts|Retention|Profile|Toggle/);
     } finally {
       applySettings({ language: "en", locale: "en" });

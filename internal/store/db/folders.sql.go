@@ -24,6 +24,25 @@ func (q *Queries) AdvanceFolder(ctx context.Context, arg AdvanceFolderParams) er
 	return err
 }
 
+const capFolderLastUID = `-- name: CapFolderLastUID :execrows
+UPDATE folders SET last_uid = LEAST(last_uid, $1::bigint) WHERE id = $2
+`
+
+type CapFolderLastUIDParams struct {
+	LastUid int64
+	ID      int64
+}
+
+// Moves the folder's last UID back to at most @last_uid: a sync that
+// stopped before a message it cannot archive must fetch it again.
+func (q *Queries) CapFolderLastUID(ctx context.Context, arg CapFolderLastUIDParams) (int64, error) {
+	result, err := q.db.Exec(ctx, capFolderLastUID, arg.LastUid, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getOrCreateFolder = `-- name: GetOrCreateFolder :one
 INSERT INTO folders (account_id, name) VALUES ($1, $2)
 ON CONFLICT (account_id, name) DO UPDATE SET name = EXCLUDED.name

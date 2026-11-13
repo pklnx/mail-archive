@@ -177,10 +177,11 @@ func TestSyncMergesAndDeduplicates(t *testing.T) {
 	f.addAccount("alice", "alice", "pw-a")
 	f.addAccount("bob", "bob", "pw-b", "junk") // exclusion is case-insensitive
 
-	// First run: everything is new; the shared message is stored once.
+	// First run: everything is new to each account, also the shared message
+	// (new counts per account); the shared message is stored once.
 	res := f.sync()
 	expectResult(t, res["alice"], 3, 3)
-	expectResult(t, res["bob"], 2, 1)
+	expectResult(t, res["bob"], 2, 2)
 	locs, unique := f.stats()
 	if unique != 4 || locs["alice"] != 3 || locs["bob"] != 2 {
 		t.Fatalf("unique=%d locations=%v", unique, locs)
@@ -200,7 +201,8 @@ func TestSyncMergesAndDeduplicates(t *testing.T) {
 	expectResult(t, res["alice"], 1, 1)
 	expectResult(t, res["bob"], 0, 0)
 
-	// UIDVALIDITY change: the folder is rescanned, content is deduplicated.
+	// UIDVALIDITY change: the folder is rescanned, content is deduplicated;
+	// the account held the message already, so it is not new.
 	if err := alice.Delete("Archive"); err != nil {
 		t.Fatal(err)
 	}

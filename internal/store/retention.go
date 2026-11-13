@@ -239,6 +239,9 @@ type LegalHold struct {
 	AccountID    *int64
 	Account      string
 	AccountOwner string
+	// AccountOwnerID is the owner of the hold's account; nil without an
+	// account or for an account without owner.
+	AccountOwnerID *int64
 	// GroupID and Group: the customer group the hold names (#470).
 	GroupID *int64
 	Group   string
@@ -386,9 +389,23 @@ func auditHoldGroup(e *AuditEntry, g *db.CustomerGroup) {
 }
 
 // LegalHolds lists the active holds, and the released ones too with
-// released.
+// released, each with the number of messages its filter matched.
 func (s *Store) LegalHolds(ctx context.Context, released bool) ([]LegalHold, error) {
-	rows, err := s.q.ListLegalHolds(ctx, released)
+	return s.legalHolds(ctx, db.ListLegalHoldsParams{Released: released})
+}
+
+// LegalHoldsCountingFor lists the holds as LegalHolds does, but counts the
+// matches only of the caller's holds: those naming the caller, or naming
+// no user and one of the caller's accounts. Matched is 0 for every other
+// hold. The web UI shows no other count, and the list's time then does not
+// depend on what other holds' filters matched in mail the caller cannot
+// read (#538).
+func (s *Store) LegalHoldsCountingFor(ctx context.Context, released bool, caller int64) ([]LegalHold, error) {
+	return s.legalHolds(ctx, db.ListLegalHoldsParams{Released: released, CountFor: &caller})
+}
+
+func (s *Store) legalHolds(ctx context.Context, p db.ListLegalHoldsParams) ([]LegalHold, error) {
+	rows, err := s.q.ListLegalHolds(ctx, p)
 	if err != nil {
 		return nil, err
 	}
@@ -396,7 +413,7 @@ func (s *Store) LegalHolds(ctx context.Context, released bool) ([]LegalHold, err
 	for i, r := range rows {
 		h := LegalHold{
 			ID: r.ID, Name: r.Name, Reason: r.Reason, OwnerID: r.OwnerID, Owner: deref(r.Owner),
-			AccountID: r.AccountID, Account: deref(r.Account), AccountOwner: deref(r.AccountOwner),
+			AccountID: r.AccountID, Account: deref(r.Account), AccountOwner: deref(r.AccountOwner), AccountOwnerID: r.AccountOwnerID,
 			PeriodStart: r.PeriodStart, PeriodEnd: r.PeriodEnd, MatchedAt: r.MatchedAt, Matched: r.Matched,
 			CreatedAt: r.CreatedAt, CreatedBy: deref(r.CreatedBy), ReleasedAt: r.ReleasedAt,
 			ReleasedBy: deref(r.ReleasedBy), ReleaseNote: deref(r.ReleaseNote),
@@ -487,53 +504,81 @@ const holdMatchPage = 500
 // user, as the owner of its account, for a group hold without either as
 // every user of the group (#470), and otherwise as every user.
 func (s *Store) MatchLegalHolds(ctx context.Context) (int64, error) {
-	holds, err := s.q.ActiveFilterHolds(ctx)
+	holds, err := s.q.ActiveFilterHolds(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
 	var added int64
 	for _, h := range holds {
-		var f HoldFilter
-		if err := json.Unmarshal(h.Filter, &f); err != nil {
-			return added, fmt.Errorf("legal hold #%d: %w", h.ID, err)
-		}
-		started := time.Now()
-		var owners []int64
-		switch {
-		case h.OwnerID != nil:
-			owners = []int64{*h.OwnerID}
-		case h.AccountID != nil:
-			if h.AccountOwner != nil {
-				owners = []int64{*h.AccountOwner}
-			}
-		default:
-			users, err := s.ListUsers(ctx)
-			if err != nil {
-				return added, err
-			}
-			for _, u := range users {
-				if h.GroupID == nil || u.GroupID == *h.GroupID {
-					owners = append(owners, u.ID)
-				}
-			}
-		}
-		for _, owner := range owners {
-			n, err := s.matchHold(ctx, h.ID, owner, h.AccountID, f)
-			added += n
-			if err != nil {
-				return added, fmt.Errorf("legal hold #%d: %w", h.ID, err)
-			}
-		}
-		if err := s.q.SetLegalHoldMatched(ctx, db.SetLegalHoldMatchedParams{ID: h.ID, MatchedAt: started}); err != nil {
+		n, err := s.matchFilterHold(ctx, h)
+		added += n
+		if err != nil {
 			return added, err
 		}
 	}
 	return added, nil
 }
 
+// MatchLegalHold matches one active filter hold as MatchLegalHolds does,
+// and no other: the web UI matches only the hold an admin just added, so
+// the request's time depends only on that hold (#538). ErrNotFound if id
+// is not an active filter hold.
+func (s *Store) MatchLegalHold(ctx context.Context, id int64) (int64, error) {
+	holds, err := s.q.ActiveFilterHolds(ctx, &id)
+	if err != nil {
+		return 0, err
+	}
+	if len(holds) != 1 {
+		return 0, ErrNotFound
+	}
+	return s.matchFilterHold(ctx, holds[0])
+}
+
+// matchFilterHold stores the messages one filter hold's filter finds now
+// and marks it matched; it returns how many were new.
+func (s *Store) matchFilterHold(ctx context.Context, h db.ActiveFilterHoldsRow) (int64, error) {
+	var f HoldFilter
+	if err := json.Unmarshal(h.Filter, &f); err != nil {
+		return 0, fmt.Errorf("legal hold #%d: %w", h.ID, err)
+	}
+	started := time.Now()
+	var owners []int64
+	switch {
+	case h.OwnerID != nil:
+		owners = []int64{*h.OwnerID}
+	case h.AccountID != nil:
+		if h.AccountOwner != nil {
+			owners = []int64{*h.AccountOwner}
+		}
+	default:
+		users, err := s.ListUsers(ctx)
+		if err != nil {
+			return 0, err
+		}
+		for _, u := range users {
+			if h.GroupID == nil || u.GroupID == *h.GroupID {
+				owners = append(owners, u.ID)
+			}
+		}
+	}
+	var added int64
+	for _, owner := range owners {
+		n, err := s.matchHold(ctx, h.ID, owner, h.AccountID, f)
+		added += n
+		if err != nil {
+			return added, fmt.Errorf("legal hold #%d: %w", h.ID, err)
+		}
+	}
+	if err := s.q.SetLegalHoldMatched(ctx, db.SetLegalHoldMatchedParams{ID: h.ID, MatchedAt: started}); err != nil {
+		return added, err
+	}
+	return added, nil
+}
+
 // matchHold matches a hold's filter as one owner, over that owner's own
 // accounts only (of account, if set): a hold on a user never covers the
-// accounts other users shared with them (#389).
+// accounts other users shared with them (#389). It never searches smtp
+// envelopes: to: matches the To and Cc headers only.
 func (s *Store) matchHold(ctx context.Context, holdID, owner int64, account *int64, f HoldFilter) (int64, error) {
 	sc, err := s.OwnerScope(ctx, owner)
 	if err != nil {
@@ -542,6 +587,11 @@ func (s *Store) matchHold(ctx context.Context, holdID, owner int64, account *int
 	if account != nil {
 		sc = sc.Only(*account)
 	}
+	// Matches are stored per message, and every account's copy of a
+	// message has the same bytes; only envelopes differ per account. A
+	// filter that searched them would reveal one user's envelopes through
+	// the hold on another's copy.
+	sc = sc.WithoutEnvelopes()
 	sf := SearchFilter{
 		Scope: sc, Query: f.Query, From: f.From, To: f.To,
 		Attachment: f.Attachment, HasAttachment: f.HasAttachment, Limit: holdMatchPage,
@@ -570,6 +620,34 @@ func (s *Store) matchHold(ctx context.Context, holdID, owner int64, account *int
 		last := page[len(page)-1]
 		sf.CursorAt, sf.CursorSHA = &last.SortAt, last.SHA256
 	}
+}
+
+// HoldAddEntry is who added a legal hold, from its hold.add audit entry.
+type HoldAddEntry struct {
+	Actor    string // ActorSession or ActorCLI
+	UserName string // the web user's name at the time; empty for the CLI
+}
+
+// LegalHoldAddEntry returns the hold.add audit entry of the hold id created
+// at createdAt (LegalHold.CreatedAt), or nil when the log has none: its
+// partition was detached or dropped, or the row was written by hand. The
+// entry is written in the hold's own transaction, so its time is
+// createdAt exactly, and the lookup reads that time's partition only.
+func (s *Store) LegalHoldAddEntry(ctx context.Context, id int64, createdAt time.Time) (*HoldAddEntry, error) {
+	r, err := s.q.HoldAddEntry(ctx, db.HoldAddEntryParams{At: createdAt, HoldID: id})
+	if isNoRows(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &HoldAddEntry{Actor: r.Actor, UserName: deref(r.UserName)}, nil
+}
+
+// LegalHoldMatched returns how many messages one hold's filter matched so
+// far.
+func (s *Store) LegalHoldMatched(ctx context.Context, id int64) (int64, error) {
+	return s.q.CountLegalHoldMessages(ctx, id)
 }
 
 // RetentionCounts are the numbers status shows.

@@ -29,7 +29,7 @@ const sharedAccount = (owner: string, name: string, more: Partial<SharedAccount>
 });
 
 const data = (accounts: Account[], shared: SharedAccount[] = []): AccountsResponse => ({
-  accounts, shared, manage: true, syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "", alertAfter: 3, smtp: {},
+  accounts, shared, manage: true, syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "", alertAfter: 3, smtp: { auth: "off" },
 });
 
 const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { "Content-Type": "application/json" } });

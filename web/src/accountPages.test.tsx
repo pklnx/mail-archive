@@ -4,14 +4,16 @@
 // German texts of Carbon's components.
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Account, AccountsResponse, PurgePreview } from "./api";
+import type { Account, AccountsResponse, PurgePreview, Usage } from "./api";
 import { AccountsPage } from "./AccountsPage";
 import { PostfixPanel } from "./accountParts";
 import { PurgeReview } from "./AccountPurge";
 import { dialogOpen } from "./dialogs";
 import { fill } from "./fillFixture";
 import { applySettings, messagesFor, t } from "./i18n";
+import { imapTextFor } from "./imapText";
 import { settingsText, settingsTextFor } from "./settingsText";
+import { smtpText } from "./smtpText";
 import { expectLoaded, expectLoading } from "./test/loading";
 
 /** A promise and its resolve, for a request left pending. */
@@ -55,7 +57,7 @@ const busy = (a: Account): Account => ({ ...a, sync: { ...a.sync, state: "runnin
 const purge = { id: 1, expected: 10, locations: 2, deleted: 4, kept: 0 };
 
 const data = (accounts: Account[], more: Partial<AccountsResponse> = {}): AccountsResponse => ({
-  accounts, manage: true, shared: [], syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "24h0m0s", alertAfter: 3, smtp: {}, ...more,
+  accounts, manage: true, shared: [], syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "24h0m0s", alertAfter: 3, smtp: { auth: "off" }, ...more,
 });
 
 let requests: { method: string; url: string; body: unknown }[];
@@ -92,7 +94,7 @@ afterEach(() => {
 
 function preview(more: Partial<PurgePreview> = {}): PurgePreview {
   return {
-    account: "old", kind: "imap", locations: 5, messages: 4, deleted: 3, deletedBytes: 2048, kept: 0, keptIn: [], grace: "168h0m0s",
+    account: "old", kind: "imap", locations: 5, messages: 4, deleted: 3, deletedBytes: 2048, kept: 0, keptIn: [], keptByOthers: 0, grace: "168h0m0s",
     blockers: { notRemoved: false, syncing: false, purgeOpen: false, rules: [], holds: [], messages: [] }, purge: null, ...more,
   };
 }
@@ -764,11 +766,12 @@ describe("the account's page", () => {
   });
 
   it("shows a failed folder load in the error colour, with Cancel", async () => {
-    answer = (url) => (url.endsWith("/server-folders") ? json({ error: "login failed" }, 502) : undefined);
+    // The server's English sentence gives way to the UI's text for its code.
+    answer = (url) => (url.endsWith("/server-folders") ? json({ error: "the IMAP server refused the login", code: "imap_login" }, 502) : undefined);
     show("/?view=accounts&id=work", data([account("work")]));
     fireEvent.click(section(t.folders).getByRole("button", { name: t.edit }));
     expect(document.activeElement).toBe(screen.getByRole("heading", { level: 2, name: t.folders }));
-    const message = await section(t.folders).findByText(/login failed/);
+    const message = await section(t.folders).findByText(t.failed(imapTextFor("en").imap_login));
     expect(message.className).toContain("app-text-error");
     expect(section(t.folders).queryByRole("button", { name: t.saveFolders })).toBeNull();
     fireEvent.click(section(t.folders).getByRole("button", { name: t.cancel }));
@@ -790,7 +793,7 @@ describe("the account's page", () => {
     const s = settingsText();
     expect(section(s.connection).getByText("journal@archive.local")).toBeTruthy();
     expect(section(s.connection).queryByRole("button", { name: t.edit })).toBeNull();
-    expect(section(t.mailServerSetup).getByText(t.setupIntro)).toBeTruthy();
+    expect(section(t.mailServerSetup).getByText(smtpText().setupIntro)).toBeTruthy();
     expect(screen.queryByRole("region", { name: s.imports })).toBeNull();
     const tiles = [...document.querySelectorAll(".app-summary dt")].map((d) => d.textContent);
     expect(tiles).toEqual([t.messages, s.foldersArchived, s.lastReceived]);
@@ -959,9 +962,11 @@ describe("German", () => {
       noEnglish();
       cleanup();
 
-      render(<PostfixPanel addresses={["journal@example.com"]} />);
-      noEnglish();
-      cleanup();
+      for (const login of [false, true]) {
+        render(<PostfixPanel addresses={["journal@example.com"]} login={login} />);
+        noEnglish();
+        cleanup();
+      }
 
       render(<PurgeReview preview={preview()} busy error="" onConfirm={() => {}} onCancel={() => {}} />);
       expect(screen.getByRole("button", { name: de.cancel })).toBeTruthy();
@@ -969,5 +974,23 @@ describe("German", () => {
     } finally {
       applySettings({ language: "en", locale: "en" });
     }
+  });
+});
+
+describe("an account's size (#397, part 4)", () => {
+  const page = (usage: Usage | null) =>
+    render(<AccountsPage accounts={{ data: data([account("work")]), error: "", reload: vi.fn() }} usage={usage} admin={false} renamed={vi.fn()} showGone={vi.fn()} showAccount={vi.fn()} />);
+  const tile = (label: string) => screen.getByText(label, { selector: "dt" }).closest(".app-summary__tile")!;
+
+  it("shows the size of the last count, or that it was not counted yet, and no tile before the usage loads", () => {
+    window.history.replaceState(null, "", "/?view=accounts&id=work");
+    const { unmount } = page({ state: "ok", accounts: [{ name: "work", messages: 12, bytes: 3 * 1024 ** 2 }] });
+    expect(tile(t.accountSize).textContent).toContain("3.0 MiB");
+    unmount();
+    const second = page({ state: "ok", accounts: [{ name: "work", messages: null, bytes: null }] });
+    expect(tile(t.accountSize).textContent).toContain(t.accountSizeNotCounted);
+    second.unmount();
+    page(null);
+    expect(screen.queryByText(t.accountSize, { selector: "dt" })).toBeNull();
   });
 });

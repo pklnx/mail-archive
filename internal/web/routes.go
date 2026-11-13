@@ -17,6 +17,10 @@ const (
 	accessPublic                // no login: health checks, UI code, the spec
 	accessRead                  // a session or an API key with "read"
 	accessSync                  // a session or an API key with "sync"
+	// accessMetrics: an admin's session, or an API key with "metrics" (a
+	// scope no other key has, alone in its key) whose owner is still an
+	// admin and not locked (#397, part 3). Any other user gets 403.
+	accessMetrics
 )
 
 type route struct {
@@ -60,6 +64,8 @@ func (s *Server) routes() []route {
 		au("POST "+passkeyLoginBeginPath, s.handleBeginPasskeyLogin, accessLogin),
 		au("POST "+passkeyLoginFinishPath, s.handleFinishPasskeyLogin, accessLogin),
 		au("DELETE /api/session", s.handleLogout, accessLogin),
+		// The first admin from the operator's setup link (#396, part 3).
+		au("POST "+setupPath, s.handleSetup, accessLogin),
 		// An auditor picks the grant the session reads through (#393).
 		au("PUT /api/session/grant", s.handleSelectGrant, accessSession),
 
@@ -77,6 +83,12 @@ func (s *Server) routes() []route {
 		h("GET /api/profile/api-keys", s.handleListAPIKeys, accessSession),
 		h("POST /api/profile/api-keys", s.handleCreateAPIKey, accessSession),
 		h("DELETE /api/profile/api-keys/{id}", s.handleRevokeOwnAPIKey, accessSession),
+		// The admin's address for alert mail (#397, part 5): admins only,
+		// 403 for anyone else before any lookup.
+		h("GET /api/profile/notifications", s.handleGetNotifications, accessSession),
+		h("PUT /api/profile/notifications", s.handleSetNotifications, accessSession),
+		h("POST /api/profile/notifications/confirm", s.handleConfirmNotifications, accessSession),
+		h("DELETE /api/profile/notifications", s.handleRemoveNotifications, accessSession),
 
 		h("GET /api/users", s.handleListUsers, accessSession),
 		h("POST /api/users", s.handleCreateUser, accessSession),
@@ -88,7 +100,7 @@ func (s *Server) routes() []route {
 		// Customer groups (#470): admins only, with a session.
 		h("GET /api/groups", s.handleListGroups, accessSession),
 		h("POST /api/groups", s.handleCreateGroup, accessSession),
-		h("PATCH /api/groups/{id}", s.handleRenameGroup, accessSession),
+		h("PATCH /api/groups/{id}", s.handleUpdateGroup, accessSession),
 		h("DELETE /api/groups/{id}", s.handleDeleteGroup, accessSession),
 		h("GET /api/api-keys", s.handleListAllAPIKeys, accessSession),
 		h("DELETE /api/api-keys/{id}", s.handleRevokeAnyAPIKey, accessSession),
@@ -117,6 +129,12 @@ func (s *Server) routes() []route {
 		au("GET /api/audit", s.handleAudit, accessSession),
 
 		au("GET /api/status", s.handleStatus, accessRead),
+		// Storage usage (#397, part 4): admins see everything, members the
+		// size of their own accounts and whether new mail is archived.
+		h("GET /api/usage", s.handleUsage, accessSession),
+		h("POST /api/usage/refresh", s.handleRefreshUsage, accessSession),
+		// Instance metrics in Prometheus text: IDs and counts, no names.
+		h("GET /api/metrics", s.handleMetrics, accessMetrics),
 		au("GET /api/accounts", s.handleAccounts, accessRead),
 		h("POST /api/accounts", s.handleCreateAccount, accessSession),
 		h("PATCH /api/accounts/{name}", s.handleUpdateAccount, accessSession),
@@ -131,6 +149,13 @@ func (s *Server) routes() []route {
 		h("PATCH /api/accounts/{name}/fills/{id}", s.handleChangeFill, accessSession),
 		h("POST /api/accounts/{name}/fills/{id}/resume", s.handleResumeFill, accessSession),
 		h("POST /api/accounts/{name}/fills/{id}/cancel", s.handleCancelFill, accessSession),
+		// SMTP credentials of smtp accounts (#395): the owner, who is an
+		// admin, with a session; any admin lists and revokes them all.
+		h("GET /api/accounts/{name}/smtp-credentials", s.handleListSMTPCredentials, accessSession),
+		h("POST /api/accounts/{name}/smtp-credentials", s.handleCreateSMTPCredential, accessSession),
+		h("DELETE /api/accounts/{name}/smtp-credentials/{id}", s.handleRevokeSMTPCredential, accessSession),
+		h("GET /api/admin/smtp-credentials", s.handleListAllSMTPCredentials, accessSession),
+		h("DELETE /api/admin/smtp-credentials/{id}", s.handleRevokeAnySMTPCredential, accessSession),
 		// Only the owner shares, within their group, with a session (#389, #470).
 		h("PUT /api/accounts/{name}/shares/{user}", s.handleShareAccount, accessSession),
 		h("DELETE /api/accounts/{name}/shares/{user}", s.handleUnshareAccount, accessSession),

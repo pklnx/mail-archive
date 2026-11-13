@@ -5,9 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/pklnx/mail-archive/internal/auth"
@@ -268,6 +266,16 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var err error
+	// A locked owner's SMTP secrets keep working (#395 decision 9): the
+	// answer to a lock counts them, so the admin can revoke them. They are
+	// counted before the lock, so a failure changes nothing.
+	var smtpActive int64
+	if in.Locked != nil && *in.Locked {
+		if smtpActive, err = s.smtpCredentialsActive(r, u); err != nil {
+			s.failStore(w, r, err)
+			return
+		}
+	}
 	e := s.targetedEntry(r, "user.change")
 	auditUser(e, u)
 	switch {
@@ -291,7 +299,19 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.log.Info("user changed", "user", u.Name, "by", currentSession(r).UserName)
+	if in.Locked != nil {
+		s.writeJSON(w, http.StatusOK, userLockJSON{SMTPCredentialsActive: smtpActive})
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// userLockJSON answers a lock or unlock.
+type userLockJSON struct {
+	// SMTPCredentialsActive counts the usable SMTP secrets of the smtp
+	// accounts the locked user owns, which the lock does not stop; 0 for
+	// an unlock.
+	SMTPCredentialsActive int64 `json:"smtpCredentialsActive"`
 }
 
 func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
@@ -345,31 +365,31 @@ func (s *Server) handleChangeOwnPassword(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	sess := currentSession(r)
-	addr := s.clientAddr(r)
-	if wait := s.limiter.Blocked(sess.UserName, addr); wait > 0 {
-		secs := int(math.Ceil(wait.Seconds()))
-		w.Header().Set("Retry-After", strconv.Itoa(secs))
-		s.writeJSON(w, http.StatusTooManyRequests, retryJSON{Error: "too many failed attempts; try again later", RetryAfter: secs})
+	a := s.beginAttempt(w, r, sess.UserName, errTooManyAttempts)
+	if a == nil {
 		return
 	}
+	defer a.Release()
 	u, err := s.store.GetUserByName(r.Context(), sess.UserName)
 	if err != nil {
+		a.Release()
 		s.failStore(w, r, err)
 		return
 	}
 	ok := false
 	if len(in.Current) <= auth.MaxPasswordLength {
-		if ok, _, err = s.hasher.Verify(r.Context(), u.PasswordHash, in.Current); err != nil {
+		if ok, _, err = s.verifyPassword(r.Context(), u.PasswordHash, in.Current); err != nil {
+			a.Release()
 			s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 			return
 		}
 	}
 	if !ok {
-		s.limiter.Fail(sess.UserName, addr)
+		a.Fail()
 		s.fail(w, r, http.StatusUnauthorized, "the current password is wrong", nil)
 		return
 	}
-	s.limiter.Succeed(sess.UserName)
+	a.Succeed()
 	if err := auth.ValidatePassword(in.New); err != nil {
 		s.fail(w, r, http.StatusBadRequest, err.Error(), nil)
 		return

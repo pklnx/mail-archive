@@ -46,6 +46,8 @@ func jobsEnv(t *testing.T) (*store.Store, *pgx.Conn) {
 	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
 	t.Setenv("MAIL_ARCHIVE_DATA_DIR", t.TempDir())
 	t.Setenv("MAIL_ARCHIVE_LOG_LEVEL", "error")
+	// A test instance: the worker starts it without encryption at setup.
+	t.Setenv(config.EnvEncryptionAtSetup, "off")
 	return st, conn
 }
 
@@ -137,7 +139,7 @@ func TestStartJobs(t *testing.T) {
 		t.Fatal("the job did not start")
 	}
 	stop()
-	if !strings.Contains(logs.String(), `msg="jobs on" workers=1 kinds=test,attachment_text,attachment_backfill`) {
+	if !strings.Contains(logs.String(), `msg="jobs on" workers=1 kinds=test,attachment_text,attachment_backfill,storage_fold,usage_refresh`) {
 		t.Errorf("log with 1 worker: %s", logs.String())
 	}
 	if state, attempts, leased := jobState(t, conn, "a"); state != store.JobQueued || attempts != 0 || leased {

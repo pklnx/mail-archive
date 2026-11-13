@@ -27,7 +27,7 @@ function message(over: Partial<MessageDetail> = {}): MessageDetail {
     id, size: 1000, subject: "Photos from the weekend", from: "Sam Taylor <sam@example.org>", sentAt: "2026-10-01T09:00:00Z",
     sortAt: "2026-10-01T09:00:00Z", hasAttachment: false, messageId: "<m@example.org>", to: "alex@example.org", cc: "",
     dateHeader: "", text: "Hi Alex,\n\nsee you.\n\n> older\n>> oldest", hasHtml: true, truncated: false, parts: [],
-    locations: [location()], retainUntil: null, ...over,
+    locations: [location()], retainUntil: null, remoteImagesRefused: false, ...over,
   };
 }
 
@@ -119,6 +119,27 @@ describe("the HTML frame (regression, #168 part 4b)", () => {
     expect(within(article).getByText(/see you\./)).toBeTruthy();
     fireEvent.click(within(article).getByRole("button", { name: t.showHTML }));
     expect(within(article).getByTitle(t.messageContent).getAttribute("src")).toBe(`/api/messages/${id}/html`);
+  });
+
+  // The server loads no remote images for a mail with inline SVG or MathML
+  // (remoteImagesRefused), so after the button the view says so; for any
+  // other mail, and before the button, it says nothing.
+  it("says after Load remote images that they stay blocked for a mail with SVG or MathML", async () => {
+    detail = message({ remoteImagesRefused: true });
+    const article = await show();
+    expect(within(article).queryByText(t.remoteImagesRefused)).toBeNull();
+    fireEvent.click(within(article).getByRole("button", { name: t.loadRemoteImages }));
+    expect(within(article).getByTitle(t.messageContent).getAttribute("src")).toBe(`/api/messages/${id}/html?images=1`);
+    expect(within(article).getByRole("status").textContent).toBe(t.remoteImagesRefused);
+    fireEvent.click(within(article).getByRole("button", { name: t.showText }));
+    expect(within(article).queryByText(t.remoteImagesRefused)).toBeNull();
+  });
+
+  it("gives no such hint for a mail whose remote images load", async () => {
+    const article = await show();
+    fireEvent.click(within(article).getByRole("button", { name: t.loadRemoteImages }));
+    expect(within(article).getByTitle(t.messageContent).getAttribute("src")).toBe(`/api/messages/${id}/html?images=1`);
+    expect(within(article).queryByText(t.remoteImagesRefused)).toBeNull();
   });
 
   it("shows text-only mail without a frame, with the quote folding", async () => {

@@ -115,7 +115,11 @@ image that cron and the web server use.
 
 cron runs with a minimal `PATH`. If `docker` is not found, add a line such as
 `PATH=/usr/local/bin:/usr/bin:/bin` at the top of the crontab. `sync` exits
-non-zero if any account failed.
+non-zero if any account failed, and with 75 when a
+[storage limit](#paused-at-a-storage-limit) paused it. Without the web
+server, `sync` also writes the storage states and sends their alerts at its
+end, with the other alerts (see
+[Which process writes the states](./operations#how-exact-the-limits-are)).
 
 ## Reconcile
 
@@ -147,12 +151,15 @@ Measured against a local test server:
 |---|---|---|
 | 100,000 | 0.6 s | 22 MB |
 | 500,000 | 4 s | 30 MB |
+| 2,000,000 | 14 s | 153 MB |
 
 On a real server the transfer adds roughly 40 bytes per message. Only rows
 that change are written to the database.
 
 Folders with more than 2,000,000 messages are not reconciled; the sync of
-such a folder ends `partial` with an error that says so.
+such a folder ends `partial` with an error that says so and names
+`MAIL_ARCHIVE_RECONCILE_MAX_MESSAGES`, the setting that raises the limit (see
+[IMAP limits](./operations#imap-limits)).
 
 ### When it runs
 
@@ -255,6 +262,27 @@ database connection, so a crashed process cannot leave it behind. A sync
 interrupted by a crash is shown as failed with the error `interrupted` the
 next time the account is synced.
 
+## Paused at a storage limit
+
+When the operator set a [storage quota](./operations#storage-and-quotas)
+and the account's customer group or the whole instance reaches it, or the
+disk runs low, new mail is not archived until space is freed:
+
+- The schedule skips the account; the **Sync** button and `./ma sync`
+  answer that the storage limit is reached (`409` with the code
+  `storage_full` in the API, exit code 75 on the command line).
+- A sync that is running when the limit is reached saves what it fetched
+  and stops before the next message. Its run is `partial` with the error
+  `storage_full: the storage limit is reached; new mail is archived again
+  once space is freed`. It does not count as a failed sync, sends no alert,
+  and the account is not stale while paused.
+- Once the operator raises the quota or frees space, the next sync goes on
+  where the paused one stopped. Mail deleted on the server in the meantime
+  is not archived.
+
+Users of the account learn only that storage is full, not which limit was
+reached or how much other accounts use.
+
 ## Sync status
 
 The Accounts page shows for each account whether it is syncing and when its
@@ -264,9 +292,16 @@ the messages fetched and new so far while it syncs. The page refreshes every
 so syncs from the schedule or the command line show up too. `./ma status`
 prints the same per account.
 
+*New* counts the messages the account did not hold before, in any of its
+folders, even if the archive already held the same bytes from another
+account. A message moved to another folder on the server, or fetched again
+after a `UIDVALIDITY` change, is not new; one that retention deleted and
+that comes back is. Syncs before version 1.5.3 keep the figure they
+recorded then.
+
 A sync ends as `ok`, `partial` (some folders failed, or could not be
-reconciled; the others are archived) or `failed` (for example a wrong
-password).
+reconciled; the others are archived; or it [paused](#paused-at-a-storage-limit)
+at a storage limit) or `failed` (for example a wrong password).
 
 The account's page also shows how many messages are no longer on the server
 (*Only in archive*, a link to them) and when the account was last compared

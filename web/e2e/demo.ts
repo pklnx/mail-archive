@@ -1,6 +1,6 @@
 // The demo server the end-to-end tests run against (tools/demo), and its
 // made-up logins. The values match tools/demo/main.go.
-import { createHmac } from "node:crypto";
+import { createHmac, randomInt } from "node:crypto";
 
 export const port = 18181;
 export const imapPort = 18143;
@@ -14,6 +14,34 @@ export const origin = `http://localhost:${port}`;
  * of the demo's hosts (127.0.0.1 is), so the link stays a link.
  */
 export const redirectOrigin = "http://127.0.0.2:18182";
+/**
+ * The site of the demo's referrer and CSS checks (tools/demo, hintCheck,
+ * referrerCheck, cssCheck and cssSVGCheck): their links and images point
+ * here, and referrer.spec.ts and css-images.spec.ts run a server here that
+ * records each request's headers (recorder.ts). Like redirectOrigin, not
+ * one of the demo's hosts, so the links stay links.
+ */
+export const referrerOrigin = "http://127.0.0.2:18183";
+/**
+ * The listeners of hints.spec.ts, on 127.0.0.1 and [::1] (the demo's
+ * hintCheck points its resource hints and frames at *.localhost names on
+ * the first two): two TCP listeners for the mail, on which any connection
+ * is a hint that got through, and for the test's positive controls an HTTP
+ * server (prerender) and a TCP listener (preconnect).
+ */
+export const hintHTTPPort = 18184;
+export const hintConnectPort = 18185;
+export const controlHTTPPort = 18186;
+export const controlConnectPort = 18187;
+/**
+ * The demo's second, new instance (tools/demo -setup-listen, #396): no user
+ * yet and a setup token stored, so its setup link creates the first admin.
+ * setup.spec.ts uses it once per run. The token is made up and works only
+ * on that throwaway database; it matches demoSetupToken in tools/demo.
+ */
+export const setupPort = 18188;
+export const setupOrigin = `http://localhost:${setupPort}`;
+export const setupToken = "demo-setup-".repeat(4);
 
 /** The demo admin. Admins need 2FA; globalSetup logs it in once. */
 export const admin = { name: "demo", password: "demo-password", totpSecret: "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP" };
@@ -46,7 +74,10 @@ export function totp(secret: string, step: number): string {
   return String((mac.readUInt32BE(off) & 0x7fffffff) % 1000000).padStart(6, "0");
 }
 
-/** A name no earlier run has used, for things a test creates. */
+/**
+ * A name no earlier run has used, for things a test creates. Its random part
+ * comes from node:crypto: such names also become user names (#555, CodeQL).
+ */
 export function unique(prefix: string): string {
-  return `${prefix}-${Date.now().toString(36)}${Math.floor(Math.random() * 1296).toString(36)}`;
+  return `${prefix}-${Date.now().toString(36)}${randomInt(1296).toString(36)}`;
 }

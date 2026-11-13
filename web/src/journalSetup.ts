@@ -4,6 +4,20 @@
 /** Where Postfix reaches the archive with the guide's Docker Compose setup (SMTP_BIND, SMTP_PORT). */
 export const defaultTarget = "[127.0.0.1]:2525";
 
+/** The guide's name and port of a hosted archive, where mail servers log in (MAIL_ARCHIVE_SMTP_AUTH=required). */
+export const hostedTarget = "[archive.customer.example]:587";
+
+/** Stands for the secret in the lines: it is shown only once, when it is created. */
+export const secretPlaceholder = "mas_…";
+
+/** Stands for the user name where it is not known (the owner is no admin). */
+export const usernamePlaceholder = "smtp-…";
+
+/** The line of Postfix's password map (/etc/postfix/archive_sasl) for a login. */
+export function saslLine(username: string, secret = secretPlaceholder, target = hostedTarget): string {
+  return `${target}   ${username}:${secret}`;
+}
+
 /** The guide's address, in a domain only the archive receives. */
 export const guideAddress = "archive@archive.local";
 
@@ -35,19 +49,46 @@ export interface PostfixSetup {
  * The Postfix setup for an smtp account (variant B of the guide). The
  * transport line routes a whole domain to the archive, so it only uses an
  * address in a dedicated domain; otherwise the guide's archive.local.
+ * With a user name (MAIL_ARCHIVE_SMTP_AUTH=required), the copies go over a
+ * transport of their own that logs in with it over verified TLS, as in the
+ * guide's "Log in with an SMTP secret"; without one (off), over plain smtp.
  */
-export function postfixSetup(addresses: readonly string[], target = defaultTarget): PostfixSetup {
+export function postfixSetup(addresses: readonly string[], username: string | null = null, target = username === null ? defaultTarget : hostedTarget): PostfixSetup {
   const own = addresses.find((a) => dedicatedDomain(a.slice(a.lastIndexOf("@") + 1)));
   const address = own ?? guideAddress;
   const at = address.lastIndexOf("@");
   const local = address.slice(0, at);
   const domain = address.slice(at + 1);
+  const route =
+    username === null
+      ? [
+          "# /etc/postfix/transport",
+          `${domain}   smtp:${target}`,
+          "",
+          "postmap /etc/postfix/transport",
+          "postconf -e 'transport_maps = hash:/etc/postfix/transport'",
+        ]
+      : [
+          "# /etc/postfix/master.cf",
+          "archive   unix  -  -  n  -  2  smtp",
+          "  -o smtp_sasl_auth_enable=yes",
+          "  -o smtp_sasl_password_maps=hash:/etc/postfix/archive_sasl",
+          "  -o smtp_sasl_security_options=noanonymous",
+          "  -o smtp_sasl_tls_security_options=noanonymous",
+          "  -o smtp_tls_security_level=secure",
+          "",
+          "# /etc/postfix/transport",
+          `${domain}   archive:${target}`,
+          "",
+          "# /etc/postfix/archive_sasl",
+          saslLine(username, secretPlaceholder, target),
+          "",
+          "chmod 0600 /etc/postfix/archive_sasl",
+          "postmap /etc/postfix/archive_sasl /etc/postfix/transport",
+          "postconf -e 'transport_maps = hash:/etc/postfix/transport'",
+        ];
   const text = [
-    "# /etc/postfix/transport",
-    `${domain}   smtp:${target}`,
-    "",
-    "postmap /etc/postfix/transport",
-    "postconf -e 'transport_maps = hash:/etc/postfix/transport'",
+    ...route,
     "",
     "# /etc/postfix/archive_bcc (regexp)",
     `if !/@${regexpQuote(domain)}$/`,

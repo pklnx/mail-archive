@@ -197,7 +197,7 @@ func TestAPIKeyRouteAccess(t *testing.T) {
 		for kind, key := range keys {
 			got := f.keyStatus(key, method, path)
 			scope := requiredScope(rt.access)
-			allowed := scope != "" && (kind == "both" || kind == scope)
+			allowed := scope != "" && (kind == scope || kind == "both" && (scope == store.ScopeRead || scope == store.ScopeSync))
 			switch {
 			case allowed && (got == 401 || got == 403):
 				t.Errorf("%s with a %s key: %d, want access", rt.pattern, kind, got)
@@ -320,11 +320,11 @@ func TestAPIKeyLifecycle(t *testing.T) {
 	}
 
 	// Locking suspends, unlocking restores.
-	f.expect("PATCH", "/api/users/kim", map[string]any{"locked": true}, 204)
+	f.expect("PATCH", "/api/users/kim", map[string]any{"locked": true}, 200)
 	if s := k.keyStatus(key, "GET", "/api/status"); s != 401 {
 		t.Fatalf("locked: %d", s)
 	}
-	f.expect("PATCH", "/api/users/kim", map[string]any{"locked": false}, 204)
+	f.expect("PATCH", "/api/users/kim", map[string]any{"locked": false}, 200)
 	if s := k.keyStatus(key, "GET", "/api/status"); s != 200 {
 		t.Fatalf("unlocked: %d", s)
 	}

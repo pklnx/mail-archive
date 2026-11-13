@@ -3,12 +3,16 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
+
+	"go.yaml.in/yaml/v3"
 
 	"github.com/pklnx/mail-archive/internal/testwait"
 )
@@ -25,7 +29,12 @@ func runMa(t *testing.T, args ...string) (int, string, []string) {
 		t.Fatal(err)
 	}
 	bin, log := t.TempDir(), filepath.Join(t.TempDir(), "docker.log")
-	shim := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + log + "'\nexit 0\n"
+	// The holder's call also logs the keyring copy ./ma passes to it; with
+	// MA_TEST_HOLDER_READY set, it says "ready" and reads to the end of its
+	// input, so that the restore runs.
+	shim := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + log + "'\n" +
+		"case \"$*\" in *' --hold '*) printf 'keyring-copy=%s\\n' \"${MAIL_ARCHIVE_KEYRING_COPY:-}\" >> '" + log + "'\n" +
+		"  if [ -n \"${MA_TEST_HOLDER_READY:-}\" ]; then echo ready; cat >/dev/null; fi ;; esac\nexit 0\n"
 	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(shim), 0o700); err != nil { //nolint:gosec // an executable test script
 		t.Fatal(err)
 	}
@@ -63,7 +72,170 @@ func TestMaRestoreDumpRouting(t *testing.T) {
 		t.Errorf("a missing file: exit %d\n%s\ndocker calls:\n%s", code, out, strings.Join(calls, "\n"))
 	}
 
-	if code, out, _ = runMa(t, "restore-dump"); code != 2 || !strings.Contains(out, "usage: ./ma restore-dump FILE") {
+	if code, out, _ = runMa(t, "restore-dump"); code != 2 || !strings.Contains(out, "usage: ./ma restore-dump [--plaintext] FILE") {
 		t.Errorf("no argument: exit %d\n%s", code, out)
+	}
+}
+
+// TestMaRestoreDumpFacts: ./ma restore-dump decides nothing about a dump
+// without encryption; it passes the facts to the holder, which refuses
+// before "ready" (TestRestoreDumpHoldRefusesPlaintext): the dump's name,
+// its header as read, --plaintext before or after FILE, and the keyring
+// copy next to it, for a dump without encryption too
+// (GHSA-w6jg-ffvw-q4f5). The shim's holder never says "ready", so no
+// pg_restore follows.
+func TestMaRestoreDumpFacts(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, data string) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	plain := write("mailarchive-T.dump.enc", "PGDMP not encrypted")
+	write("mailarchive-T.keyring", "the keyring copy")
+	sealed := write("s.dump.enc", "MA-ENC1 encrypted")
+	copyB64 := base64.StdEncoding.EncodeToString([]byte("the keyring copy"))
+
+	for _, c := range []struct {
+		name    string
+		args    []string
+		want    string // the holder's arguments
+		keyring string // the keyring copy passed to it
+	}{
+		{"plain named .dump.enc with a keyring copy", []string{plain},
+			"restore-dump --hold --dump-name=mailarchive-T.dump.enc --dump-header=plain", copyB64},
+		{"sealed", []string{sealed}, "restore-dump --hold --dump-name=s.dump.enc --dump-header=sealed", ""},
+		{"--plaintext before FILE", []string{"--plaintext", plain},
+			"restore-dump --hold --dump-name=mailarchive-T.dump.enc --dump-header=plain --plaintext", copyB64},
+		{"--plaintext after FILE", []string{plain, "--plaintext"},
+			"restore-dump --hold --dump-name=mailarchive-T.dump.enc --dump-header=plain --plaintext", copyB64},
+	} {
+		code, out, calls := runMa(t, append([]string{"restore-dump"}, c.args...)...)
+		all := strings.Join(calls, "\n")
+		hold := -1
+		for i, call := range calls {
+			if strings.Contains(call, " restore-dump --hold ") {
+				hold = i
+			}
+		}
+		if code == 0 || hold < 0 || hold+1 >= len(calls) {
+			t.Errorf("%s: exit %d\n%s\ndocker calls:\n%s", c.name, code, out, all)
+			continue
+		}
+		if !strings.HasSuffix(calls[hold], c.want) {
+			t.Errorf("%s: the holder got %q, want the suffix %q", c.name, calls[hold], c.want)
+		}
+		if strings.Contains(c.want, "--plaintext") != strings.Contains(calls[hold], "--plaintext") {
+			t.Errorf("%s: --plaintext in %q", c.name, calls[hold])
+		}
+		if got := calls[hold+1]; got != "keyring-copy="+c.keyring {
+			t.Errorf("%s: %s, want keyring-copy=%s", c.name, got, c.keyring)
+		}
+		if strings.Contains(all, "pg_restore") || strings.Contains(all, "unseal-stream") {
+			t.Errorf("%s: a restore ran without \"ready\":\n%s", c.name, all)
+		}
+	}
+
+	// Any other option goes to the plain command, as before.
+	code, out, calls := runMa(t, "restore-dump", "--plaintext", "--reconcile-only")
+	if last := calls[len(calls)-1]; code != 0 || !strings.HasSuffix(last, "mail-archive restore-dump --plaintext --reconcile-only") {
+		t.Errorf("--plaintext --reconcile-only: exit %d\n%s\ndocker calls:\n%s", code, out, strings.Join(calls, "\n"))
+	}
+	if code, out, _ := runMa(t, "restore-dump", "--plaintext"); code != 2 || !strings.Contains(out, "usage: ./ma restore-dump [--plaintext] FILE") {
+		t.Errorf("--plaintext without FILE: exit %d\n%s", code, out)
+	}
+}
+
+// TestMaPgToolsNoEnv: on the Docker path pg_dump and pg_restore run in the
+// postgres container through `compose exec -T postgres`, which passes on no
+// variable of the host, and never with -e or --env; the postgres service
+// itself has only POSTGRES_* variables. This guard holds on the Docker path
+// already.
+func TestMaPgToolsNoEnv(t *testing.T) {
+	const prefix = "compose --progress quiet exec -T postgres "
+	check := func(what string, calls []string, tool string) {
+		t.Helper()
+		n := 0
+		for _, call := range calls {
+			if !strings.Contains(call, tool) {
+				continue
+			}
+			n++
+			if !strings.HasPrefix(call, prefix+tool+" ") {
+				t.Errorf("%s: %q does not start with %q", what, call, prefix+tool)
+			}
+			for _, f := range strings.Fields(call) {
+				if f == "-e" || f == "--env" || strings.HasPrefix(f, "--env=") || f == "--env-file" {
+					t.Errorf("%s: %q passes variables", what, call)
+				}
+			}
+		}
+		if n == 0 {
+			t.Errorf("%s: no %s call:\n%s", what, tool, strings.Join(calls, "\n"))
+		}
+	}
+
+	code, out, calls := runMa(t, "backup", filepath.Join(t.TempDir(), "backups"))
+	if code != 0 {
+		t.Errorf("backup: exit %d\n%s", code, out)
+	}
+	check("backup", calls, "pg_dump")
+
+	t.Setenv("MA_TEST_HOLDER_READY", "1")
+	dir := t.TempDir()
+	for _, c := range []struct{ name, data string }{{"plain.dump", "PGDMP plain"}, {"sealed.dump.enc", "MA-ENC1 sealed"}} {
+		path := filepath.Join(dir, c.name)
+		if err := os.WriteFile(path, []byte(c.data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		code, out, calls := runMa(t, "restore-dump", path)
+		if code != 0 || !strings.Contains(out, "restored "+path) {
+			t.Errorf("restore-dump %s: exit %d\n%s", c.name, code, out)
+		}
+		check("restore-dump "+c.name, calls, "pg_restore")
+	}
+
+	// Every pg_dump and pg_restore in the script, the encrypted backup's too.
+	script, err := os.ReadFile("../../ma")
+	if err != nil {
+		t.Fatal(err)
+	}
+	re := regexp.MustCompile(`compose\s[^\n|;&]*\bpg_(dump|restore)\b`)
+	found := re.FindAllString(string(script), -1)
+	if len(found) < 3 {
+		t.Errorf("found %d pg_dump/pg_restore calls in ./ma: %q", len(found), found)
+	}
+	for _, m := range found {
+		if m != "compose exec -T postgres pg_dump" && m != "compose exec -T postgres pg_restore" {
+			t.Errorf("./ma runs %q", m)
+		}
+	}
+
+	compose, err := os.ReadFile("../../docker-compose.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file struct {
+		Services map[string]struct {
+			Environment map[string]any `yaml:"environment"`
+			EnvFile     any            `yaml:"env_file"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(compose, &file); err != nil {
+		t.Fatal(err)
+	}
+	pg, ok := file.Services["postgres"]
+	if !ok || len(pg.Environment) == 0 {
+		t.Fatalf("no postgres service environment in docker-compose.yml")
+	}
+	for name := range pg.Environment {
+		if !strings.HasPrefix(name, "POSTGRES_") {
+			t.Errorf("the postgres service gets %s", name)
+		}
+	}
+	if pg.EnvFile != nil {
+		t.Errorf("the postgres service has an env_file: %v", pg.EnvFile)
 	}
 }

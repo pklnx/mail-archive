@@ -103,6 +103,7 @@ const en = {
   showHTML: "Show HTML",
   remoteImagesHint: "Remote images can tell the sender that you opened this message.",
   loadRemoteImages: "Load remote images",
+  remoteImagesRefused: "Remote images stay blocked for this message: it contains inline SVG or MathML, which the archive cannot check safely.",
   downloadEml: "Download .eml",
   attachments: "Attachments",
   part: (n: number) => `part ${n}`,
@@ -158,6 +159,17 @@ const en = {
   bannerOthers: (n: number) => (n === 1 ? "1 account of another user keeps failing." : `${n} accounts of other users keep failing.`),
   bannerOpenAccounts: "Open accounts",
   bannerOpenUsers: "Show users",
+  /** Storage (#397, part 4): new mail is not archived (Q7). */
+  bannerStorageFull: "New mail is not being archived; mail deleted on the server meanwhile is not archived.",
+  bannerStorageFullAdmin: (scopes: string) =>
+    `Storage limit reached (${scopes}): new mail is not being archived; mail deleted on the server meanwhile is not archived.`,
+  bannerStorageWarn: (scopes: string) => `Storage nearly full (${scopes}).`,
+  bannerStorageInstance: "instance",
+  bannerStorageDisk: "disk reserve",
+  bannerOpenStorage: "Open storage",
+  storage: "Storage",
+  accountSize: "Size",
+  accountSizeNotCounted: "Not counted yet",
   failingCount: (n: number) => `${n} failing`,
   messageCount: (n: number, formatted: string) => (n === 1 ? "1 message" : `${formatted} messages`),
   disabledNote: "Disabled: not synced automatically.",
@@ -191,7 +203,7 @@ const en = {
   removeAddress: (addr: string) => `Remove ${addr || "this address"}`,
   addressesAdminOnly: "Only admins can change the addresses: they decide who receives the copies of every message.",
   smtpServerOff:
-    "The SMTP server is off. Set MAIL_ARCHIVE_SMTP_LISTEN and MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS and restart the web server. You can create the account now; it receives mail once the server is on.",
+    "The SMTP server is off. Set MAIL_ARCHIVE_SMTP_LISTEN with a certificate in MAIL_ARCHIVE_SMTP_TLS_CERT and MAIL_ARCHIVE_SMTP_TLS_KEY (mail servers log in over TLS), or for a mail server on your own network with MAIL_ARCHIVE_SMTP_AUTH=off and MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS, and restart the web server. You can create the account now; it receives mail once the server is on.",
   smtpServerOffCard: "The SMTP server is off: this account receives nothing until MAIL_ARCHIVE_SMTP_LISTEN is set.",
   importFromIMAP: "Import existing mail from IMAP",
   fillIntro:
@@ -212,7 +224,7 @@ const en = {
   resumeFillHint: "The password is asked for again: it was deleted when the import stopped.",
   fieldCutoff: "Cut-off (optional)",
   cutoffHint:
-    "Mail the mailbox received before this time is imported, except messages already received over SMTP (same Message-ID). Empty: now. Mail from an hour after it on is left to journaling.",
+    "Mail the mailbox received before this time is imported, except messages already received over SMTP (same Message-ID, date, sender and subject). Empty: now. Mail from an hour after it on is left to journaling.",
   cutoffGap: "Mail that arrives after an earlier cut-off while journaling is not set up yet is in neither place.",
   firstReceived: (when: string, subject: string) => `First message received over SMTP: ${when}, “${subject}”`,
   noneReceived: "No message received over SMTP yet.",
@@ -258,11 +270,6 @@ const en = {
   journalingGuide: "Journaling guide",
   smtpAccountAdded: (name: string) => `Account ${name} added. Set up the mail server to send it the copies:`,
   mailServerSetup: "Mail server setup",
-  setupIntro: "Postfix, recipient_bcc_maps (the guide's variant B):",
-  setupTarget:
-    "[127.0.0.1]:2525 is the guide's Docker Compose default (SMTP_BIND, SMTP_PORT): put the address and port at which Postfix reaches the archive.",
-  setupNotDedicated: (address: string) =>
-    `No address of this account is in a domain used only for the archive. The transport line routes a whole domain to the archive, so these lines use ${address}: add it to the account, or another address in such a domain.`,
   removedNote: "Removed. Its mail stays in the archive.",
   removedAccounts: "Removed accounts",
   // Shared accounts (#389): in the sidebar "info · anna", on a message "info (anna)".
@@ -297,6 +304,8 @@ const en = {
     `${n === 1 ? "Its file is" : "Their files are"} removed after the grace period, so restoring the last dump still works.`,
   purgeKept: (n: number, s: string) =>
     n === 1 ? "1 message is also in other accounts and stays there:" : `${s} messages are also in other accounts and stay there:`,
+  purgeKeptByOthers: (n: number, s: string) =>
+    n === 1 ? "1 message only in accounts you do not own" : `${s} messages only in accounts you do not own`,
   purgeAccountGone: "Then its folders and the account are deleted; its name is free again. This cannot be undone.",
   purgeTypeCount: (n: number) => `Type ${n} to confirm`,
   purgeConfirm: "Delete completely",
@@ -357,9 +366,6 @@ const en = {
     seconds < 60
       ? `Too many failed attempts. Try again in ${seconds} seconds.`
       : `Too many failed attempts. Try again in ${Math.ceil(seconds / 60)} ${Math.ceil(seconds / 60) === 1 ? "minute" : "minutes"}.`,
-  setupTitle: "Create the first admin",
-  setupText: "No user exists yet. Run this command in the mail-archive folder, then check again:",
-  checkAgain: "Check again",
   logOut: "Log out",
   logoutFailed: (reason: string) => `Signing out failed: ${reason}. You are still signed in; try again.`,
   loggedInAs: (name: string) => `Logged in as ${name}`,
@@ -367,6 +373,8 @@ const en = {
   profileSections: "Profile sections",
   tabDisplay: "Display",
   tabSecurity: "Sign-in & security",
+  bannerNotifyBounced: "Alert mail to your address was refused. Confirm the address again in your profile.",
+  bannerOpenProfile: "Open profile",
   users: "Users",
   changePassword: "Change password",
   currentPassword: "Current password",
@@ -449,6 +457,7 @@ const en = {
   twoFactorRecoveryCode: "Recovery code",
   invalidTwoFactor: "The authentication code is invalid or has already been used.",
   twoFactorExpired: "The login took too long. Log in again.",
+  twoFactorTooManyCodes: "Too many wrong codes. Log in again.",
   twoFactorStateOn: "On",
   twoFactorStateOff: "Off",
   twoFactorQR: "QR code for your authenticator app",
@@ -487,7 +496,7 @@ const en = {
   removePasskeysText: "They are logged out everywhere.",
   resetAlsoPasskeys: (n: number) => `Also remove their ${n} passkey(s) (recommended after a compromise)`,
   apiKeys: "API keys",
-  apiKeysText: "Scripts use an API key instead of a login: Authorization: Bearer ma_…. A key can read mail (read), start syncs (sync) or both, nothing else.",
+  apiKeysText: "Scripts use an API key instead of a login: Authorization: Bearer ma_…. A key can read mail (read), start syncs (sync) or both, nothing else. Admins can also create a key that only reads the instance metrics (metrics).",
   apiKeysKeptOnPasswordChange: "Changing your password keeps your API keys. Revoke a key here if it may be known to others.",
   apiKeyNone: "No API keys yet.",
   apiKeyName: "Name of the key",
@@ -495,6 +504,7 @@ const en = {
   apiKeyScopes: "Scopes",
   apiKeyScopeRead: "read: messages, search, accounts, status",
   apiKeyScopeSync: "sync: start syncs",
+  apiKeyScopeMetrics: "metrics: instance metrics for monitoring, IDs and counts only (alone in its key)",
   apiKeyExpiry: "Expires",
   apiKeyExpiryDays: (n: number) => `in ${n} days`,
   apiKeyExpiryNever: "never",
@@ -548,7 +558,8 @@ const en = {
   holdAccount: "Account",
   holdAnyAccount: "Any account",
   holdFilter: "Search filter",
-  holdFilterHint: "Search syntax as in the search field, for example falcon from:example.com after:2019-01-01 before:2024-01-01",
+  holdFilterHint:
+    "Search syntax as in the search field, for example falcon from:example.com after:2019-01-01 before:2024-01-01. to: matches To and Cc only, never envelope (BCC) recipients.",
   holdAll: "Hold the whole archive",
   holdAllNeeded: "Without user, account or filter the hold covers the whole archive. Tick the box to confirm.",
   holdAdd: "Add hold",
@@ -567,6 +578,7 @@ const en = {
   holdScopeFrom: (d: string) => `from ${d}`,
   holdScopeBefore: (d: string) => `before ${d}`,
   holdMatched: (n: number) => `${n} matched`,
+  holdMatchedHidden: "matched; the count is shown only for your own accounts",
   holdNotMatched: "not matched yet (covers its whole scope)",
   retentionEnds: "Retention",
   retentionEndsOn: (d: string) => `ends ${d}`,
@@ -792,6 +804,7 @@ const de: Messages = {
   showHTML: "HTML anzeigen",
   remoteImagesHint: "Externe Bilder können dem Absender verraten, dass du die Nachricht geöffnet hast.",
   loadRemoteImages: "Externe Bilder laden",
+  remoteImagesRefused: "Externe Bilder bleiben für diese Nachricht blockiert: Sie enthält eingebettetes SVG oder MathML, das das Archiv nicht sicher prüfen kann.",
   downloadEml: ".eml herunterladen",
   attachments: "Anhänge",
   part: (n) => `Teil ${n}`,
@@ -847,6 +860,16 @@ const de: Messages = {
   bannerOthers: (n) => (n === 1 ? "1 Konto eines anderen Benutzers schlägt wiederholt fehl." : `${n} Konten anderer Benutzer schlagen wiederholt fehl.`),
   bannerOpenAccounts: "Konten öffnen",
   bannerOpenUsers: "Benutzer anzeigen",
+  bannerStorageFull: "Neue Mails werden nicht archiviert; auf dem Server inzwischen gelöschte Mails werden nicht archiviert.",
+  bannerStorageFullAdmin: (scopes) =>
+    `Speicherlimit erreicht (${scopes}): Neue Mails werden nicht archiviert; auf dem Server inzwischen gelöschte Mails werden nicht archiviert.`,
+  bannerStorageWarn: (scopes) => `Speicher fast voll (${scopes}).`,
+  bannerStorageInstance: "Instanz",
+  bannerStorageDisk: "Reserve auf der Festplatte",
+  bannerOpenStorage: "Speicher öffnen",
+  storage: "Speicher",
+  accountSize: "Größe",
+  accountSizeNotCounted: "Noch nicht gezählt",
   failingCount: (n) => `${n} fehlerhaft`,
   messageCount: (n, formatted) => (n === 1 ? "1 Nachricht" : `${formatted} Nachrichten`),
   disabledNote: "Deaktiviert: wird nicht automatisch synchronisiert.",
@@ -879,7 +902,7 @@ const de: Messages = {
   removeAddress: (addr) => `${addr || "Diese Adresse"} entfernen`,
   addressesAdminOnly: "Nur Admins können die Adressen ändern: Sie bestimmen, wer die Kopien aller Nachrichten erhält.",
   smtpServerOff:
-    "Der SMTP-Server ist aus. Setze MAIL_ARCHIVE_SMTP_LISTEN und MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS und starte den Webserver neu. Du kannst das Konto schon jetzt anlegen; es empfängt Mails, sobald der Server läuft.",
+    "Der SMTP-Server ist aus. Setze MAIL_ARCHIVE_SMTP_LISTEN mit einem Zertifikat in MAIL_ARCHIVE_SMTP_TLS_CERT und MAIL_ARCHIVE_SMTP_TLS_KEY (Mailserver melden sich über TLS an) oder, für einen Mailserver im eigenen Netz, mit MAIL_ARCHIVE_SMTP_AUTH=off und MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS, und starte den Webserver neu. Du kannst das Konto schon jetzt anlegen; es empfängt Mails, sobald der Server läuft.",
   smtpServerOffCard: "Der SMTP-Server ist aus: Dieses Konto empfängt nichts, bis MAIL_ARCHIVE_SMTP_LISTEN gesetzt ist.",
   importFromIMAP: "Vorhandene Mails aus IMAP importieren",
   fillIntro:
@@ -899,7 +922,7 @@ const de: Messages = {
   resumeFillHint: "Das Passwort wird erneut abgefragt: Es wurde gelöscht, als der Import endete.",
   fieldCutoff: "Stichtag (optional)",
   cutoffHint:
-    "Mails, die das Postfach vor diesem Zeitpunkt empfangen hat, werden importiert, außer Nachrichten, die schon per SMTP kamen (gleiche Message-ID). Leer: jetzt. Mails ab einer Stunde danach bleiben dem Journaling überlassen.",
+    "Mails, die das Postfach vor diesem Zeitpunkt empfangen hat, werden importiert, außer Nachrichten, die schon per SMTP kamen (gleiche Message-ID, gleiches Datum, gleicher Absender und gleicher Betreff). Leer: jetzt. Mails ab einer Stunde danach bleiben dem Journaling überlassen.",
   cutoffGap: "Mails, die nach einem früheren Stichtag ankommen, solange Journaling noch nicht eingerichtet ist, landen nirgends.",
   firstReceived: (when, subject) => `Erste per SMTP empfangene Nachricht: ${when}, „${subject}“`,
   noneReceived: "Noch keine Nachricht per SMTP empfangen.",
@@ -944,11 +967,6 @@ const de: Messages = {
   journalingGuide: "Anleitung zum Journaling",
   smtpAccountAdded: (name) => `Konto ${name} angelegt. Richte den Mailserver ein, damit er ihm die Kopien schickt:`,
   mailServerSetup: "Mailserver einrichten",
-  setupIntro: "Postfix, recipient_bcc_maps (Variante B der Anleitung):",
-  setupTarget:
-    "[127.0.0.1]:2525 ist der Docker-Compose-Standard der Anleitung (SMTP_BIND, SMTP_PORT): Trage Adresse und Port ein, unter denen Postfix das Archiv erreicht.",
-  setupNotDedicated: (address) =>
-    `Keine Adresse dieses Kontos liegt in einer Domain, die nur das Archiv empfängt. Die Transport-Zeile leitet eine ganze Domain zum Archiv, deshalb verwenden diese Zeilen ${address}: Füge sie dem Konto hinzu oder eine andere Adresse in einer solchen Domain.`,
   removedNote: "Entfernt. Die Mails bleiben im Archiv.",
   removedAccounts: "Entfernte Konten",
   sharedName: (name, owner) => `${name} · ${owner}`,
@@ -982,6 +1000,8 @@ const de: Messages = {
     `${n === 1 ? "Ihre Datei wird" : "Ihre Dateien werden"} nach der Karenzzeit entfernt, damit das Wiederherstellen des letzten Dumps noch funktioniert.`,
   purgeKept: (n, s) =>
     n === 1 ? "1 Nachricht ist auch in anderen Konten und bleibt dort:" : `${s} Nachrichten sind auch in anderen Konten und bleiben dort:`,
+  purgeKeptByOthers: (n, s) =>
+    n === 1 ? "1 Nachricht nur in Konten, die Ihnen nicht gehören" : `${s} Nachrichten nur in Konten, die Ihnen nicht gehören`,
   purgeAccountGone: "Danach werden seine Ordner und das Konto gelöscht; der Name ist wieder frei. Das lässt sich nicht rückgängig machen.",
   purgeTypeCount: (n) => `Zur Bestätigung ${n} eingeben`,
   purgeConfirm: "Vollständig löschen",
@@ -1041,9 +1061,6 @@ const de: Messages = {
     seconds < 60
       ? `Zu viele Fehlversuche. Versuche es in ${seconds} Sekunden erneut.`
       : `Zu viele Fehlversuche. Versuche es in ${Math.ceil(seconds / 60)} ${Math.ceil(seconds / 60) === 1 ? "Minute" : "Minuten"} erneut.`,
-  setupTitle: "Ersten Admin anlegen",
-  setupText: "Es gibt noch keinen Benutzer. Führe diesen Befehl im Ordner von mail-archive aus und prüfe dann erneut:",
-  checkAgain: "Erneut prüfen",
   logOut: "Abmelden",
   logoutFailed: (reason) => `Abmelden fehlgeschlagen: ${reason}. Du bist noch angemeldet; versuch es noch einmal.`,
   loggedInAs: (name) => `Angemeldet als ${name}`,
@@ -1051,6 +1068,8 @@ const de: Messages = {
   profileSections: "Profilbereiche",
   tabDisplay: "Anzeige",
   tabSecurity: "Anmeldung & Sicherheit",
+  bannerNotifyBounced: "Alarm-Mails an deine Adresse wurden abgelehnt. Bestätige die Adresse im Profil erneut.",
+  bannerOpenProfile: "Profil öffnen",
   users: "Benutzer",
   changePassword: "Passwort ändern",
   currentPassword: "Aktuelles Passwort",
@@ -1133,6 +1152,7 @@ const de: Messages = {
   twoFactorRecoveryCode: "Wiederherstellungscode",
   invalidTwoFactor: "Der Bestätigungscode ist ungültig oder wurde bereits verwendet.",
   twoFactorExpired: "Die Anmeldung hat zu lange gedauert. Melde dich erneut an.",
+  twoFactorTooManyCodes: "Zu viele falsche Codes. Melde dich erneut an.",
   twoFactorStateOn: "Aktiv",
   twoFactorStateOff: "Nicht aktiv",
   twoFactorQR: "QR-Code für deine Authenticator-App",
@@ -1172,7 +1192,8 @@ const de: Messages = {
   holdAccount: "Konto",
   holdAnyAccount: "Alle Konten",
   holdFilter: "Suchfilter",
-  holdFilterHint: "Suchsyntax wie im Suchfeld, zum Beispiel falcon from:example.com after:2019-01-01 before:2024-01-01",
+  holdFilterHint:
+    "Suchsyntax wie im Suchfeld, zum Beispiel falcon from:example.com after:2019-01-01 before:2024-01-01. to: findet nur An und Cc, nie Empfänger aus dem Umschlag (BCC).",
   holdAll: "Ganzes Archiv sperren",
   holdAllNeeded: "Ohne Benutzer, Konto oder Filter umfasst der Hold das ganze Archiv. Zum Bestätigen das Kästchen ankreuzen.",
   holdAdd: "Hold anlegen",
@@ -1191,6 +1212,7 @@ const de: Messages = {
   holdScopeFrom: (d) => `ab ${d}`,
   holdScopeBefore: (d) => `vor ${d}`,
   holdMatched: (n) => `${n} gefunden`,
+  holdMatchedHidden: "abgeglichen; die Anzahl steht nur bei eigenen Konten",
   holdNotMatched: "noch nicht abgeglichen (umfasst den ganzen Bereich)",
   retentionEnds: "Aufbewahrung",
   retentionEndsOn: (d) => `endet ${d}`,
@@ -1292,7 +1314,7 @@ const de: Messages = {
   removePasskeysText: "Der Benutzer wird überall abgemeldet.",
   resetAlsoPasskeys: (n) => `Auch die ${n} Passkey(s) entfernen (empfohlen nach einer Kompromittierung)`,
   apiKeys: "API-Schlüssel",
-  apiKeysText: "Skripte nutzen einen API-Schlüssel statt einer Anmeldung: Authorization: Bearer ma_…. Ein Schlüssel kann Mails lesen (read), Synchronisierungen starten (sync) oder beides, sonst nichts.",
+  apiKeysText: "Skripte nutzen einen API-Schlüssel statt einer Anmeldung: Authorization: Bearer ma_…. Ein Schlüssel kann Mails lesen (read), Synchronisierungen starten (sync) oder beides, sonst nichts. Admins können auch einen Schlüssel erstellen, der nur die Instanz-Metriken liest (metrics).",
   apiKeysKeptOnPasswordChange: "Wenn du dein Passwort änderst, bleiben deine API-Schlüssel gültig. Widerrufe hier einen Schlüssel, wenn andere ihn kennen könnten.",
   apiKeyNone: "Noch keine API-Schlüssel.",
   apiKeyName: "Name des Schlüssels",
@@ -1300,6 +1322,7 @@ const de: Messages = {
   apiKeyScopes: "Berechtigungen",
   apiKeyScopeRead: "read: Nachrichten, Suche, Konten, Status",
   apiKeyScopeSync: "sync: Synchronisierungen starten",
+  apiKeyScopeMetrics: "metrics: Instanz-Metriken fürs Monitoring, nur IDs und Zahlen (allein im Schlüssel)",
   apiKeyExpiry: "Läuft ab",
   apiKeyExpiryDays: (n) => `in ${n} Tagen`,
   apiKeyExpiryNever: "nie",

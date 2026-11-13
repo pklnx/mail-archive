@@ -2,8 +2,9 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Account, AccountsResponse, Fill } from "./api";
 import { fill } from "./fillFixture";
-import { bannerState, HealthBanner } from "./HealthBanner";
+import { bannerState, HealthBanner, storageBanner } from "./HealthBanner";
 import { applySettings, messagesFor, t } from "./i18n";
+import { adminUsage, groupState, memberUsage } from "./test/usage";
 
 function acc(name: string, health: Account["sync"]["health"]): Account {
   return {
@@ -46,9 +47,9 @@ describe("HealthBanner", () => {
         recurring("old@example.com", "failing", { keepRunning: false })],
     };
     expect(bannerState(data([acc("work", "failing"), journal]))).toEqual({
-      failing: ["work", "journal (ak@example.com)"], stale: ["journal (bo@example.com)"], otherFailing: 0,
+      failing: ["work", "journal (ak@example.com)"], stale: ["journal (bo@example.com)"], otherFailing: 0, notifyBounced: false,
     });
-    expect(bannerState(data([{ ...journal, enabled: false }]))).toEqual({ failing: [], stale: [], otherFailing: 0 });
+    expect(bannerState(data([{ ...journal, enabled: false }]))).toEqual({ failing: [], stale: [], otherFailing: 0, notifyBounced: false });
     render(<HealthBanner data={data([journal])} admin={false} openAccounts={noop} openUsers={noop} />);
     expect(screen.getByRole("alert").textContent).toMatch(/journal \(ak@example.com\)/);
   });
@@ -97,5 +98,76 @@ describe("HealthBanner", () => {
     expect(screen.getByText(/2 accounts of other users keep failing/)).toBeTruthy();
     rerender(<HealthBanner data={d} admin={false} openAccounts={noop} openUsers={noop} />);
     expect(screen.queryByText(/other users/)).toBeNull();
+  });
+
+  it("tells an admin whose alert mail address was refused, with a way to the profile", () => {
+    const openProfile = vi.fn();
+    const d = { ...data([]), notifyEmailBounced: true };
+    expect(bannerState(d).notifyBounced).toBe(true);
+    const { rerender } = render(<HealthBanner data={d} admin openAccounts={noop} openUsers={noop} openProfile={openProfile} />);
+    expect(screen.getByText(t.bannerNotifyBounced)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: t.bannerOpenProfile }));
+    expect(openProfile).toHaveBeenCalledTimes(1);
+    rerender(<HealthBanner data={d} admin={false} openAccounts={noop} openUsers={noop} openProfile={openProfile} />);
+    expect(screen.queryByText(t.bannerNotifyBounced)).toBeNull();
+    rerender(<HealthBanner data={data([])} admin openAccounts={noop} openUsers={noop} openProfile={openProfile} />);
+    expect(screen.queryByText(t.bannerNotifyBounced)).toBeNull();
+  });
+});
+
+describe("storage banner (#397, part 4)", () => {
+  const props = { data: data([]), openAccounts: noop, openUsers: noop };
+
+  it("tells a member only that new mail is not archived (Q7), the same for full and overflow, without an action", () => {
+    const { container, rerender } = render(<HealthBanner {...props} usage={memberUsage("full")} admin={false} />);
+    // The line, and the live region that announces it.
+    expect(screen.getAllByText(t.bannerStorageFull)).toHaveLength(2);
+    expect(container.querySelectorAll("button")).toHaveLength(0);
+    const full = container.innerHTML;
+    rerender(<HealthBanner {...props} usage={memberUsage("overflow")} admin={false} />);
+    expect(container.innerHTML).toBe(full);
+    rerender(<HealthBanner {...props} usage={memberUsage("ok")} admin={false} />);
+    expect(container.querySelector(".health-banner")).toBeNull();
+    expect(storageBanner(memberUsage("ok"))).toEqual({ full: "", warn: "" });
+  });
+
+  it("announces a full storage once", () => {
+    render(<HealthBanner {...props} usage={memberUsage("full")} admin={false} />);
+    expect(screen.getAllByRole("alert").some((el) => el.textContent === t.bannerStorageFull)).toBe(true);
+  });
+
+  it("names every scope in warn, full, overflow or disk_low for admins, with a way to the Storage page", () => {
+    const openStorage = vi.fn();
+    const u = adminUsage();
+    expect(storageBanner(u)).toEqual({ full: "", warn: "" });
+    expect(storageBanner({ ...u, instance: { ...u.instance, state: "warn" } }).warn).toBe("Storage nearly full (instance).");
+    expect(storageBanner(groupState(u, "Meier", "warn")).warn).toBe("Storage nearly full (Meier).");
+    for (const s of ["full", "overflow"] as const) {
+      expect(storageBanner(groupState(u, "Meier", s)).full).toBe(t.bannerStorageFullAdmin("Meier"));
+    }
+    expect(storageBanner({ ...u, instance: { ...u.instance, state: "disk_low" } }).full).toBe(t.bannerStorageFullAdmin("disk reserve"));
+    expect(storageBanner({ ...u, instance: { ...u.instance, state: "overflow" } }).full).toBe(t.bannerStorageFullAdmin("instance"));
+    const both = storageBanner(groupState(groupState(u, "Meier", "full"), "Default", "warn"));
+    expect(both).toEqual({ full: t.bannerStorageFullAdmin("Meier"), warn: "Storage nearly full (Default)." });
+
+    render(<HealthBanner {...props} usage={groupState(u, "Meier", "full")} admin openStorage={openStorage} />);
+    fireEvent.click(screen.getByRole("button", { name: t.bannerOpenStorage }));
+    expect(openStorage).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not name the only group (#470 decision 10)", () => {
+    const u = adminUsage({ groups: [{ id: 1, name: "Default", messages: 1, bytes: 1, quotaBytes: 10, state: "full", stateSince: null }] });
+    expect(storageBanner(u)).toEqual({ full: t.bannerStorageFullAdmin("instance"), warn: "" });
+  });
+
+  it("is in German", () => {
+    applySettings({ language: "de", locale: "de" });
+    try {
+      render(<HealthBanner {...props} usage={memberUsage("full")} admin={false} />);
+      expect(screen.getAllByText("Neue Mails werden nicht archiviert; auf dem Server inzwischen gelöschte Mails werden nicht archiviert.")).toHaveLength(2);
+      expect(storageBanner({ ...adminUsage(), instance: { ...adminUsage().instance, state: "warn" } }).warn).toBe("Speicher fast voll (Instanz).");
+    } finally {
+      applySettings({ language: "en", locale: "en" });
+    }
   });
 });

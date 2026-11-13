@@ -331,10 +331,17 @@ func (r *run) complete(ctx context.Context, t *task, k Kind, err error) {
 	bg, cancel := context.WithTimeout(context.WithoutCancel(ctx), finishTimeout)
 	defer cancel()
 	var cont *continueError
+	var done *doneError
 	var dbErr error
 	switch {
 	case err == nil:
 		dbErr = r.p.Store.FinishJob(bg, j.ID, j.Lease)
+	case errors.As(err, &done):
+		code := done.code
+		if !codePattern.MatchString(code) {
+			code = CodeInternal
+		}
+		dbErr = r.p.Store.FinishJobWithCode(bg, j.ID, j.Lease, code)
 	case errors.As(err, &cont):
 		dbErr = r.p.Store.ContinueJob(bg, j.ID, j.Lease, cont.payload)
 	case ctx.Err() != nil && errors.Is(err, context.Canceled):

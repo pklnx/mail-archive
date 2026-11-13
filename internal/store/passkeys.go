@@ -21,10 +21,6 @@ import (
 // MaxPasskeys is the number of passkeys a user can have.
 const MaxPasskeys = 10
 
-// MaxOpenLoginCeremonies bounds the logins in progress: starting one needs
-// no session, so this keeps anybody from filling the table.
-const MaxOpenLoginCeremonies = 1000
-
 // Passkey errors.
 var (
 	ErrPasskeyLimit      = errors.New("this user has the maximum number of passkeys")
@@ -33,7 +29,6 @@ var (
 	ErrPasskeyUnknown    = errors.New("unknown passkey")
 	ErrPasskeyInvalid    = errors.New("passkey not accepted")
 	ErrCeremonyExpired   = errors.New("passkey ceremony expired or invalid")
-	ErrTooManyCeremonies = errors.New("too many passkey logins in progress")
 	ErrUserLocked        = errors.New("this user is locked")
 )
 
@@ -193,15 +188,9 @@ func (s *Store) FinishPasskeyRegistration(ctx context.Context, userID int64, tok
 }
 
 // BeginPasskeyLogin stores the session data of a login without a user name
-// and returns the token for the client.
+// and returns the token for the client. Starting one needs no session; the
+// caller caps how many are started per client and in total.
 func (s *Store) BeginPasskeyLogin(ctx context.Context, data []byte, expires time.Time) (string, error) {
-	n, err := s.q.CountOpenLoginCeremonies(ctx)
-	if err != nil {
-		return "", err
-	}
-	if n >= MaxOpenLoginCeremonies {
-		return "", ErrTooManyCeremonies
-	}
 	token, hash, err := auth.NewSessionToken()
 	if err != nil {
 		return "", err

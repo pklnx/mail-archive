@@ -160,11 +160,13 @@ smtp account, here `alice@example.com` owned by the user `alice`:
 ```
 
 The message view shows these messages as "Imported from files: piler". What
-the account already received over SMTP is left out by its Message-ID, also
+the account already received over SMTP is left out: the same `Message-ID`,
+`Date`, `From` and `Subject` (see
+[Journaling](./journaling#bring-in-the-mail-from-before-journaling)), also
 when the piler stock was imported into an import account before. This is not
-a guarantee against every second copy: a message without a Message-ID is
-always stored, and so is a mail with the same Message-ID but other bytes
-(delivered while the import runs, or imported earlier by a fill); see
+a guarantee against every second copy: a message without a `Message-ID`,
+`Date` or `From` is always stored, and so is the same message with other
+bytes delivered while the import runs, or imported earlier by a fill; see
 [Into an smtp account](#into-an-smtp-account). A duplicate beats a gap.
 `.eml` files directly in `--from` need no `--folder` here.
 
@@ -189,11 +191,15 @@ IMAP; when it exists only as files (a piler export, an mbox, a Maildir),
 - Every message goes into the account's folder `JOURNAL`, whatever the
   source folder: subfolders are merged, a message in two of them is stored
   once. `--folder` is refused.
-- The rules are a fill's. A message the account received over SMTP with the
-  same Message-ID is left out (*journaled*); one with the same bytes is
-  *already there*. The Message-ID is read from the message itself. A message
-  without a Message-ID is always stored: a duplicate beats a gap. There is no
-  cut-off; the Message-ID check covers the overlap with journaling.
+- The rules are a fill's. A message the account received over SMTP is left
+  out (*journaled*) when both have the same `Message-ID`, `Date`, `From` and
+  `Subject`, compared as described under
+  [Journaling](./journaling#bring-in-the-mail-from-before-journaling); one
+  with the same bytes is *already there*. The values are read from the
+  message itself. A message without a `Message-ID`, `Date` or `From` is
+  always stored, and so is one that differs in any of the four: a duplicate
+  beats a gap. Only the file of a journaled message is removed. There is no
+  cut-off; this check covers the overlap with journaling.
 - Imported messages have no envelope, so BCC recipients are unknown. The
   message view's **Origin** section says "Imported from files: LABEL".
   `--label` sets the label, 1 to 200 characters without control characters;
@@ -201,27 +207,30 @@ IMAP; when it exists only as files (a piler export, an mbox, a Maildir),
   and a message keeps the label of the run that added it.
 - Read marks and dates come from the source as for import accounts.
 - `--dry-run` checks the account and lists the folders and counts; the
-  Message-ID check needs every message read, so it only runs for real.
+  journaled check needs every message read, so it only runs for real.
 
 The summary has a `JOURNALED` column and ends with
-`ok: read N, added N (N new to the archive), N already there, N already journaled, N skipped`.
+`ok: read N, added N (N new to the account), N already there, N already journaled, N skipped`.
+*New to the account* counts the messages the account did not hold in any of
+its folders before, even if the archive held the same bytes from another
+account.
 Running it again adds nothing new; each run gets a row of its own, and only
 what it adds names it.
 
 Only one import, fill, sync or removal of the account runs at a time; a busy
 account is refused with "the account is being filled, imported into or
-removed". Mail keeps arriving over SMTP meanwhile. A delivery with the same
-Message-ID but other bytes that arrives during the import can give two
+removed". Mail keeps arriving over SMTP meanwhile. A delivery of the same
+message with other bytes that arrives during the import can give two
 copies, never a gap, as with a fill.
 
 Only messages the account received over SMTP count. Mail a fill imported
-from IMAP with the same Message-ID but other bytes is stored a second time:
-a stricter check would hide distinct messages that share a Message-ID.
+from IMAP that is the same message with other bytes is stored a second
+time.
 
 **Retention.** Rules on `JOURNAL` and account-wide rules cover the imported
 messages. A message retention deleted is not stored again. Once retention
 has deleted the journal copy of a message, a file copy with other bytes no
-longer matches by its Message-ID and is stored; its retention period has
+longer matches and is stored; its retention period has
 ended too, so the next deletion run lists it again.
 
 ## Running an import again

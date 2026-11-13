@@ -51,6 +51,11 @@ type Store struct {
 	// blobPin is the generation of encryption at rest a writer started
 	// with (PinBlobGeneration).
 	blobPin atomic.Pointer[blobPin]
+	// migrations are the migration files goose runs: the embedded ones,
+	// or a test's (WithMigrationsFS).
+	migrations fs.FS
+	// writes is told what each committed save added (SetWriteObserver).
+	writes atomic.Pointer[WriteObserver]
 }
 
 // Option configures Open.
@@ -64,6 +69,16 @@ type openConfig struct {
 	tracer pgx.QueryTracer
 	// dial replaces the dialer of every connection; only tests set it.
 	dial pgconn.DialFunc
+	// migrations replaces the embedded migration files; only tests set
+	// it (WithMigrationsFS).
+	migrations fs.FS
+}
+
+// WithMigrationsFS makes the store run the migration files in fsys (goose
+// files at its root) instead of the embedded ones. For tests only: a
+// database migrated with other files is not one this binary can serve.
+func WithMigrationsFS(fsys fs.FS) Option {
+	return func(c *openConfig) { c.migrations = fsys }
 }
 
 // ForMigrations sets up the store for `migrate` and `migrate down`, so
@@ -130,6 +145,12 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 	if oc.dial != nil {
 		cfg.ConnConfig.DialFunc = oc.dial
 	}
+	migrations := oc.migrations
+	if migrations == nil {
+		if migrations, err = fs.Sub(migrationsFS, "migrations"); err != nil {
+			return nil, err
+		}
+	}
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, err
@@ -138,7 +159,7 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 		pool.Close()
 		return nil, fmt.Errorf("connect to database: %w", err)
 	}
-	return &Store{pool: pool, q: db.New(pool), blobWait: make(chan struct{}, blobWaiters)}, nil
+	return &Store{pool: pool, q: db.New(pool), blobWait: make(chan struct{}, blobWaiters), migrations: migrations}, nil
 }
 
 // SetGooseLockWait sets the function that Migrate and MigrateDown call
@@ -157,6 +178,11 @@ func (s *Store) Close() { s.pool.Close() }
 // The rebuild runs first because pending migrations would already write
 // through misordered indexes. If it fails, nothing is migrated. The
 // migrations run under goose's migration lock (withMigrations).
+//
+// goose runs each migration in a transaction of its own and stops at the
+// first that fails (TestMigrationsAreTransactional keeps it so). Then the
+// error is a *MigrationFailed: that migration was rolled back, and the
+// ones before it in this run, which Migrate also returns, stay applied.
 func (s *Store) Migrate(ctx context.Context) ([]string, error) {
 	if _, err := s.RebuildIndexesIfNeeded(ctx, nil); err != nil {
 		return nil, err
@@ -164,6 +190,11 @@ func (s *Store) Migrate(ctx context.Context) ([]string, error) {
 	var applied []string
 	err := s.withMigrations(ctx, true, func(p *goose.Provider) error {
 		results, err := p.Up(ctx)
+		var partial *goose.PartialError
+		if errors.As(err, &partial) {
+			results = partial.Applied
+			err = s.migrationFailed(partial, results)
+		}
 		for _, r := range results {
 			applied = append(applied, r.Source.Path)
 		}
@@ -242,10 +273,6 @@ func (s *Store) MigrationStatus(ctx context.Context) ([]MigrationStatus, error) 
 // When ctx has ended, the error wraps ctx's error (withCtxErr), whichever
 // step of goose saw the cancel.
 func (s *Store) withMigrations(ctx context.Context, locked bool, fn func(*goose.Provider) error) error {
-	sub, err := fs.Sub(migrationsFS, "migrations")
-	if err != nil {
-		return err
-	}
 	var opts []goose.ProviderOption
 	if locked {
 		opts = append(opts, goose.WithSessionLocker(gooseLocker{onWait: s.gooseLockWait}))
@@ -262,7 +289,7 @@ func (s *Store) withMigrations(ctx context.Context, locked bool, fn func(*goose.
 	}
 	sqlDB := stdlib.OpenDBFromPool(gp)
 	defer closeMigrationPool(ctx, gp, sqlDB)
-	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, sub, opts...)
+	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, s.migrations, opts...)
 	if err != nil {
 		return err
 	}
@@ -381,6 +408,11 @@ type Account struct {
 	// SyncInterval is the account's own sync interval: nil uses the
 	// server's, 0 keeps it off the schedule. Only IMAP accounts have one.
 	SyncInterval *time.Duration
+	// GroupID is the customer group of the owner, read with the account
+	// (a join, no query of its own), for the storage gate (#397); nil
+	// without an owner. Only GetAccount, GetOwnedAccount and the account
+	// lists set it.
+	GroupID *int64
 }
 
 // secondsToInterval and intervalToSeconds convert the stored own sync
@@ -399,6 +431,13 @@ func intervalToSeconds(d *time.Duration) *int32 {
 	}
 	s := int32(min(*d/time.Second, 1<<31-1)) //nolint:gosec // clamped
 	return &s
+}
+
+// accountWithGroup is an account read with its owner's group.
+func accountWithGroup(r db.Account, group *int64) *Account {
+	a := accountFromDB(r)
+	a.GroupID = group
+	return a
 }
 
 func accountFromDB(r db.Account) *Account {
@@ -519,7 +558,7 @@ func (s *Store) GetAccount(ctx context.Context, id int64) (*Account, error) {
 	if err != nil {
 		return nil, err
 	}
-	return accountFromDB(r), nil
+	return accountWithGroup(r.Account, r.GroupID), nil
 }
 
 // GetOwnedAccount looks up one of a user's accounts by name.
@@ -531,26 +570,28 @@ func (s *Store) GetOwnedAccount(ctx context.Context, owner int64, name string) (
 	if err != nil {
 		return nil, err
 	}
-	return accountFromDB(r), nil
+	return accountWithGroup(r.Account, r.GroupID), nil
 }
 
 // ListAccountsByName returns the accounts of all users with this name.
 func (s *Store) ListAccountsByName(ctx context.Context, name string) ([]*Account, error) {
-	return accountsFromDB(s.q.ListAccountsByName(ctx, name))
+	rows, err := s.q.ListAccountsByName(ctx, name)
+	return accountsWithGroup(rows, err, func(r db.ListAccountsByNameRow) (db.Account, *int64) { return r.Account, r.GroupID })
 }
 
 // ListOwnedAccounts returns a user's accounts ordered by name.
 func (s *Store) ListOwnedAccounts(ctx context.Context, owner int64) ([]*Account, error) {
-	return accountsFromDB(s.q.ListOwnedAccounts(ctx, &owner))
+	rows, err := s.q.ListOwnedAccounts(ctx, &owner)
+	return accountsWithGroup(rows, err, func(r db.ListOwnedAccountsRow) (db.Account, *int64) { return r.Account, r.GroupID })
 }
 
-func accountsFromDB(rows []db.Account, err error) ([]*Account, error) {
+func accountsWithGroup[R any](rows []R, err error, split func(R) (db.Account, *int64)) ([]*Account, error) {
 	if err != nil {
 		return nil, err
 	}
 	out := make([]*Account, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, accountFromDB(r))
+		out = append(out, accountWithGroup(split(r)))
 	}
 	return out, nil
 }
@@ -572,7 +613,8 @@ func (s *Store) CountOwnedAccounts(ctx context.Context) (map[int64]int64, error)
 
 // ListAccounts returns the accounts of all users ordered by name.
 func (s *Store) ListAccounts(ctx context.Context) ([]*Account, error) {
-	return accountsFromDB(s.q.ListAccounts(ctx))
+	rows, err := s.q.ListAccounts(ctx)
+	return accountsWithGroup(rows, err, func(r db.ListAccountsRow) (db.Account, *int64) { return r.Account, r.GroupID })
 }
 
 // Folder is the sync state of one IMAP folder.
@@ -617,6 +659,14 @@ func (s *Store) ResetFolder(ctx context.Context, folderID int64, uidValidity uin
 	return one(s.q.ResetFolder(ctx, db.ResetFolderParams{ID: folderID, Uidvalidity: int64(uidValidity)}))
 }
 
+// CapFolderLastUID sets the folder's last UID to at most uid, so that the
+// next sync fetches every message after uid again; messages it already
+// holds are not stored twice. A sync calls it while it holds the
+// account's sync lock.
+func (s *Store) CapFolderLastUID(ctx context.Context, folderID int64, uid uint32) error {
+	return one(s.q.CapFolderLastUID(ctx, db.CapFolderLastUIDParams{ID: folderID, LastUid: int64(uid)}))
+}
+
 // MessageMeta is the parsed metadata of a message.
 type MessageMeta struct {
 	SHA256     string
@@ -626,11 +676,40 @@ type MessageMeta struct {
 	From       string
 	SentAt     *time.Time
 	StoredPath string
-	// Known is set when the metadata was not extracted because the
-	// database already had the message; only SHA256, Size and StoredPath
-	// are set then.
+	// Known is set when the database already had the message: its row is
+	// not written again (InsertMessage does nothing on the conflict). For
+	// a message new to the saving account's customer group the other
+	// fields are parsed all the same and passed to the insert, which then
+	// does the work of a new row up to the conflict (#539, part 3);
+	// otherwise only SHA256, Size and StoredPath are set.
 	Known bool
+	// LookupGroup is the customer group key whose holdings decided the
+	// work for this message (GroupLookup.Group), nil without a lookup
+	// (./ma import, tools/demo). A save into an account whose group is
+	// another one by now refuses the batch (ErrGroupChanged).
+	LookupGroup *int64
 	IndexData
+}
+
+// ErrGroupChanged is returned by a save whose account moved to another
+// customer group after the group lookup of one of its messages: the work
+// done for the message followed the old group's holdings. Nothing is
+// stored; sync and fill redo the lookup and the work (archive), an SMTP
+// delivery answers 451 and is retried (#539, part 3).
+var ErrGroupChanged = errors.New("the account moved to another customer group since its group lookup")
+
+// checkLookupGroups refuses a batch with a message whose group lookup ran
+// for another group than g, the account's group read under
+// lockAccountGroup: from there until the commit no move can change it, so
+// a batch that passes is stored with the work for the group it is stored
+// into.
+func checkLookupGroups(g accountGroup, metas []MessageMeta) error {
+	for i := range metas {
+		if k := metas[i].LookupGroup; k != nil && *k != g.key() {
+			return ErrGroupChanged
+		}
+	}
+	return nil
 }
 
 // Location is where a message was found on a server.
@@ -655,17 +734,23 @@ func (s *Store) MessageExists(ctx context.Context, sha256 string) (bool, error) 
 
 // SaveResult tells what SaveBatch stored.
 type SaveResult struct {
-	New int // messages new to the archive
-	// Skipped counts messages deleted by retention that were not archived
-	// again, because they would already be expired in this folder.
+	// Added counts the stored messages the account did not hold before, in
+	// any of its folders (gone locations count as held). It never depends
+	// on what other accounts hold: deduplication across accounts stays
+	// invisible.
+	Added int
+	// Skipped counts messages deleted by retention or a purge from the
+	// account or its customer group that were not archived again, because
+	// they would already be expired in this folder (skipDeleted).
 	Skipped int
 }
 
 // SaveBatch stores message metadata and locations for a batch and advances
 // the folder's last UID, all in one transaction, in the order of the
 // hashes (sortBatch). A message deleted by
-// retention is stored again only where it would not already be expired;
-// otherwise it is skipped and its file scheduled for removal. The caller
+// retention or a purge from the account or its customer group is stored
+// again only where it would not already be expired, or once the group
+// holds it again; otherwise it is skipped (skipDeleted). The caller
 // holds the blob lock (sync and import take it for the whole run), so the
 // transaction takes only the attestation fence.
 func (s *Store) SaveBatch(ctx context.Context, folderID int64, lastUID uint32, metas []MessageMeta, locs []Location) (SaveResult, error) {
@@ -677,16 +762,36 @@ func (s *Store) SaveBatch(ctx context.Context, folderID int64, lastUID uint32, m
 func (s *Store) saveBatch(ctx context.Context, folderID int64, lastUID uint32, metas []MessageMeta, locs []Location,
 	after func(*db.Queries, SaveResult) error) (SaveResult, error) {
 	metas, locs = sortBatch(metas, locs)
-	var res SaveResult
+	var (
+		res   SaveResult
+		wrote storageWrite
+	)
 	err := s.inWriteTx(ctx, false, func(q *db.Queries) error {
-		res = SaveResult{}
+		res, wrote = SaveResult{}, storageWrite{}
 		if err := s.checkBlobGeneration(ctx, q); err != nil {
 			return err
 		}
-		skip, err := skipDeleted(ctx, q, folderID, metas, locs)
+		group, err := lockAccountGroup(ctx, q, byFolder(folderID))
 		if err != nil {
 			return err
 		}
+		if err := checkLookupGroups(group, metas); err != nil {
+			return err
+		}
+		wrote.group = group.Group
+		skip, err := skipDeleted(ctx, q, group, folderID, metas, locs)
+		if err != nil {
+			return err
+		}
+		held, err := accountHeld(ctx, q, folderID, metas)
+		if err != nil {
+			return err
+		}
+		att, err := newAttachmentText(ctx, q, group, keptHashes(metas, skip))
+		if err != nil {
+			return err
+		}
+		var added []*MessageMeta
 		for i := range metas {
 			m := &metas[i]
 			if skip[m.SHA256] {
@@ -697,10 +802,12 @@ func (s *Store) saveBatch(ctx context.Context, folderID int64, lastUID uint32, m
 			if err != nil {
 				return fmt.Errorf("insert message %s: %w", m.SHA256, err)
 			}
-			res.New += int(n)
-			if err := enqueueAttachmentText(ctx, q, m, n); err != nil {
-				return err
+			if !held[m.SHA256] {
+				held[m.SHA256] = true
+				res.Added++
+				added = append(added, m)
 			}
+			textOK := att.flag(m, n)
 
 			l := locs[i]
 			flags := l.Flags
@@ -711,14 +818,22 @@ func (s *Store) saveBatch(ctx context.Context, folderID int64, lastUID uint32, m
 			if !l.InternalDate.IsZero() {
 				internal = &l.InternalDate
 			}
-			err = q.UpsertLocation(ctx, db.UpsertLocationParams{
+			inserted, err := q.UpsertLocation(ctx, db.UpsertLocationParams{
 				MessageSha256: m.SHA256, FolderID: l.FolderID,
 				Uidvalidity: int64(l.UIDValidity), Uid: int64(l.UID),
-				Flags: flags, InternalDate: internal,
+				Flags: flags, InternalDate: internal, AttachmentTextOk: textOK,
 			})
 			if err != nil {
 				return fmt.Errorf("insert location: %w", err)
 			}
+			if inserted {
+				if err := att.inserted(ctx, q, m.SHA256, textOK); err != nil {
+					return err
+				}
+			}
+		}
+		if wrote.bytes, err = recordGroupUsage(ctx, q, group, added); err != nil {
+			return err
 		}
 		if err := q.AdvanceFolder(ctx, db.AdvanceFolderParams{ID: folderID, LastUid: int64(lastUID)}); err != nil {
 			return err
@@ -731,45 +846,198 @@ func (s *Store) saveBatch(ctx context.Context, folderID int64, lastUID uint32, m
 	if err != nil {
 		return SaveResult{}, err
 	}
+	s.noteWrite(wrote)
 	return res, nil
 }
 
-// skipDeleted returns the hashes of a batch to skip: messages deleted by
-// retention (a tombstone and no row) that would already be expired in the
-// folder, and that no hold covers there. Their files are scheduled for
-// removal at once. A message not skipped is archived again, as if this
-// location had existed when it was deleted.
-func skipDeleted(ctx context.Context, q *db.Queries, folderID int64, metas []MessageMeta, locs []Location) (map[string]bool, error) {
+// accountHeld returns the hashes of a batch that the account of the folder
+// holds already, in any of its folders. It runs inside the batch's
+// transaction; the account's sync lock (sync, import, fill) keeps the
+// answer stable until the batch commits. The map is never nil, so the
+// caller can mark the hashes it adds.
+func accountHeld(ctx context.Context, q *db.Queries, folderID int64, metas []MessageMeta) (map[string]bool, error) {
 	shas := make([]string, len(metas))
 	for i := range metas {
 		shas[i] = metas[i].SHA256
 	}
-	deleted, err := q.TombstonedOf(ctx, shas)
+	held := make(map[string]bool, len(metas))
+	if len(shas) == 0 {
+		return held, nil
+	}
+	rows, err := q.AccountHeldMessages(ctx, db.AccountHeldMessagesParams{FolderID: folderID, Shas: shas})
+	if err != nil {
+		return nil, fmt.Errorf("account held messages: %w", err)
+	}
+	for _, sha := range rows {
+		held[sha] = true
+	}
+	return held, nil
+}
+
+// keptHashes returns the hashes of a batch that skip leaves.
+func keptHashes(metas []MessageMeta, skip map[string]bool) []string {
+	out := make([]string, 0, len(metas))
+	for i := range metas {
+		if !skip[metas[i].SHA256] {
+			out = append(out, metas[i].SHA256)
+		}
+	}
+	return out
+}
+
+// key is the group's key in deletion marks and group lookups: the group's
+// id, or 0 for the accounts without an owner (group ids start at 1).
+func (g accountGroup) key() int64 {
+	if g.Group == nil {
+		return 0
+	}
+	return *g.Group
+}
+
+// groupHasLocations returns the hashes of shas that an account of the
+// group holds, the saving account included: one probe per folder of the
+// group and hash (GroupHasLocations), so its cost never depends on other
+// groups.
+func groupHasLocations(ctx context.Context, q *db.Queries, g accountGroup, shas []string) (map[string]bool, error) {
+	held := make(map[string]bool, len(shas))
+	if len(shas) == 0 {
+		return held, nil
+	}
+	rows, err := q.GroupHasLocations(ctx, db.GroupHasLocationsParams{Shas: shas, GroupID: g.key()})
+	if err != nil {
+		return nil, fmt.Errorf("group has locations: %w", err)
+	}
+	for _, sha := range rows {
+		held[sha] = true
+	}
+	return held, nil
+}
+
+// GroupLookup answers, before a save into one account, whether the
+// account's customer group, this account included, holds a message
+// (#539, part 3). Sync and fill make one per folder run, an SMTP delivery
+// one per recipient account; it is not safe for concurrent use.
+//
+// Every Holds reads the account's group (AccountGroupID, one primary key
+// probe) and probes the group's own folders (FoldersHoldMessages): one
+// probe of message_locations_folder_sha_idx per folder, never a lookup by
+// hash, so its time depends on the group's folders, never on copies in
+// other groups. The folder list (GroupFolderIDs) is read with the first
+// Holds and again when the account's group changed. A folder that left
+// the group meanwhile never counts, one that joined it counts from the
+// next folder run (more work, never less). Holds runs before the save's
+// transaction, without its lock; the save checks under lockAccountGroup
+// that the account is still in the group the lookup used
+// (MessageMeta.LookupGroup, ErrGroupChanged).
+type GroupLookup struct {
+	s       *Store
+	account int64
+	group   int64
+	folders []int64
+	loaded  bool // folders belong to group
+	last    int64
+	lastOK  bool
+}
+
+// Group returns the group key the last Holds looked up, for
+// MessageMeta.LookupGroup; ok is false when it found no account.
+func (l *GroupLookup) Group() (key int64, ok bool) {
+	return l.last, l.lastOK
+}
+
+// NewGroupLookup returns the lookup for saves into the account; it reads
+// nothing yet.
+func (s *Store) NewGroupLookup(accountID int64) *GroupLookup {
+	return &GroupLookup{s: s, account: accountID}
+}
+
+// Holds reports whether an account of the account's group, this one
+// included, has a location of the message (gone locations count). A gone
+// account holds nothing; the save then fails as without the lookup.
+func (l *GroupLookup) Holds(ctx context.Context, sha256 string) (bool, error) {
+	l.lastOK = false
+	owner, err := l.s.q.AccountGroupID(ctx, l.account)
+	if isNoRows(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("group of account %d: %w", l.account, err)
+	}
+	group := accountGroup{Account: l.account, Group: owner}.key()
+	l.last, l.lastOK = group, true
+	if !l.loaded || l.group != group {
+		folders, err := l.s.q.GroupFolderIDs(ctx, group)
+		if err != nil {
+			return false, fmt.Errorf("folders of group %d: %w", group, err)
+		}
+		l.group, l.folders, l.loaded = group, folders, true
+	}
+	held, err := l.s.q.FoldersHoldMessages(ctx, db.FoldersHoldMessagesParams{Shas: []string{sha256}, FolderIds: l.folders, GroupID: l.group})
+	if err != nil {
+		return false, fmt.Errorf("group holds message: %w", err)
+	}
+	return len(held) > 0, nil
+}
+
+// skipDeleted returns the hashes of a batch to skip: messages deleted from
+// the folder's account or its customer group g (DeletionMarksOf) that
+// no account of the group holds now, that would already be expired in the
+// folder, and that no hold covers there. Whether another group holds or
+// held the message never changes the answer (#539). The files of those
+// without a message row are scheduled for removal at once; with a row, the
+// file belongs to another group's copy. A message not skipped is archived
+// again, as if this location had existed when it was deleted. g comes
+// from lockAccountGroup, so a move of the account or its owner to another
+// group waits for the save.
+func skipDeleted(ctx context.Context, q *db.Queries, g accountGroup, folderID int64, metas []MessageMeta, locs []Location) (map[string]bool, error) {
+	shas := make([]string, len(metas))
+	for i := range metas {
+		shas[i] = metas[i].SHA256
+	}
+	deleted, err := q.DeletionMarksOf(ctx, db.DeletionMarksOfParams{Shas: shas, AccountID: g.Account, GroupID: g.key()})
 	if err != nil || len(deleted) == 0 {
 		return nil, err
 	}
-	archivedAt := make(map[string]time.Time, len(deleted))
+	marked := make([]string, len(deleted))
+	for i, d := range deleted {
+		marked[i] = d.Sha256
+	}
+	// Only for the marked hashes: a group that holds a copy stores the
+	// message again, whatever its marks.
+	inGroup, err := groupHasLocations(ctx, q, g, marked)
+	if err != nil {
+		return nil, err
+	}
+	type mark struct {
+		at       time.Time
+		archived bool
+	}
+	marks := make(map[string]mark, len(deleted))
 	for _, d := range deleted {
-		archivedAt[d.Sha256] = d.ArchivedAt
+		if !inGroup[d.Sha256] {
+			marks[d.Sha256] = mark{d.ArchivedAt, d.Archived}
+		}
 	}
 	skip := map[string]bool{}
 	var remove []string
 	for i := range metas {
-		at, ok := archivedAt[metas[i].SHA256]
-		if !ok {
+		m, ok := marks[metas[i].SHA256]
+		if !ok || skip[metas[i].SHA256] {
 			continue
 		}
 		var internal *time.Time
 		if !locs[i].InternalDate.IsZero() {
 			internal = &locs[i].InternalDate
 		}
-		yes, err := q.SkipRearchive(ctx, db.SkipRearchiveParams{FolderID: folderID, SentAt: metas[i].SentAt, InternalDate: internal, ArchivedAt: at})
+		yes, err := q.SkipRearchive(ctx, db.SkipRearchiveParams{FolderID: folderID, SentAt: metas[i].SentAt, InternalDate: internal, ArchivedAt: m.at})
 		if err != nil {
 			return nil, err
 		}
-		if yes && !skip[metas[i].SHA256] {
+		if yes {
 			skip[metas[i].SHA256] = true
-			remove = append(remove, metas[i].SHA256)
+			if !m.archived {
+				remove = append(remove, metas[i].SHA256)
+			}
 		}
 	}
 	if len(remove) > 0 {

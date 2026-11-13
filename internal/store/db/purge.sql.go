@@ -182,6 +182,36 @@ func (q *Queries) InsertPurgeDeletions(ctx context.Context, shas []string) (int6
 	return result.RowsAffected(), nil
 }
 
+const insertPurgeMarks = `-- name: InsertPurgeMarks :execrows
+INSERT INTO deletion_marks (sha256, archived_at, account_ids, group_ids, purge_id, tombstone_id)
+SELECT m.sha256, m.created_at, ARRAY[$1::bigint],
+       ARRAY[(SELECT coalesce(o.group_id, 0) FROM accounts a LEFT JOIN users o ON o.id = a.owner_id
+              WHERE a.id = $1::bigint)],
+       $2::bigint,
+       (SELECT max(d.id) FROM deleted_messages d WHERE d.purge_id = $2::bigint AND d.sha256 = m.sha256)
+FROM messages m
+WHERE m.sha256 = ANY ($3::bpchar[])
+ORDER BY m.sha256
+`
+
+type InsertPurgeMarksParams struct {
+	AccountID int64
+	PurgeID   int64
+	Shas      []string
+}
+
+// The deletion marks of a purge's batch (#539), after its tombstones and
+// before the account's locations go: every purged message, whether or not
+// it stays in other accounts, marked with the account and its customer
+// group (0: without an owner), and with its tombstone if it has one.
+func (q *Queries) InsertPurgeMarks(ctx context.Context, arg InsertPurgeMarksParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertPurgeMarks, arg.AccountID, arg.PurgeID, arg.Shas)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const insertPurgeTombstones = `-- name: InsertPurgeTombstones :execrows
 INSERT INTO deleted_messages (sha256, size, message_seq, archived_at, retain_until, locations, purge_id)
 SELECT m.sha256, m.size, m.seq, m.created_at, NULL,
@@ -394,7 +424,7 @@ func (q *Queries) PurgeHolds(ctx context.Context, accountID int64) ([]PurgeHolds
 }
 
 const purgeKeptIn = `-- name: PurgeKeptIn :many
-SELECT coalesce(u.name, '')::text AS owner, a.name AS account, count(DISTINCT o.message_sha256)::bigint AS messages
+SELECT coalesce(u.name, '')::text AS owner, a.owner_id, a.name AS account, count(DISTINCT o.message_sha256)::bigint AS messages
 FROM message_locations o
 JOIN folders fo ON fo.id = o.folder_id
 JOIN accounts a ON a.id = fo.account_id
@@ -403,12 +433,13 @@ WHERE a.id <> $1::bigint
   AND o.message_sha256 IN (SELECT l.message_sha256 FROM message_locations l
                            JOIN folders f ON f.id = l.folder_id
                            WHERE f.account_id = $1::bigint)
-GROUP BY 1, 2
-ORDER BY 1, 2
+GROUP BY 1, 2, 3
+ORDER BY 1, 3
 `
 
 type PurgeKeptInRow struct {
 	Owner    string
+	OwnerID  *int64
 	Account  string
 	Messages int64
 }
@@ -424,7 +455,12 @@ func (q *Queries) PurgeKeptIn(ctx context.Context, accountID int64) ([]PurgeKept
 	var items []PurgeKeptInRow
 	for rows.Next() {
 		var i PurgeKeptInRow
-		if err := rows.Scan(&i.Owner, &i.Account, &i.Messages); err != nil {
+		if err := rows.Scan(
+			&i.Owner,
+			&i.OwnerID,
+			&i.Account,
+			&i.Messages,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -433,6 +469,33 @@ func (q *Queries) PurgeKeptIn(ctx context.Context, accountID int64) ([]PurgeKept
 		return nil, err
 	}
 	return items, nil
+}
+
+const purgeKeptOutsideOwner = `-- name: PurgeKeptOutsideOwner :one
+WITH msgs AS (
+    SELECT DISTINCT l.message_sha256 FROM message_locations l
+    JOIN folders f ON f.id = l.folder_id
+    WHERE f.account_id = $1::bigint
+)
+SELECT count(*)::bigint FROM msgs s
+WHERE EXISTS (SELECT 1 FROM message_locations o
+              JOIN folders fo ON fo.id = o.folder_id
+              WHERE o.message_sha256 = s.message_sha256 AND fo.account_id <> $1::bigint)
+  AND NOT EXISTS (SELECT 1 FROM message_locations o
+                  JOIN folders fo ON fo.id = o.folder_id
+                  JOIN accounts a ON a.id = fo.account_id
+                  WHERE o.message_sha256 = s.message_sha256 AND fo.account_id <> $1::bigint
+                    AND a.owner_id = (SELECT x.owner_id FROM accounts x WHERE x.id = $1::bigint))
+`
+
+// The account's messages that a purge keeps only because accounts of
+// other owners (or of none) hold them: they have a location in another
+// account and in no other account of the account's owner.
+func (q *Queries) PurgeKeptOutsideOwner(ctx context.Context, accountID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, purgeKeptOutsideOwner, accountID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const purgeLastOf = `-- name: PurgeLastOf :many

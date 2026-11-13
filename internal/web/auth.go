@@ -3,10 +3,10 @@ package web
 import (
 	"context"
 	"errors"
-	"math"
 	"net/http"
-	"strconv"
+	"net/netip"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/pklnx/mail-archive/internal/auth"
@@ -96,6 +96,66 @@ func (s *Server) warnUntrustedForwardedProto(r *http.Request) {
 	}
 	s.log.Warn("X-Forwarded-Proto from a peer that is neither loopback nor a trusted proxy is ignored: the session cookie is not "+
 		"__Host-/Secure and no HSTS is sent; behind a reverse proxy set "+config.EnvTrustedProxies+" to its address", "peer", peer)
+}
+
+// plainHTTPWarnings returns, for each of the allowed hosts that is not a
+// loopback name (isLoopbackName), a flag for warnPlainHTTP. The map is built
+// once and only read afterwards: its size is fixed by the configuration, and
+// no request can make it grow.
+func plainHTTPWarnings(hosts []string) map[string]*atomic.Bool {
+	m := make(map[string]*atomic.Bool)
+	for _, h := range hosts {
+		if !isLoopbackName(h) {
+			m[h] = new(atomic.Bool)
+		}
+	}
+	return m
+}
+
+// isLoopbackName reports whether a host name (lowercase, without port and
+// brackets) names this computer for a browser: localhost, a name under
+// .localhost, or a loopback address (also IPv4-mapped). Browsers send Fetch
+// Metadata there over plain HTTP, as over HTTPS. A trailing dot is ignored.
+func isLoopbackName(host string) bool {
+	host = strings.TrimSuffix(host, ".")
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	ip, err := netip.ParseAddr(host)
+	return err == nil && ip.Unmap().IsLoopback()
+}
+
+// warnPlainHTTP logs once per allowed host name when a browser uses the web
+// UI over plain HTTP under a name that is not a loopback name: browsers
+// send no Fetch Metadata (Sec-Fetch-*) there, so fetchMetadataAllowed lets
+// everything through and the guard against requests from HTML mail does
+// nothing ("Plain LAN access" in docs/reference/security.md).
+//
+// It runs after the Host check, so the host is an allowed one and the
+// warnings are at most one per configured host. A browser is a Mozilla/
+// user agent without an API key; one that sends Fetch Metadata treats the
+// origin as trustworthy and needs no warning. X-Forwarded-Proto: https
+// means HTTPS to a proxy: from loopback or a trusted proxy it counts, and
+// from anybody else warnUntrustedForwardedProto covers it. Only the
+// configured host name is logged, nothing the client sent.
+func (s *Server) warnPlainHTTP(r *http.Request) {
+	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" ||
+		!strings.HasPrefix(r.Header.Get("User-Agent"), "Mozilla/") ||
+		r.Header.Get("Sec-Fetch-Site") != "" || r.Header.Get("Sec-Fetch-Mode") != "" {
+		return
+	}
+	if _, key := bearerKey(r); key {
+		return
+	}
+	host := hostName(r.Host)
+	warned, ok := s.plainHTTPWarned[host]
+	if !ok || warned.Load() || !warned.CompareAndSwap(false, true) {
+		return
+	}
+	s.log.Warn("the web UI is used over plain HTTP under a host name other than localhost or a loopback address: browsers send "+
+		"no Fetch Metadata (Sec-Fetch-*) there, so the guard against requests from HTML mail does nothing; use HTTPS (a reverse proxy or "+
+		"tailscale serve, with "+config.EnvTrustedProxies+" where it does not connect from loopback) or http://localhost "+
+		"on this computer; see \"Plain LAN access\" in the security docs", "host", host)
 }
 
 // sessionTokenKey holds the token of the request's valid session, as found
@@ -328,6 +388,10 @@ func (s *Server) authenticate(mux *http.ServeMux, rules map[string]route) http.H
 				return
 			}
 		}
+		if adminOnlyLevel(a) && !sess.IsAdmin {
+			s.fail(w, r, http.StatusForbidden, adminOnlyMetrics, nil)
+			return
+		}
 		mux.ServeHTTP(w, r)
 	})
 }
@@ -409,6 +473,10 @@ type noSessionJSON struct {
 	// SetupRequired is true while no user exists; the UI then explains how
 	// to create the first admin.
 	SetupRequired bool `json:"setupRequired"`
+	// Setup is how the first admin is created (#396, part 3): "cli" (user
+	// add), "token" (the operator's setup link works), "expired" (its
+	// token is too old) or "complete".
+	Setup string `json:"setup"`
 	// PasskeyOrigin is where passkey logins work; empty when they are off.
 	PasskeyOrigin string `json:"passkeyOrigin,omitempty"`
 }
@@ -428,12 +496,14 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusOK, body)
 		return
 	}
-	n, err := s.store.CountUsers(r.Context())
+	setup, err := s.store.SetupState(r.Context(), s.currentTime())
 	if err != nil {
 		s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 		return
 	}
-	s.writeJSON(w, http.StatusUnauthorized, noSessionJSON{Error: "login required", SetupRequired: n == 0, PasskeyOrigin: s.publicOrigin})
+	s.writeJSON(w, http.StatusUnauthorized, noSessionJSON{
+		Error: "login required", SetupRequired: !setup.HasUsers, Setup: setup.State, PasskeyOrigin: s.publicOrigin,
+	})
 }
 
 type loginInput struct {
@@ -449,16 +519,14 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := auth.NormalizeUserName(in.Username)
-	addr := s.clientAddr(r)
-	if wait := s.limiter.Blocked(name, addr); wait > 0 {
-		secs := int(math.Ceil(wait.Seconds()))
-		w.Header().Set("Retry-After", strconv.Itoa(secs))
-		s.writeJSON(w, http.StatusTooManyRequests, retryJSON{Error: "too many failed logins; try again later", RetryAfter: secs})
+	a := s.beginAttempt(w, r, name, "too many failed logins; try again later")
+	if a == nil {
 		return
 	}
+	defer a.Release()
 	if len(in.Password) > auth.MaxPasswordLength {
 		// No stored password is that long; skip the hashing work.
-		s.limiter.Fail(name, addr)
+		a.Fail()
 		s.auditUnknownLogin(r, name, reasonWrongPassword)
 		s.fail(w, r, http.StatusUnauthorized, errWrongLogin, nil)
 		return
@@ -467,22 +535,30 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	u, err := s.store.GetUserByName(ctx, name)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		a.Release()
 		s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 	ok, rehash := false, false
 	if u == nil {
-		s.hasher.VerifyDummy(ctx, in.Password)
+		s.verifyDummy(ctx, in.Password)
 	} else {
-		ok, rehash, err = s.hasher.Verify(ctx, u.PasswordHash, in.Password)
+		ok, rehash, err = s.verifyPassword(ctx, u.PasswordHash, in.Password)
 		if err != nil {
+			a.Release()
 			s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 			return
 		}
 	}
 	if !ok {
-		s.limiter.Fail(name, addr)
-		s.log.Info("login failed", "user", name, "addr", s.clientIP(r))
+		a.Fail()
+		// The name field may hold anything, also a password typed into
+		// it: only a valid user name goes into the log.
+		if auth.ValidateUserName(name) == nil {
+			s.log.Info("login failed", "user", name, "addr", s.clientIP(r))
+		} else {
+			s.log.Info("login failed", "user_valid", false, "addr", s.clientIP(r))
+		}
 		if u == nil {
 			s.auditUnknownLogin(r, name, reasonUnknownUser)
 		} else {
@@ -492,6 +568,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if u.LockedAt != nil {
+		a.Release()
 		s.auditLoginFailed(r, "password", reasonLocked, u)
 		s.fail(w, r, http.StatusForbidden, "this user is locked", nil)
 		return
@@ -508,10 +585,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// With 2FA on (required or voluntary), the password is only the first
 	// step: the limiter is reset after the second one.
 	if u.TwoFactorEnabled {
+		a.Release()
 		s.startTwoFactorLogin(w, r, u)
 		return
 	}
-	s.limiter.Succeed(name)
+	a.Succeed()
 	// A fresh token on every login: a token planted before the login is
 	// never promoted to a valid session.
 	s.deleteOldSessions(r)
@@ -540,8 +618,26 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, body)
 }
 
+// verifyPassword is s.hasher.Verify with the test hook beforeVerify.
+func (s *Server) verifyPassword(ctx context.Context, stored, password string) (ok, rehash bool, err error) {
+	if s.beforeVerify != nil {
+		s.beforeVerify()
+	}
+	return s.hasher.Verify(ctx, stored, password)
+}
+
+// verifyDummy is s.hasher.VerifyDummy with the test hook beforeVerify.
+func (s *Server) verifyDummy(ctx context.Context, password string) {
+	if s.beforeVerify != nil {
+		s.beforeVerify()
+	}
+	s.hasher.VerifyDummy(ctx, password)
+}
+
 type retryJSON struct {
-	Error      string `json:"error"`
+	Error string `json:"error"`
+	// Code is set for a refused IMAP login check (errTooManyChecks).
+	Code       string `json:"code,omitempty"`
 	RetryAfter int    `json:"retryAfter"` // seconds
 }
 
@@ -583,7 +679,8 @@ const auditMonthsAhead = 3
 
 // housekeeping runs at start and then every hour until ctx ends: it creates
 // the audit log partitions ahead and deletes expired sessions, challenges
-// and ceremonies, and API keys revoked or expired 30 days ago.
+// and ceremonies, and API keys and SMTP secrets revoked or expired 30 days
+// ago.
 func (s *Server) housekeeping(ctx context.Context) {
 	t := time.NewTicker(time.Hour)
 	defer t.Stop()
@@ -607,6 +704,13 @@ func (s *Server) housekeeping(ctx context.Context) {
 			}
 		} else if n > 0 {
 			s.log.Debug("deleted API keys revoked or expired 30 days ago", "count", n)
+		}
+		if n, err := s.store.DeleteOldSMTPCredentials(ctx, s.currentTime()); err != nil {
+			if ctx.Err() == nil {
+				s.log.Warn("delete old SMTP credentials", "err", err)
+			}
+		} else if n > 0 {
+			s.log.Debug("deleted SMTP credentials revoked or expired 30 days ago", "count", n)
 		}
 		if n, err := s.store.DeleteExpiredSessions(ctx, time.Now().Add(-auth.IdleTimeout)); err != nil {
 			if ctx.Err() == nil {

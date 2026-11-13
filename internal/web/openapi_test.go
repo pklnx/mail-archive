@@ -28,7 +28,7 @@ func expectedSecurity(a access) any {
 	switch a {
 	case accessPublic, accessLogin:
 		return []any{}
-	case accessRead, accessSync:
+	case accessRead, accessSync, accessMetrics:
 		return []any{session, map[string]any{"apiKey": []any{requiredScope(a)}}}
 	default:
 		return []any{session}
@@ -412,9 +412,19 @@ func TestSchemasMatchStructs(t *testing.T) {
 		{groupRefJSON{}, "GroupRef", true},
 		{groupJSON{}, "Group", true},
 		{groupInput{}, "GroupInput", false},
+		{usageAdminJSON{}, "UsageAdmin", true},
+		{usageInstanceJSON{}, "UsageInstance", true},
+		{usageDiskJSON{}, "UsageDisk", true},
+		{usageFigureJSON{}, "UsageFigure", true},
+		{usageGroupJSON{}, "UsageGroup", true},
+		{usageAccountJSON{}, "UsageAccount", true},
+		{usageMemberJSON{}, "UsageMember", true},
+		{usageOwnAccountJSON{}, "UsageOwnAccount", true},
 		{retentionRuleJSON{}, "RetentionRule", true},
 		{retentionAccountJSON{}, "RetentionAccount", true},
 		{legalHoldJSON{}, "LegalHold", true},
+		{smtpCredentialJSON{}, "SMTPCredential", true},
+		{smtpCredentialsJSON{}, "SMTPCredentials", true},
 	} {
 		s, ok := schemas[c.schema].(map[string]any)
 		if !ok {

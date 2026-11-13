@@ -8,12 +8,16 @@ paths:
   - "internal/web/linkallow.go"
   - "internal/web/inline.go"
   - "internal/web/preamble.go"
+  - "internal/web/cssurl.go"
+  - "internal/web/neutralizecss.go"
+  - "go.mod"
   - "web/src/frameFit.ts"
   - "docs/reference/security.md"
 ---
 # Serving layer
 - A PR here gets `second-review`; the reviewer checks security property 3.
-- Neutralizing is the last step on the served bytes (#266).
+- Neutralizing (`neutralizeHTML`, then `neutralizeCSS`) is the last step on the served bytes (#266); `neutralizeHTML` is a fixpoint on them, and with `images=1` the refusal (the `<svg`/`<math` byte scan, then the CSS check) reads exactly these bytes before the audit entry.
+- A `golang.org/x/net` update, the CSS tokenizer and its allowlist of functions are part of the HTML mail guarantee: such a PR gets `second-review`.
 - The Fetch Metadata guard and its navigation allowlist live in `protect` (`internal/web/middleware.go:49`).
 - Evidence for a serving change is raw requests against the real route table.
 - A change to a guarantee in `docs/reference/security.md` is the maintainer's decision.

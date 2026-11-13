@@ -142,14 +142,17 @@ them all.
   SMTP, so a later fill or `import --journal` stores the other copy of it.
   Its retention period has ended too, so the next deletion run lists it
   again; nothing is lost. A message retention deleted itself is not stored
-  again.
+  again where it would already be expired, in the accounts and customer
+  groups that held it, while no account of that group holds it (see
+  [Deletion](../reference/cli#deletion)).
 
 ## Legal holds
 
 A hold stops the deletion of the mail it covers, whatever the rules say:
 during a tax audit, a lawsuit or an investigation. Admins add one under
-**Retention → Legal holds** → **Add hold**, with the filter in the search
-syntax. Or the operator, on the command line:
+**Retention → Legal holds** → **Add hold**, with the period and, over their
+own mail, the filter in the search syntax. Or the operator, on the command
+line:
 
 ```sh
 ./ma hold add "Tax audit 2026" --reason "Betriebsprüfung, letter of 2026-09-01" --account work --until 2024-01-01
@@ -163,16 +166,61 @@ condition must match: a user, an account, a period, a search filter. A
 filter is matched by search when the hold is added and before every
 deletion, and its matches are only ever added; until then the hold covers
 its whole scope. A search filter also matches the text extracted from
-attachments, once it has been extracted (see
-[Attachments](./web-ui#attachments)). After the upgrade that brings
+attachments, once that text is searchable for the user whose mail it
+matches (see [Attachments](./web-ui#attachments)): a hold matches as each
+user it covers, through that user's own accounts. After the upgrade that brings
 attachment search, older messages are extracted in the background newest
 first, so the oldest mail, which retention deletes first, comes last: ask
 the operator to run `./ma reindex` once before you rely on a filter hold
 over attachment text. Only admins see holds.
 
+A filter searches the headers and the text, never SMTP envelopes: a
+recipient filter (`to:`, `--recipient`) matches the To and Cc headers only,
+not envelope (BCC) recipients. To keep journal mail that reached someone
+only as a BCC recipient, hold the smtp account itself, with a period if
+needed. Matches a filter stored before version 1.5.3 through an envelope
+stay held until the hold is released.
+
 Holds are released with a note and never deleted. A user named by a hold
 can therefore not be removed (lock them instead), and an account whose owner
 is on hold cannot move to another user.
+
+### Who adds which hold
+
+A search filter decides which of the covered mail a hold keeps, and so which
+messages a deletion run lists. In the web UI, an admin adds a hold with a
+search filter only over their own mail: the hold names them as its user, or
+names no user and one of their own accounts. A filter over other users' mail,
+over a customer group or over the whole archive is the operator's, with
+`./ma hold add --query` (or `--sender`, `--recipient`, `--attachment`,
+`--has-attachment`). For such a scope the form takes only a period
+(`after:`, `before:`) and says so, and the server refuses a filter. Holds
+without a filter (a user, an account, a group, a period, the whole archive)
+are added in the web UI as before.
+
+A filter hold an admin adds on one of their own accounts also names the admin
+as its user. It covers the account only while they own it, and the account
+cannot move to another user while the hold is active. Like every hold that
+names a user, it keeps that user: the admin's user can no longer be removed,
+only locked, even after the hold is released.
+
+Before version 1.6.0, admins could add filter holds over other users' mail in
+the web UI. Those holds stay in force: the upgrade releases none of them,
+since a hold ends only when a person decides. `./ma hold list` shows who added each
+hold in the column **CREATED BY**: the name of the admin who added it in the
+web UI (marked "(removed)" if that user is gone), `cli` for the command line,
+or `unknown` when the hold's audit entry is missing (its audit partition was
+detached or dropped, or the row was written by hand). Review the filter holds
+added in the web UI over other users' mail, and the `unknown` ones like them,
+and release those you do not want to keep with `./ma hold release`.
+
+### Match counts
+
+The number of messages a filter matched is shown only for a hold on you or
+on one of your own accounts. For any other hold the table says that it is
+matched, without the number: admins see no mail except their own (see
+[Security](../reference/security)). The operator's `./ma hold list` shows
+every number.
 
 ### Holds per customer group
 
@@ -227,7 +275,8 @@ A deleted message's rows go with it in the same transaction, the text
 extracted from its attachments and its queued background jobs included.
 The batches, the lock they wait for (up to 10 minutes each), the file grace
 period (`MAIL_ARCHIVE_RETENTION_FILE_GRACE`, default 7 days), why a deleted
-message does not come back where it would already be expired, and what
+message does not come back where it would already be expired (in the
+accounts and customer groups it was deleted from), and what
 happens after restoring a dump older than a run are in
 [Deletion](../reference/cli#deletion).
 

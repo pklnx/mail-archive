@@ -25,7 +25,10 @@ reach on the host, and what protects your mail there, is in
 ## Your login
 
 Your operator gives you the address of the instance (`https://…`), your
-user name and a one-time password. Open the address and log in.
+user name and a one-time password. Open the address and log in. For a new
+instance of your own, the operator may send a one-time setup link instead
+(`https://…/#setup=…`): open it and choose the user name and password of the
+instance's first admin, see [The first admin](./users#the-first-admin).
 
 ![Login page](/screenshots/login.png)
 
@@ -103,12 +106,76 @@ and a `README.txt`. Its `docker-compose.yml` uses the release's image,
 `ghcr.io/pklnx/mail-archive:<version>`; nothing is built. See
 [Versions](./operations#versions).
 
+There are two ways to set the instance up: from configuration alone, the
+way for hosted instances, or from the command line.
+
+### Start from configuration
+
+A new instance comes up from configuration alone: it creates its database
+schema, turns [encryption at rest](./operations#encryption-at-rest) on, and
+a one-time **setup link** creates its first admin. Nothing runs on the
+command line of the instance.
+
+1. Edit `.env`:
+   - `POSTGRES_PASSWORD`: any long random password.
+   - The secret key, which encrypts the stored IMAP passwords and TOTP
+     secrets: `secret-key/secret.key` (`SECRET_KEY_DIR`), created with
+     `openssl rand -base64 32`, owned by the container user (UID 65532) with
+     mode 0400, and `MAIL_ARCHIVE_SECRET_KEY_FILE=/secret-key/secret.key`.
+     **Back it up** (see [Backups](./operations#backups)).
+   - `MAIL_ARCHIVE_PUBLIC_URL`: the address users open, like
+     `https://archive.example.com`. Behind a reverse proxy also
+     `MAIL_ARCHIVE_TRUSTED_PROXIES` (see [Security](../reference/security#login)).
+2. The archive key, from your key custody: `keys/archive.key`
+   (`ARCHIVE_KEY_DIR`, outside `data/`), owned by UID 65532 with mode 0400,
+   and `MAIL_ARCHIVE_ARCHIVE_KEY_FILE=/keys/archive.key`. A new instance does
+   not start without it. `./ma encryption keygen` creates one, with a
+   recovery key (see [The archive key](#the-archive-key)); without a keyring,
+   the first start creates one with a slot for the archive key alone, and
+   `./ma encryption add-key` adds a recovery key later.
+3. A setup token: the output of `./ma setup token` as
+   `secret-key/setup.token`, owned by UID 65532 with mode 0400, and
+   `MAIL_ARCHIVE_SETUP_TOKEN_FILE=/secret-key/setup.token`.
+4. Start: `docker compose up -d`. The web server (and the worker, if you run
+   it) applies the migrations (`MAIL_ARCHIVE_MIGRATE_ON_START=on` is the
+   default in the bundled `docker-compose.yml`), turns encryption at rest on
+   and logs `waiting for the first admin`.
+5. Send the link `https://archive.example.com/#setup=<token>` to the
+   customer, over a channel only they read. The token sits after `#`, so it
+   never reaches the server's or a proxy's logs.
+
+Whoever opens the link chooses the first admin's user name and password and
+is logged in; two-factor authentication follows at once.
+
+![The setup link's page](/screenshots/setup.png)
+
+- The link works **once**, only while no user exists, and for **7 days**
+  from the first start with that token. A start with another token starts a
+  new window; a start without one revokes it. Once a first user exists,
+  also one made with `./ma user add`, no setup link works again.
+- Wrong tokens count as failed logins: 20 from one address within 15
+  minutes block it for 15 minutes.
+- Check that the customer used it: `./ma status` shows
+  `setup: complete since …`, and the [audit log](./audit-log) has
+  `user.setup` with the client address. Then remove the token from `.env`
+  and `secret-key/`.
+- `MAIL_ARCHIVE_ENCRYPTION_AT_SETUP=off` starts a new instance without
+  encryption at rest: for test instances only, never for a customer's.
+
+What the setup link guarantees, and the risk that remains, is in
+[Security](../reference/security#login).
+
+### From the command line
+
 Edit `.env`:
 
 - `POSTGRES_PASSWORD`: any long random password.
-- `MAIL_ARCHIVE_SECRET_KEY`: encrypts the stored IMAP passwords. Create one
-  with `openssl rand -base64 32` and **back it up** (see
-  [Backups](./operations#backups)).
+- `MAIL_ARCHIVE_SECRET_KEY`: encrypts the stored IMAP passwords and TOTP
+  secrets; the web server does not start without it. Create one with
+  `openssl rand -base64 32` and **back it up** (see
+  [Backups](./operations#backups)). It can come from a file instead
+  (`MAIL_ARCHIVE_SECRET_KEY_FILE`, see
+  [Configuration](../reference/configuration#mail-archive)).
 
 Create the schema and your own admin user, then start the web server. The
 first `./ma` command downloads the images:
@@ -123,7 +190,9 @@ docker compose up -d web
 <http://localhost:8080> and log in; at the first login an admin sets up
 two-factor authentication. Users reach the instance over HTTPS, see
 [Network access](../reference/security#network-access); they get their logins
-from you, see [Users](./users#adding-users).
+from you, see [Users](./users#adding-users). An instance set up this way has
+a user before its web server first starts, so it does not turn encryption at
+rest on by itself: do that next, see [The archive key](#the-archive-key).
 
 ::: tip The `./ma` wrapper
 `./ma` runs `docker compose run --rm mail-archive …`, starts PostgreSQL when

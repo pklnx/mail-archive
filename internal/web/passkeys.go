@@ -30,11 +30,33 @@ import (
 // passkeyCeremonyTTL is how long a registration or login may take.
 const passkeyCeremonyTTL = 5 * time.Minute
 
-// Starting a passkey login needs no session; this bounds it per address.
+// Starting a passkey login needs no session. passkeyBeginLimit bounds the
+// rate per address (IPv6: per /64). The logins started within
+// passkeyCeremonyTTL are capped per client, so that a few clients cannot
+// use up the total: per address or /64, and per IPv6 /48. The total only
+// bounds memory and the ceremony table.
 const (
 	passkeyBeginLimit  = 30
 	passkeyBeginWindow = time.Minute
+	passkeyOpenPerAddr = 50
+	passkeyOpenPer48   = 200
+	passkeyOpenTotal   = 50_000
 )
+
+// passkeyOpenKeys are the keys a passkey login start counts against in
+// passkeyOpen: the client's address (IPv6: its /64) and, for IPv6, its /48.
+func (s *Server) passkeyOpenKeys(r *http.Request) []auth.QuotaKey {
+	a := s.clientIP(r)
+	if !a.IsValid() {
+		return []auth.QuotaKey{{Key: r.RemoteAddr, Cap: passkeyOpenPerAddr}}
+	}
+	keys := limitKeys(a)
+	out := []auth.QuotaKey{{Key: keys[0], Cap: passkeyOpenPerAddr}}
+	for _, k := range keys[1:] {
+		out = append(out, auth.QuotaKey{Key: k, Cap: passkeyOpenPer48})
+	}
+	return out
+}
 
 // maxCredentialName is the longest name of a passkey or an API key, in
 // characters.
@@ -110,7 +132,8 @@ func (s *Server) handleBeginPasskeyLogin(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	addr := s.clientAddr(r)
-	if wait := s.limiter.BlockedAddr(addr); wait > 0 {
+	// Read-only: this step records no failure, so it reserves no attempt.
+	if wait := s.limiter.AddrBlocked(addr); wait > 0 {
 		s.tooMany(w, wait)
 		return
 	}
@@ -128,16 +151,23 @@ func (s *Server) handleBeginPasskeyLogin(w http.ResponseWriter, r *http.Request)
 		s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 		return
 	}
-	token, err := s.store.BeginPasskeyLogin(r.Context(), data, s.currentTime().Add(passkeyCeremonyTTL))
-	if errors.Is(err, store.ErrTooManyCeremonies) {
-		s.log.Warn("too many passkey logins in progress", "addr", s.clientIP(r), "key", addr)
-		s.tooMany(w, time.Minute)
+	// The slot is taken last, so that only the store call can fail while it
+	// is held; the deferred Release frees it then.
+	slot, wait, full := s.passkeyOpen.Begin(s.passkeyOpenKeys(r)...)
+	if slot == nil {
+		if full {
+			s.log.Warn("too many passkey logins in progress", "addr", s.clientIP(r), "key", addr)
+		}
+		s.tooMany(w, wait)
 		return
 	}
+	defer slot.Release()
+	token, err := s.store.BeginPasskeyLogin(r.Context(), data, s.currentTime().Add(passkeyCeremonyTTL))
 	if err != nil {
 		s.failStore(w, r, err)
 		return
 	}
+	slot.Succeed()
 	s.writeJSON(w, http.StatusOK, ceremonyJSON{Token: token, PublicKey: assertion.Response})
 }
 
@@ -154,23 +184,24 @@ func (s *Server) handleFinishPasskeyLogin(w http.ResponseWriter, r *http.Request
 	if !s.passkeysReady(w, r) {
 		return
 	}
-	addr := s.clientAddr(r)
-	if wait := s.limiter.BlockedAddr(addr); wait > 0 {
-		s.tooMany(w, wait)
-		return
-	}
 	var in ceremonyResult
 	if !s.decode(w, r, &in) {
 		return
 	}
+	a, wait, err := s.limiter.BeginAddr(r.Context(), s.clientAddr(r))
+	if s.attemptRefused(w, r, wait, err, "too many attempts; try again later") {
+		return
+	}
+	defer a.Release()
 	parsed, err := protocol.ParseCredentialRequestResponseBytes(in.Credential)
 	if err != nil {
-		s.limiter.FailAddr(addr)
+		a.Fail()
 		s.fail(w, r, http.StatusBadRequest, "invalid passkey response", nil)
 		return
 	}
 	token, hash, err := auth.NewSessionToken()
 	if err != nil {
+		a.Release()
 		s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 		return
 	}
@@ -198,12 +229,16 @@ func (s *Server) handleFinishPasskeyLogin(w http.ResponseWriter, r *http.Request
 	e.Detail("method", "passkey")
 	login, err := s.store.CompletePasskeyLogin(withAudit(r, e), in.Token, parsed.RawID, verify,
 		hash, s.currentTime().Add(auth.MaxSessionAge), truncateUserAgent(r.UserAgent()))
+	if errors.Is(err, store.ErrPasskeyUnknown) || errors.Is(err, store.ErrPasskeyInvalid) {
+		a.Fail()
+	} else if err != nil {
+		a.Release()
+	}
 	switch {
 	case errors.Is(err, store.ErrCeremonyExpired):
 		s.fail(w, r, http.StatusUnauthorized, "the passkey login has expired; try again", nil)
 		return
 	case errors.Is(err, store.ErrPasskeyUnknown):
-		s.limiter.FailAddr(addr)
 		s.log.Info("login failed: unknown passkey", "addr", s.clientIP(r))
 		s.auditLoginFailed(r, "passkey", reasonUnknownPasskey, nil)
 		s.writeJSON(w, http.StatusUnauthorized, unknownPasskeyJSON{
@@ -212,7 +247,6 @@ func (s *Server) handleFinishPasskeyLogin(w http.ResponseWriter, r *http.Request
 		})
 		return
 	case errors.Is(err, store.ErrPasskeyInvalid):
-		s.limiter.FailAddr(addr)
 		s.log.Info("login failed: passkey", "addr", s.clientIP(r), "err", err)
 		s.auditLoginFailed(r, "passkey", reasonPasskeyInvalid, nil)
 		s.fail(w, r, http.StatusUnauthorized, "the passkey was not accepted", nil)
@@ -230,9 +264,13 @@ func (s *Server) handleFinishPasskeyLogin(w http.ResponseWriter, r *http.Request
 	u := login.User
 	body, err := s.loginBody(r.Context(), u, hash, u.TwoFactorEnabled)
 	if err != nil {
+		a.Release()
 		s.failStore(w, r, err)
 		return
 	}
+	// The attempt had no name; the name found by the passkey is forgotten
+	// as after a password login.
+	a.Release()
 	s.limiter.Succeed(u.Name)
 	s.deleteOldSessions(r)
 	s.log.Info("login", "user", u.Name, "addr", s.clientIP(r), "passkey", login.PasskeyName)
@@ -293,43 +331,48 @@ func validCredentialName(name string) bool {
 // 2FA on, with the login limits. It answers the request when they fail.
 func (s *Server) checkOwnLogin(w http.ResponseWriter, r *http.Request, password, code string) bool {
 	sess := currentSession(r)
-	addr := s.clientAddr(r)
-	if s.blocked(w, r, sess.UserName) {
+	a := s.beginAttempt(w, r, sess.UserName, errTooManyAttempts)
+	if a == nil {
 		return false
 	}
+	defer a.Release()
 	u, err := s.store.GetUserByID(r.Context(), sess.UserID)
 	if err != nil {
+		a.Release()
 		s.failStore(w, r, err)
 		return false
 	}
 	ok := false
 	if len(password) <= auth.MaxPasswordLength {
-		if ok, _, err = s.hasher.Verify(r.Context(), u.PasswordHash, password); err != nil {
+		if ok, _, err = s.verifyPassword(r.Context(), u.PasswordHash, password); err != nil {
+			a.Release()
 			s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 			return false
 		}
 	}
 	if !ok {
-		s.limiter.Fail(sess.UserName, addr)
+		a.Fail()
 		s.fail(w, r, http.StatusUnauthorized, "the current password is wrong", nil)
 		return false
 	}
 	if u.TwoFactorEnabled {
 		if !s.twoFactorReady(w, r) {
+			a.Release()
 			return false
 		}
 		_, err := s.store.VerifyTwoFactorCode(r.Context(), u.ID, auth.NormalizeTOTPCode(code), s.now(), s.sealer, s.secretKey)
 		if errors.Is(err, store.ErrTwoFactorInvalid) {
-			s.limiter.Fail(sess.UserName, addr)
+			a.Fail()
 			s.fail(w, r, http.StatusUnauthorized, errInvalidSecondFactor, nil)
 			return false
 		}
 		if err != nil {
+			a.Release()
 			s.failStore(w, r, err)
 			return false
 		}
 	}
-	s.limiter.Succeed(sess.UserName)
+	a.Succeed()
 	return true
 }
 

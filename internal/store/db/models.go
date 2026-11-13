@@ -67,6 +67,8 @@ type AccountSyncHealth struct {
 	NotifyFirstErrorAt *time.Time
 	NotifyLease        []byte
 	NotifyLeaseUntil   *time.Time
+	MailEnqueuedEvent  *string
+	MailedState        string
 }
 
 type ActiveAuditorGrant struct {
@@ -211,9 +213,10 @@ type BlobRemoval struct {
 }
 
 type CustomerGroup struct {
-	ID        int64
-	Name      string
-	CreatedAt time.Time
+	ID         int64
+	Name       string
+	CreatedAt  time.Time
+	QuotaBytes *int64
 }
 
 type DeletedMessage struct {
@@ -235,6 +238,18 @@ type DeletionCandidate struct {
 	Size          int64
 	RetainUntil   time.Time
 	State         string
+}
+
+type DeletionMark struct {
+	ID          int64
+	Sha256      string
+	ArchivedAt  time.Time
+	AccountIds  []int64
+	GroupIds    []int64
+	RunID       *int64
+	PurgeID     *int64
+	TombstoneID *int64
+	MarkedAt    time.Time
 }
 
 type DeletionRun struct {
@@ -272,6 +287,19 @@ type Folder struct {
 	Delimiter        *string
 }
 
+type InstanceState struct {
+	ID                     bool
+	SecretKeyCheck         []byte
+	SetupTokenHash         []byte
+	SetupTokenSince        *time.Time
+	SetupCompletedAt       *time.Time
+	SetupUserID            *int64
+	MigrationFailedVersion *int64
+	MigrationFailedSha256  []byte
+	MigrationFailedAt      *time.Time
+	UpdatedAt              time.Time
+}
+
 type Job struct {
 	ID            int64
 	Kind          string
@@ -289,6 +317,7 @@ type Job struct {
 	CreatedAt     time.Time
 	StartedAt     *time.Time
 	FinishedAt    *time.Time
+	Requeue       bool
 }
 
 type LegalHold struct {
@@ -316,22 +345,23 @@ type LegalHoldMessage struct {
 }
 
 type LossAlert struct {
-	ID               int64
-	AccountID        int64
-	SyncRunID        int64
-	CreatedAt        time.Time
-	Lost             int32
-	PresentBefore    int32
-	FolderNames      []string
-	FolderLost       []int32
-	MoreFolders      int32
-	NotifyAttempts   int32
-	NotifyNextAt     *time.Time
-	NotifyError      *string
-	NotifyLease      []byte
-	NotifyLeaseUntil *time.Time
-	SentAt           *time.Time
-	GivenUpAt        *time.Time
+	ID                int64
+	AccountID         int64
+	SyncRunID         int64
+	CreatedAt         time.Time
+	Lost              int32
+	PresentBefore     int32
+	FolderNames       []string
+	FolderLost        []int32
+	MoreFolders       int32
+	NotifyAttempts    int32
+	NotifyNextAt      *time.Time
+	NotifyError       *string
+	NotifyLease       []byte
+	NotifyLeaseUntil  *time.Time
+	SentAt            *time.Time
+	GivenUpAt         *time.Time
+	MailEnqueuedEvent *string
 }
 
 type Message struct {
@@ -366,18 +396,19 @@ type MessageDeletion struct {
 }
 
 type MessageLocation struct {
-	ID            int64
-	MessageSha256 string
-	FolderID      int64
-	Uidvalidity   int64
-	Uid           int64
-	Flags         []string
-	InternalDate  *time.Time
-	FirstSeenAt   time.Time
-	LastSeenAt    time.Time
-	GoneAt        *time.Time
-	FillID        *int64
-	ImportID      *int64
+	ID               int64
+	MessageSha256    string
+	FolderID         int64
+	Uidvalidity      int64
+	Uid              int64
+	Flags            []string
+	InternalDate     *time.Time
+	FirstSeenAt      time.Time
+	LastSeenAt       time.Time
+	GoneAt           *time.Time
+	FillID           *int64
+	ImportID         *int64
+	AttachmentTextOk bool
 }
 
 type Passkey struct {
@@ -414,6 +445,19 @@ type Session struct {
 type SmtpAddress struct {
 	Address   string
 	AccountID int64
+}
+
+type SmtpCredential struct {
+	ID         int64
+	AccountID  int64
+	SecretHash []byte
+	Hint       string
+	CreatedAt  time.Time
+	CreatedBy  *int64
+	ExpiresAt  *time.Time
+	LastUsedAt *time.Time
+	RevokedAt  *time.Time
+	RevokedBy  *int64
 }
 
 type SmtpFill struct {
@@ -471,6 +515,8 @@ type SmtpFillHealth struct {
 	NotifyFirstErrorAt *time.Time
 	NotifyLease        []byte
 	NotifyLeaseUntil   *time.Time
+	MailEnqueuedEvent  *string
+	MailedState        string
 }
 
 type SmtpImport struct {
@@ -480,6 +526,75 @@ type SmtpImport struct {
 	Format    string
 	Source    string
 	CreatedAt time.Time
+}
+
+type StorageCounterBase struct {
+	ID       bool
+	Messages int64
+	Bytes    int64
+}
+
+type StorageCounterDelta struct {
+	ID       int64
+	Messages int64
+	Bytes    int64
+}
+
+type StorageGroupDelta struct {
+	ID       int64
+	GroupID  int64
+	Messages int64
+	Bytes    int64
+}
+
+type StorageRefreshRequest struct {
+	ID  bool
+	Seq int64
+}
+
+type StorageSnapshot struct {
+	ID                bool
+	ComputedAt        *time.Time
+	UngroupedMessages *int64
+	UngroupedBytes    *int64
+	DatabaseBytes     *int64
+	RelationBytes     []byte
+	CounterDrift      *int64
+	CoveredSeq        int64
+}
+
+type StorageState struct {
+	ID                 int64
+	GroupID            *int64
+	State              string
+	StateSince         time.Time
+	EventSeq           int64
+	NotifiedSeq        int64
+	NotifyAttempts     int32
+	NotifyNextAt       *time.Time
+	NotifyError        *string
+	NotifyFirstErrorAt *time.Time
+	NotifyLease        []byte
+	NotifyLeaseUntil   *time.Time
+	MailEnqueuedEvent  *string
+	MailedSeq          int64
+}
+
+type StorageUsageAccount struct {
+	AccountID      int64
+	Messages       int64
+	Bytes          int64
+	ExclusiveBytes int64
+	ComputedAt     time.Time
+}
+
+type StorageUsageGroup struct {
+	GroupID       int64
+	Messages      int64
+	Bytes         int64
+	AddedMessages int64
+	AddedBytes    int64
+	ComputedAt    time.Time
 }
 
 type SyncRun struct {
@@ -503,6 +618,7 @@ type TwoFactorChallenge struct {
 	TwoFactorVersion int64
 	CreatedAt        time.Time
 	ExpiresAt        time.Time
+	Attempts         int16
 }
 
 type TwoFactorRecoveryCode struct {
@@ -532,6 +648,19 @@ type User struct {
 	Locale                 string
 	GroupID                int64
 	IsAuditor              bool
+}
+
+type UserNotifyEmail struct {
+	UserID                      int64
+	NotifyEmail                 *string
+	NotifyEmailConfirmedAt      *time.Time
+	NotifyEmailBouncedAt        *time.Time
+	NotifyEmailCodeHash         []byte
+	NotifyEmailCodeExpiresAt    *time.Time
+	NotifyEmailCodeAttempts     int16
+	NotifyEmailCodesWindowStart *time.Time
+	NotifyEmailCodesSent        int16
+	NotifyEmailLanguage         *string
 }
 
 type WebauthnCeremony struct {

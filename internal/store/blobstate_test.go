@@ -271,6 +271,7 @@ func TestBlobEncryptionMigrationDown(t *testing.T) {
 	if err := st.SetBlobEncryption(ctx, store.BlobOn, testKeyring); err != nil {
 		t.Fatal(err)
 	}
+	downTwoFactorAttemptsMigration(t, st)
 	if _, err := st.MigrateDown(ctx); err == nil || !strings.Contains(err.Error(), "run `encryption disable` first") {
 		t.Fatalf("down while on: %v", err)
 	}
@@ -280,7 +281,7 @@ func TestBlobEncryptionMigrationDown(t *testing.T) {
 	if row, err := st.BlobEncryption(ctx); err != nil || row == nil || row.State != store.BlobOff {
 		t.Fatalf("off row: %+v %v", row, err)
 	}
-	downBlobEncryptionMigration(t, st)
+	downBlobEncryptionMigrationOnly(t, st)
 	if _, err := st.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -289,8 +290,18 @@ func TestBlobEncryptionMigrationDown(t *testing.T) {
 	}
 }
 
-// downBlobEncryptionMigration rolls back 00037_blob_encryption.
+// downBlobEncryptionMigration rolls back 00045_alert_mail, 00044_attachment_text_per_location, 00043_metrics_key_scope, 00042_deletion_marks, 00041_storage_usage, 00040_smtp_credentials,
+// 00039_instance_state, 00038_two_factor_challenge_attempts and
+// 00037_blob_encryption.
 func downBlobEncryptionMigration(t *testing.T, st *store.Store) {
+	t.Helper()
+	downTwoFactorAttemptsMigration(t, st)
+	downBlobEncryptionMigrationOnly(t, st)
+}
+
+// downBlobEncryptionMigrationOnly rolls back 00037_blob_encryption, the
+// latest migration applied.
+func downBlobEncryptionMigrationOnly(t *testing.T, st *store.Store) {
 	t.Helper()
 	if m, err := st.MigrateDown(context.Background()); err != nil || !strings.Contains(m, "00037_blob_encryption") {
 		t.Fatalf("down: %q %v", m, err)

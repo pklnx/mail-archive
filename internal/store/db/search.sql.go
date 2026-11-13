@@ -36,7 +36,17 @@ WHERE COALESCE(t.thread_id, t.sha256) = ANY($1::text[])
          AND ax.search @@ (websearch_to_tsquery('simple', $2::text) ||
                            websearch_to_tsquery('german', $2::text) ||
                            websearch_to_tsquery('english', $2::text))
-       OFFSET 0))
+       OFFSET 0)
+       -- Only through a location of the scope that shows the
+       -- message's attachment text (attachment_text_ok, #539), as
+       -- AttachmentMatches checks for att_shas.
+       AND EXISTS (
+           SELECT 1 FROM message_locations al
+           JOIN folders af ON af.id = al.folder_id
+           WHERE al.message_sha256 = t.sha256 AND al.attachment_text_ok
+             AND af.account_id = ANY ($6::bigint[])
+             AND (af.account_id = ANY ($7::bigint[]) OR scope_folder_granted(af.account_id, af.id, $8::bigint[], $9::bigint[]))
+           OFFSET 0))
   -- Only messages found in one of the scope's accounts (own or shared).
   -- An auditor's scope also names the folders (#393).
   AND EXISTS (
@@ -642,7 +652,17 @@ WHERE
          AND ax.search @@ (websearch_to_tsquery('simple', $1::text) ||
                            websearch_to_tsquery('german', $1::text) ||
                            websearch_to_tsquery('english', $1::text))
-       OFFSET 0))
+       OFFSET 0)
+       -- Only through a location of the scope that shows the
+       -- message's attachment text (attachment_text_ok, #539), as
+       -- AttachmentMatches checks for att_shas.
+       AND EXISTS (
+           SELECT 1 FROM message_locations al
+           JOIN folders af ON af.id = al.folder_id
+           WHERE al.message_sha256 = m.sha256 AND al.attachment_text_ok
+             AND af.account_id = ANY ($2::bigint[])
+             AND (af.account_id = ANY ($3::bigint[]) OR scope_folder_granted(af.account_id, af.id, $4::bigint[], $5::bigint[]))
+           OFFSET 0))
   -- Only messages found in one of the scope's accounts (own or shared).
   -- An auditor's scope also names the folders (#393).
   AND EXISTS (
@@ -863,7 +883,17 @@ WHERE
          AND ax.search @@ (websearch_to_tsquery('simple', $1::text) ||
                            websearch_to_tsquery('german', $1::text) ||
                            websearch_to_tsquery('english', $1::text))
-       OFFSET 0))
+       OFFSET 0)
+       -- Only through a location of the scope that shows the
+       -- message's attachment text (attachment_text_ok, #539), as
+       -- AttachmentMatches checks for att_shas.
+       AND EXISTS (
+           SELECT 1 FROM message_locations al
+           JOIN folders af ON af.id = al.folder_id
+           WHERE al.message_sha256 = m.sha256 AND al.attachment_text_ok
+             AND af.account_id = ANY ($2::bigint[])
+             AND (af.account_id = ANY ($3::bigint[]) OR scope_folder_granted(af.account_id, af.id, $4::bigint[], $5::bigint[]))
+           OFFSET 0))
   -- Only messages found in one of the scope's accounts (own or shared).
   -- An auditor's scope also names the folders (#393).
   AND EXISTS (
@@ -943,7 +973,17 @@ WHERE
                AND ax.search @@ (websearch_to_tsquery('simple', $1::text) ||
                                  websearch_to_tsquery('german', $1::text) ||
                                  websearch_to_tsquery('english', $1::text))
-             OFFSET 0))
+             OFFSET 0)
+             -- Only through a location of the scope that shows the
+             -- message's attachment text (attachment_text_ok, #539), as
+             -- AttachmentMatches checks for att_shas.
+             AND EXISTS (
+                 SELECT 1 FROM message_locations al
+                 JOIN folders af ON af.id = al.folder_id
+                 WHERE al.message_sha256 = n.sha256 AND al.attachment_text_ok
+                   AND af.account_id = ANY ($2::bigint[])
+                   AND (af.account_id = ANY ($3::bigint[]) OR scope_folder_granted(af.account_id, af.id, $4::bigint[], $5::bigint[]))
+                 OFFSET 0))
         -- Only messages found in one of the scope's accounts (own or shared).
         -- An auditor's scope also names the folders (#393).
         AND EXISTS (

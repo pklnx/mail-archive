@@ -164,7 +164,7 @@ func newAPIFixtureWith(t *testing.T, prepare func(*blobstore.Store)) *apiFixture
 			if err != nil {
 				t.Fatal(err)
 			}
-			meta, err := archive.BuildMeta(ctx, st, blobs, blob, true)
+			meta, err := archive.BuildMeta(ctx, st, blobs, blob, true, true)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -298,9 +298,14 @@ func TestListAndSearch(t *testing.T) {
 func TestListMatchedAttachment(t *testing.T) {
 	f := newAPIFixture(t)
 	ctx := context.Background()
+	// As the message's job: its locations show the text afterwards.
+	needed, err := f.st.AttachmentTextNeeded(ctx, f.ids["rich"])
+	if err != nil {
+		t.Fatal(err)
+	}
 	if ok, err := f.st.SaveAttachmentTexts(ctx, f.ids["rich"], []store.AttachmentText{
 		{Part: 2, Filename: "Vertrag.pdf", Status: "ok", Text: "Wartungsvertrag mit Kündigungsfrist von drei Monaten"},
-	}); !ok || err != nil {
+	}, needed); !ok || err != nil {
 		t.Fatalf("save texts: %v, %v", ok, err)
 	}
 	for _, group := range []string{"", "&group=1"} {
@@ -507,7 +512,7 @@ Content-Type: text/html; charset=utf-8
 	if err != nil {
 		t.Fatal(err)
 	}
-	meta, err := archive.BuildMeta(ctx, f.st, f.blobs, blob, true)
+	meta, err := archive.BuildMeta(ctx, f.st, f.blobs, blob, true, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -621,19 +626,37 @@ func rawGet(t *testing.T, srv *httptest.Server, host, path string) (*http.Respon
 }
 
 // linkMail is an HTML mail with links into the app (relative, by the
-// request's host and port, by an allowed host) and an external one, for
+// request's host and port, by an allowed host) and an external one, and
+// with resource hints, referrer policies and crossorigin (policyMail), for
 // TestMessageHTMLLinks and TestMessageHTMLRewriteLeavesStoredBytes.
 func linkMail(port string) string {
 	return `<p><a href="/api/openapi.json?link=root">a</a> <a href="api/x">b</a> ` +
 		`<a href="http://127.0.0.1:` + port + `/api/openapi.json?link=port">c</a> ` +
 		`<a href="https://archive.example/api/openapi.json?link=public">d</a> ` +
-		`<a href="https://links.example/">e</a></p>`
+		`<a href="https://links.example/">e</a></p>` + policyMail
 }
+
+// policyMail holds what would change how the browser requests: resource
+// hints, a referrer policy by <meta> and by attribute, and crossorigin.
+const policyMail = `<meta name="referrer" content="unsafe-url">` +
+	`<link rel="prerender" href="https://hints.example/p"><link REL=preconnect href=https://hints.example/>` +
+	`<link rel="dns-prefetch" href="//hints.example/">` +
+	`<a referrerpolicy="unsafe-url" href="https://links.example/r">f</a>` +
+	`<img referrerpolicy="unsafe-url" crossorigin="anonymous" src="https://links.example/i.png">` +
+	`<svg><image crossorigin="anonymous" href="https://links.example/s.png"/></svg>`
+
+// policyServed is policyMail as /html serves it.
+const policyServed = `<meta name="referrer" data-content="unsafe-url">` +
+	`<link data-rel="prerender" href="https://hints.example/p"><link data-REL=preconnect href=https://hints.example/>` +
+	`<link data-rel="dns-prefetch" href="//hints.example/">` +
+	`<a data-referrerpolicy="unsafe-url" href="https://links.example/r">f</a>` +
+	`<img data-referrerpolicy="unsafe-url" data-crossorigin="anonymous" src="https://links.example/i.png">` +
+	`<svg><image data-crossorigin="anonymous" href="https://links.example/s.png"/></svg>`
 
 // The served HTML has no link into the app (#459): relative links, links
 // to the request's own host and port and links to an allowed host are
-// renamed; the external link is kept. The same for either Host the server
-// accepts.
+// renamed; the external link is kept. No resource hint, referrer policy or
+// crossorigin is left either. The same for either Host the server accepts.
 func TestMessageHTMLLinks(t *testing.T) {
 	f := newAPIFixture(t)
 	srv := f.linkServer()
@@ -643,7 +666,7 @@ func TestMessageHTMLLinks(t *testing.T) {
 	want := htmlPreamble + `<p><a data-href="/api/openapi.json?link=root">a</a> <a data-href="api/x">b</a> ` +
 		`<a data-href="http://127.0.0.1:` + u.Port() + `/api/openapi.json?link=port">c</a> ` +
 		`<a data-href="https://archive.example/api/openapi.json?link=public">d</a> ` +
-		`<a href="https://links.example/">e</a></p>`
+		`<a href="https://links.example/">e</a></p>` + policyServed
 	for _, host := range []string{u.Host, "archive.example"} {
 		resp, body := rawGet(t, srv, host, "/api/messages/"+f.ids["links"]+"/html")
 		if resp.StatusCode != http.StatusOK {
@@ -652,6 +675,9 @@ func TestMessageHTMLLinks(t *testing.T) {
 		if body = strings.TrimSuffix(body, "\r\n"); body != want {
 			t.Errorf("Host %s: body\n got %q\nwant %q", host, body, want)
 		}
+		if s := neutralizeSurvivors(body); len(s) > 0 {
+			t.Errorf("Host %s: served body keeps %v", host, s)
+		}
 	}
 	// Another host is refused before anything is served.
 	if resp, _ := rawGet(t, srv, "evil.example", "/api/messages/"+f.ids["links"]+"/html"); resp.StatusCode == http.StatusOK {
@@ -659,13 +685,172 @@ func TestMessageHTMLLinks(t *testing.T) {
 	}
 }
 
+// htmlMail is a stored HTML mail with this body.
+func htmlMail(id, body string) string {
+	return "Message-ID: <" + id + "@x>\r\nFrom: a@example.com\r\nSubject: css\r\n" +
+		"Date: Fri, 9 Oct 2026 10:00:00 +0000\r\nContent-Type: text/html; charset=utf-8\r\n\r\n" + body + "\r\n"
+}
+
+// cssHTMLMail holds CSS that would load images, without SVG or MathML: a
+// background in a style attribute, image-set() and a mask in <style>, and
+// an ordinary remote <img>.
+const cssHTMLMail = `<style>.a{mask-image:url("https://images.example/m.png")}` +
+	`.b{background-image:image-set("https://images.example/s.png" 1x)}</style>` +
+	`<p class="a" style="background:#036 url(https://images.example/bg.png)">a</p>` +
+	`<img src="https://images.example/i.png" alt="">`
+
+// cssMail is cssHTMLMail with an SVG fill.
+const cssMail = cssHTMLMail + `<svg><rect fill="url(https://images.example/f.svg)"/></svg>`
+
+// cssHTMLServed is cssHTMLMail as /html serves it.
+const cssHTMLServed = `<style>.a{mask-image:url("data:,https://images.example/m.png")}` +
+	`.b{background-image:image-set_("https://images.example/s.png" 1x)}</style>` +
+	`<p class="a" style="background:#036 url(data:,https://images.example/bg.png)">a</p>` +
+	`<img src="https://images.example/i.png" alt="">`
+
+// cssServed is cssMail as /html serves it.
+const cssServed = cssHTMLServed + `<svg><rect fill="url(data:,https://images.example/f.svg)"/></svg>`
+
+// cssHTML gets the mail's /html, with images=1 if asked, through the real
+// route table, and returns the body, the img-src sources and the audit
+// entry's details.
+func (f *apiFixture) cssHTML(name string, images bool) (string, string, map[string]any) {
+	f.t.Helper()
+	path := "/api/messages/" + f.ids[name] + "/html"
+	if images {
+		path += "?images=1"
+	}
+	n := len(auditLog(f.t, f.st))
+	resp, body := rawGet(f.t, f.srv, f.srv.Listener.Addr().String(), path)
+	if resp.StatusCode != http.StatusOK {
+		f.t.Fatalf("%s: status %d: %s", path, resp.StatusCode, body)
+	}
+	got := newEntries(f.t, f.st, n)
+	if len(got) != 1 || got[0].Action != "message.html" {
+		f.t.Fatalf("%s: audit %+v", path, got)
+	}
+	return body, cspDirective(resp.Header.Get("Content-Security-Policy"), "img-src"), details(f.t, got[0])
+}
+
+// CSS in a served mail loads nothing: every URL in url() gets "data:," and
+// image-set() a "_", with and without images=1, and the bytes do not depend
+// on the flag. With images=1 the CSP lets remote images through for an
+// ordinary HTML mail, since the served CSS can load none (the positive
+// control), and the message's JSON says they are not refused. The same CSS
+// with an inline SVG gets no remote images: img-src stays data:, the audit
+// entry records images_refused: "svg", and the JSON says so in advance.
+func TestMessageHTMLCSS(t *testing.T) {
+	f := newAPIFixture(t)
+	f.addMessage("alice", "INBOX", "css", htmlMail("css", cssHTMLMail), 10)
+	f.addMessage("alice", "INBOX", "css svg", htmlMail("css-svg", cssMail), 11)
+	for _, c := range []struct {
+		name, served, img, refused string
+	}{
+		{"css", cssHTMLServed, "data: https: http:", ""},
+		{"css svg", cssServed, "data:", "svg"},
+	} {
+		plain, img, d := f.cssHTML(c.name, false)
+		if want := htmlPreamble + c.served + "\r\n"; plain != want {
+			t.Errorf("%s: body\n got %q\nwant %q", c.name, plain, want)
+		}
+		if img != "data:" || d["images_refused"] != nil {
+			t.Errorf("%s without images: img-src %q, details %v", c.name, img, d)
+		}
+		withImages, img, d := f.cssHTML(c.name, true)
+		if withImages != plain {
+			t.Errorf("%s: images=1 body %q differs from %q", c.name, withImages, plain)
+		}
+		var refused any
+		if c.refused != "" {
+			refused = c.refused
+		}
+		if img != c.img || d["images"] != true || d["images_refused"] != refused {
+			t.Errorf("%s images=1: img-src %q, details %v", c.name, img, d)
+		}
+		if got := f.remoteImagesRefused(c.name); got != (c.refused != "") {
+			t.Errorf("%s: remoteImagesRefused %v", c.name, got)
+		}
+	}
+}
+
+// firstForeign is the refusal reason a test mail expects, independent of
+// foreignContent: "svg" or "math", whichever of "<svg" and "<math" comes
+// first in any case, else "css".
+func firstForeign(body string) string {
+	l := strings.ToLower(body)
+	i, j := strings.Index(l, "<svg"), strings.Index(l, "<math")
+	switch {
+	case i >= 0 && (j < 0 || i < j):
+		return "svg"
+	case j >= 0:
+		return "math"
+	}
+	return "css"
+}
+
+// remoteImagesRefused reads the field from the message's JSON, as the UI
+// does.
+func (f *apiFixture) remoteImagesRefused(name string) bool {
+	f.t.Helper()
+	var m struct {
+		Refused *bool `json:"remoteImagesRefused"`
+	}
+	f.getJSON("/api/messages/"+f.ids[name], http.StatusOK, &m)
+	if m.Refused == nil {
+		f.t.Fatalf("%s: remoteImagesRefused missing", name)
+	}
+	return *m.Refused
+}
+
+// A mail with inline SVG or MathML gets no remote image with images=1,
+// whatever its CSS: x/net/html can build a different tree than the browser
+// there, so the parse check alone could miss CSS the browser applies. The
+// two parser divergences found in review (a <template> in an
+// integration point, a duplicate attribute with the value "/") are served
+// with CSS that the check does not see, and are refused all the same, as is
+// every SVG and MathML <style> survivor. A mail without SVG or MathML that
+// x/net/html cannot parse is refused by the CSS check ("css"). Each case is
+// refused on its own, and the bytes are the same as without images=1.
+func TestMessageHTMLCSSRefused(t *testing.T) {
+	f := newAPIFixture(t)
+	uid := uint32(10)
+	cases := map[string]string{"too deep": strings.Repeat("<div>", 600) + "x"}
+	for name, body := range cssSVGStyleSurvivors {
+		cases[name] = body
+	}
+	for name, body := range cssParserDivergences {
+		cases[name] = body
+	}
+	for name, body := range cases {
+		key := "refused " + name
+		f.addMessage("alice", "INBOX", key, htmlMail(strings.ReplaceAll(key, " ", "-"), `<p>x</p>`+body), uid)
+		uid++
+		want := firstForeign(body)
+		plain, img, d := f.cssHTML(key, false)
+		if img != "data:" || d["images_refused"] != nil {
+			t.Errorf("%s without images: img-src %q, details %v", name, img, d)
+		}
+		withImages, img, d := f.cssHTML(key, true)
+		if img != "data:" || d["images"] != true || d["images_refused"] != want {
+			t.Errorf("%s: img-src %q, details %v, want images_refused %q", name, img, d, want)
+		}
+		if withImages != plain {
+			t.Errorf("%s: images=1 body %q differs from %q", name, withImages, plain)
+		}
+		if got := f.remoteImagesRefused(key); got != (want != "css") {
+			t.Errorf("%s: remoteImagesRefused %v", name, got)
+		}
+	}
+}
+
 // Only the rendering changes (#459): /raw, the stored blob and a part keep
-// the archived bytes, links and all, while /html is rewritten.
+// the archived bytes, links, resource hints, referrer policies and CSS URLs
+// and all, while /html is rewritten.
 func TestMessageHTMLRewriteLeavesStoredBytes(t *testing.T) {
 	f := newAPIFixture(t)
 	srv := f.linkServer()
 	u, _ := url.Parse(srv.URL)
-	mail := linkMail(u.Port())
+	mail := linkMail(u.Port()) + cssMail
 	attachment := `<html><body>` + mail + `</body></html>`
 	raw := "Message-ID: <links-stored@x>\r\nFrom: a@example.com\r\nSubject: links\r\n" +
 		"Date: Fri, 9 Oct 2026 10:00:00 +0000\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n" +
@@ -676,8 +861,13 @@ func TestMessageHTMLRewriteLeavesStoredBytes(t *testing.T) {
 	sha := f.ids["stored"]
 
 	resp, body := rawGet(t, srv, u.Host, "/api/messages/"+sha+"/html")
-	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `<a data-href="/api/openapi.json?link=root">`) {
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `<a data-href="/api/openapi.json?link=root">`) ||
+		!strings.Contains(body, policyServed) || !strings.Contains(body, cssServed) {
 		t.Fatalf("html: %d %q", resp.StatusCode, body)
+	}
+	if !strings.Contains(raw, policyMail) || !strings.Contains(attachment, policyMail) ||
+		!strings.Contains(raw, cssMail) || !strings.Contains(attachment, cssMail) {
+		t.Fatal("the stored mail lacks the policy or CSS payloads")
 	}
 	if resp, body = rawGet(t, srv, u.Host, "/api/messages/"+sha+"/raw"); resp.StatusCode != http.StatusOK || body != raw {
 		t.Errorf("raw: %d %q", resp.StatusCode, body)

@@ -126,15 +126,20 @@ WHERE account_id = $1 AND (status = 'running' OR keep_running);
 -- name: FillStatus :one
 SELECT status FROM smtp_fills WHERE id = $1;
 
--- name: JournaledMessageIDs :many
--- Message-IDs among @ids of messages the account received over SMTP (with
--- an envelope); uses messages_message_id_idx.
-SELECT DISTINCT m.message_id::text AS message_id
+-- name: JournaledMatchCandidates :many
+-- The Message-ID, Date, From and Subject of messages the account received
+-- over SMTP (with an envelope) whose Message-ID is among @ids and whose
+-- Date, to the second, among @dates: the candidates for the journaled check
+-- of a fill or a journal import, which compares all four. Uses
+-- messages_message_id_idx; at most @max_rows rows.
+SELECT DISTINCT m.message_id::text AS message_id, m.sent_at, m.from_addr, m.subject
 FROM messages m
 JOIN message_locations l ON l.message_sha256 = m.sha256
 JOIN envelopes e ON e.location_id = l.id
 JOIN folders f ON f.id = l.folder_id
-WHERE f.account_id = @account_id AND m.message_id = ANY (@ids::text[]);
+WHERE f.account_id = @account_id AND m.message_id = ANY (@ids::text[])
+  AND m.sent_at IS NOT NULL AND date_trunc('second', m.sent_at) = ANY (@dates::timestamptz[])
+LIMIT @max_rows;
 
 -- name: FirstReceived :one
 -- The first message the smtp account received over SMTP that is still
@@ -176,7 +181,10 @@ WHERE fill_id = @fill_id AND folder_id <> @journal_id;
 -- one per message and none for a message the journal folder holds, in
 -- the order of the hashes after @after. The copies take the journal
 -- folder's UIDVALIDITY and UIDs after @last_uid; the caller holds its row
--- lock and reserves the UIDs (AllocateUIDs).
+-- lock and reserves the UIDs (AllocateUIDs). A copy shows its message's
+-- attachment text (attachment_text_ok) when a location it is copied from
+-- does, since they are in the same account and group, or when the message
+-- has no attachment; the caller queues the extraction of the others.
 WITH p AS (
     SELECT @journal_id::bigint AS journal_id, @uidvalidity::bigint AS uidvalidity, @last_uid::bigint AS last_uid,
            @fill_id::bigint AS fill_id, @folders::bigint[] AS folders, @after::text AS after, @max_rows::int AS max_rows
@@ -188,8 +196,11 @@ WITH p AS (
     ORDER BY l.message_sha256, l.folder_id, l.uid
     LIMIT (SELECT max_rows FROM p)
 )
-INSERT INTO message_locations (message_sha256, folder_id, uidvalidity, uid, flags, internal_date, fill_id)
+INSERT INTO message_locations (message_sha256, folder_id, uidvalidity, uid, flags, internal_date, fill_id, attachment_text_ok)
 SELECT b.message_sha256, p.journal_id, p.uidvalidity, p.last_uid + row_number() OVER (ORDER BY b.message_sha256),
-       b.flags, b.internal_date, p.fill_id
+       b.flags, b.internal_date, p.fill_id,
+       EXISTS (SELECT 1 FROM message_locations o
+               WHERE o.folder_id = ANY (p.folders) AND o.message_sha256 = b.message_sha256 AND o.attachment_text_ok)
+       OR NOT EXISTS (SELECT 1 FROM messages m WHERE m.sha256 = b.message_sha256 AND m.has_attachment)
 FROM batch b, p
-RETURNING message_sha256;
+RETURNING message_sha256, attachment_text_ok;

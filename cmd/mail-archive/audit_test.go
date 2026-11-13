@@ -76,6 +76,8 @@ func TestCLIAudit(t *testing.T) {
 			map[string]any{"kind": "smtp"}},
 		{newAccountCmd, "", []string{"smtp-addresses", "journal", "--add", "more@example.com", "--user", "anna"}, "account.change", "account:journal",
 			map[string]any{"added": []any{"more@example.com"}}},
+		{newAccountCmd, "", []string{"smtp-secret", "journal", "--new", "--grace", "3d", "--user", "anna"}, "smtp_credential.create", "account:journal",
+			map[string]any{"grace_days": float64(3), "superseded": []any{}}},
 		{newAccountCmd, "", []string{"move", "work", "--user", "anna", "--to", "bob"}, "account.move", "account:work",
 			map[string]any{"from_user": "anna", "to_user": "bob"}},
 		{newAccountCmd, "", []string{"remove", "work", "--user", "bob"}, "account.remove", "account:work", map[string]any{"result": "deleted"}},
@@ -87,6 +89,7 @@ func TestCLIAudit(t *testing.T) {
 		// Reading commands are not logged.
 		{newUserCmd, "", []string{"list"}, "", "", nil},
 		{newAccountCmd, "", []string{"list"}, "", "", nil},
+		{newAccountCmd, "", []string{"smtp-secret", "journal", "--user", "anna"}, "", "", nil},
 		{newStatusCmd, "", nil, "", "", nil},
 	} {
 		name := strings.Join(c.args, " ")

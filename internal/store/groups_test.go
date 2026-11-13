@@ -742,7 +742,7 @@ func TestAuditClassRequired(t *testing.T) {
 
 // actionLiteral finds the actions the code names: quoted "family.verb"
 // strings of the audit families.
-var actionLiteral = regexp.MustCompile(`"((?:auth|profile|api_key|user|group|account|message|sync|data|audit|jobs|retention|hold|auditor)\.[a-z0-9_]+)"`)
+var actionLiteral = regexp.MustCompile(`"((?:auth|profile|api_key|smtp_credential|user|group|account|message|sync|data|audit|jobs|retention|hold|auditor|instance)\.[a-z0-9_]+)"`)
 
 // TestAuditActionsClassified: every action the code names has at least
 // one class, without duplicates, and every listed action is still named

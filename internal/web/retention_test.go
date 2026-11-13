@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -76,18 +77,22 @@ func TestRetentionRulesAPI(t *testing.T) {
 func TestLegalHoldsAPI(t *testing.T) {
 	f := newAuthFixture(t)
 	ctx := context.Background()
-	f.addUser("admin", keyPassword, true)
+	admin := f.addUser("admin", keyPassword, true)
 	alice := f.addUser("alice", keyPassword, false)
 	acc := f.imapAccount("work", alice)
-	folder, err := f.st.GetOrCreateFolder(ctx, acc.ID, "INBOX")
-	if err != nil {
-		t.Fatal(err)
+	own := f.imapAccount("personal", admin)
+	save := func(a *store.Account, uid uint32, sha, subject string) {
+		t.Helper()
+		folder, err := f.st.GetOrCreateFolder(ctx, a.ID, "INBOX")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.st.SaveBatch(ctx, folder.ID, uid, []store.MessageMeta{{SHA256: sha, Size: 1, StoredPath: "x", Subject: subject}},
+			[]store.Location{{FolderID: folder.ID, UID: uid}}); err != nil {
+			t.Fatal(err)
+		}
 	}
-	sha := strings.Repeat("a", 64)
-	if _, err := f.st.SaveBatch(ctx, folder.ID, 1, []store.MessageMeta{{SHA256: sha, Size: 1, StoredPath: "x", Subject: "Falcon contract"}},
-		[]store.Location{{FolderID: folder.ID, UID: 1}}); err != nil {
-		t.Fatal(err)
-	}
+	save(acc, 1, strings.Repeat("a", 64), "Falcon contract")
 	f.loginOK("admin", keyPassword)
 
 	// Without any condition, a hold needs all.
@@ -98,18 +103,141 @@ func TestLegalHoldsAPI(t *testing.T) {
 	if _, ok := all["matched"]; ok {
 		t.Errorf("matched without a filter: %v", all)
 	}
-	filtered := f.expect("POST", "/api/legal-holds", map[string]any{
-		"name": "Falcon", "reason": "lawsuit", "user": "alice", "accountId": acc.ID,
-		"filter": map[string]any{"q": "falcon"}, "since": "2019-01-01T00:00:00Z",
-	}, 201)
-	if filtered["matched"] != float64(1) {
-		t.Fatalf("filter hold %v", filtered)
+
+	// A filter over mail that is not the admin's is the operator's, on the
+	// command line (#538): refused with a code, nothing stored or
+	// recorded. Holds without a filter on the same scopes still work.
+	g, err := f.st.GetGroupByName(ctx, "Default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nobody := f.imapAccount("shared", nil)
+	falcon := map[string]any{"q": "falcon"}
+	for name, scope := range map[string]map[string]any{
+		"alice and her account": {"user": "alice", "accountId": acc.ID, "since": "2019-01-01T00:00:00Z"},
+		"alice":                 {"user": "alice"},
+		"alice's account":       {"accountId": acc.ID},
+		"account without owner": {"accountId": nobody.ID},
+		"group":                 {"group": g.ID},
+		"instance":              {},
+		"instance, confirmed":   {"all": true},
+	} {
+		body := map[string]any{"name": "Falcon " + name, "reason": "lawsuit", "filter": falcon}
+		for k, v := range scope {
+			body[k] = v
+		}
+		if out := f.expect("POST", "/api/legal-holds", body, 403); out["code"] != "filter_hold_cli" ||
+			out["error"] != "A hold with a search filter over other users' mail is added by the operator: ./ma hold add --query" {
+			t.Errorf("filter hold on %s: %v", name, out)
+		}
+		// The filter needs only one of its fields to count.
+		body["filter"] = map[string]any{"hasAttachment": true}
+		if out := f.expect("POST", "/api/legal-holds", body, 403); out["code"] != "filter_hold_cli" {
+			t.Errorf("attachment filter hold on %s: %v", name, out)
+		}
+		delete(body, "filter")
+		body["name"] = "plain " + name
+		body["all"] = true
+		f.expect("POST", "/api/legal-holds", body, 201)
+	}
+	holds, err := f.st.LegalHolds(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range holds {
+		if h.Filter != nil || strings.HasPrefix(h.Name, "Falcon") {
+			t.Errorf("refused hold stored: %+v", h)
+		}
+	}
+	entries, err := f.st.ListAudit(ctx, store.AuditPage{
+		All: true, Actions: []string{"hold.add"}, Since: time.Now().Add(-time.Hour), Until: time.Now().Add(time.Hour), Limit: 100,
+	})
+	if err != nil || len(entries) != len(holds) {
+		t.Fatalf("hold.add entries %d for %d holds: %v", len(entries), len(holds), err)
+	}
+	for _, e := range entries {
+		if strings.Contains(string(e.Details), `"Falcon`) {
+			t.Errorf("refused hold recorded: %+v", e)
+		}
 	}
 
-	s := toJSON(f.expect("GET", "/api/legal-holds", nil, 200))
-	if !strings.Contains(s, `"name":"Falcon"`) || !strings.Contains(s, `"user":"alice"`) || !strings.Contains(s, `"account":"work"`) ||
-		!strings.Contains(s, `"filter":{"q":"falcon"}`) || !strings.Contains(s, `"matched":1`) {
-		t.Fatalf("list %s", s)
+	// The operator's filter hold on alice's account, added on the command
+	// line and not matched yet: the web UI matches only the hold it adds,
+	// never this one, and never counts it.
+	save(acc, 2, strings.Repeat("c", 64), "Falcon appendix")
+	cli, err := f.st.AddLegalHold(ctx, store.NewLegalHold{Name: "operator", AccountID: &acc.ID, Filter: &store.HoldFilter{Query: "falcon"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	matchedAt := func(id int64) *time.Time {
+		t.Helper()
+		holds, err := f.st.LegalHolds(ctx, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, h := range holds {
+			if h.ID == id {
+				return h.MatchedAt
+			}
+		}
+		t.Fatalf("no active hold %d", id)
+		return nil
+	}
+
+	// The count of a new hold on the admin's own account is its own. The
+	// hold names the admin too, so it covers the account only while the
+	// admin owns it.
+	save(own, 1, strings.Repeat("b", 64), "Falcon minutes")
+	ownHold := f.expect("POST", "/api/legal-holds", map[string]any{"name": "own account", "reason": "r", "accountId": own.ID, "filter": falcon}, 201)
+	if ownHold["matched"] != float64(1) {
+		t.Errorf("hold on the admin's own account %v", ownHold)
+	}
+	if at := matchedAt(cli); at != nil {
+		t.Errorf("adding a hold in the web UI matched the operator's hold at %v", at)
+	}
+	ownUser := f.expect("POST", "/api/legal-holds", map[string]any{"name": "own user", "reason": "r", "user": "admin", "filter": falcon}, 201)
+	if ownUser["matched"] != float64(1) {
+		t.Errorf("hold on the admin %v", ownUser)
+	}
+	ownID := int64(ownHold["id"].(float64))
+	scope, err := f.st.LegalHoldScope(ctx, ownID)
+	if err != nil || scope.OwnerID == nil || *scope.OwnerID != admin.ID || scope.AccountID == nil || *scope.AccountID != own.ID {
+		t.Fatalf("own account filter hold names %+v (%v), want the admin and the account", scope, err)
+	}
+	// So the operator cannot move the account to alice while it is active
+	// (./ma account move): the admin's filter never runs over her mail.
+	ownAcc, err := f.st.GetAccount(ctx, own.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.SetAccountOwner(ctx, ownAcc.Ref(), alice.ID, false); !errors.Is(err, store.ErrOnHold) {
+		t.Fatalf("moved the account under the admin's filter hold: %v", err)
+	}
+
+	matched := map[string]string{}
+	for _, h := range f.expect("GET", "/api/legal-holds", nil, 200)["holds"].([]any) {
+		m := h.(map[string]any)
+		v, ok := m["matched"]
+		if !ok {
+			t.Errorf("hold %v without matched", m["name"])
+		}
+		if v != nil {
+			matched[m["name"].(string)] = toJSON(v)
+		}
+	}
+	if want := map[string]string{"own account": "1", "own user": "1"}; toJSON(matched) != toJSON(want) {
+		t.Errorf("matched in the list %v, want %v", matched, want)
+	}
+
+	// Released, the holds no longer keep the account with the admin.
+	for _, id := range []int64{ownID, int64(ownUser["id"].(float64))} {
+		f.expect("POST", "/api/legal-holds/"+itoa(id)+"/release", map[string]any{"note": "moving"}, 204)
+	}
+	if ownAcc, err = f.st.GetAccount(ctx, own.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.SetAccountOwner(ctx, ownAcc.Ref(), alice.ID, false); err != nil {
+		t.Fatalf("move after the release: %v", err)
 	}
 
 	id := itoa(int64(all["id"].(float64)))
@@ -136,6 +264,28 @@ func TestLegalHoldsAPI(t *testing.T) {
 	if !strings.Contains(body["error"].(string), "legal hold") || body["code"] != "on_hold" ||
 		toJSON(body["holdIds"]) != toJSON([]any{carolHold["id"]}) || strings.Contains(body["error"].(string), "lock the user instead") {
 		t.Fatalf("remove held user: %v", body)
+	}
+
+	// Another hold that cannot be matched no longer withholds the new
+	// hold's count: only the new hold is matched. A filter of the wrong
+	// type passes the database's check and fails when it is read.
+	mine := f.imapAccount("mine", admin)
+	save(mine, 1, strings.Repeat("d", 64), "Falcon draft")
+	f.exec(`INSERT INTO legal_holds (name, reason, filter) VALUES ('broken', 'r', '{"q": 5}')`)
+	if h := f.expect("POST", "/api/legal-holds", map[string]any{"name": "own again", "reason": "r", "accountId": mine.ID, "filter": falcon}, 201); h["matched"] != float64(1) {
+		t.Errorf("hold beside a broken one %v", h)
+	}
+	f.exec(`UPDATE legal_holds SET released_at = now(), release_note = 'broken' WHERE name = 'broken'`)
+	// When matching the new hold fails, it is not matched yet and covers
+	// its whole scope: no count, not even a partial one.
+	f.exec(`CREATE FUNCTION refuse_match() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'refused'; END $$`)
+	f.exec(`CREATE TRIGGER refuse_match BEFORE INSERT ON legal_hold_messages FOR EACH ROW EXECUTE FUNCTION refuse_match()`)
+	h := f.expect("POST", "/api/legal-holds", map[string]any{"name": "own failing", "reason": "r", "accountId": mine.ID, "filter": falcon}, 201)
+	if h["id"] == nil || h["matched"] != nil {
+		t.Errorf("hold when matching fails %v", h)
+	}
+	if at := matchedAt(int64(h["id"].(float64))); at != nil {
+		t.Errorf("hold whose matching failed is matched at %v", at)
 	}
 }
 

@@ -27,11 +27,12 @@ internal/web (JSON API, UI from web/) ──────────────
 | `internal/blobstore` | Content-addressed `.eml` storage, or `.enc` with encryption at rest: files are named by their SHA-256 and published and removed durably (see [Blob durability](#blob-durability)). |
 | `internal/mime` | MIME parsing: text for the search index, parts and HTML for display. |
 | `internal/attachtext` | Text of attachments for search: plain text, CSV, TSV, Markdown, HTML, and PDFs through PDFium compiled to WebAssembly in wazero (no file system, network or environment; one PDF at a time per process; a new instance per document). No database. |
-| `internal/store` | PostgreSQL access: migrations (goose), queries (sqlc), the per-account sync lock, the blob lock, the attestation fence and the migration lock. `migrate` and `migrate down` hold the command lock (advisory lock class `0x6d68`, key 0) for the whole command on a connection of its own outside the pool; goose's session lock is taken by a locker of our own (`gooselock.go`) on the connection that runs the migrations, from a short-lived pool of its own (one extra connection per call) whose teardown frees a lock left on a given-up connection (#269). Both commands open the store with `ForMigrations` (`client_connection_check_interval` and TCP keepalives), so the server frees a killed command's locks. What an operator sees of this (two runs wait for each other, the holder message, the time limits, what `migrate status`, `backup` and `serve` do) is in the CLI reference under [`migrate`](../reference/cli#migrate). |
+| `internal/store` | PostgreSQL access: migrations (goose), queries (sqlc), the per-account sync lock, the blob lock, the attestation fence and the migration lock. `migrate` and `migrate down` hold the command lock (advisory lock class `0x6d68`, key 0) for the whole command on a connection of its own outside the pool; goose's session lock is taken by a locker of our own (`gooselock.go`) on the connection that runs the migrations, from a short-lived pool of its own (one extra connection per call) whose teardown frees a lock left on a given-up connection (#269). Both commands open the store with `ForMigrations` (`client_connection_check_interval` and TCP keepalives), so the server frees a killed command's locks. What an operator sees of this (two runs wait for each other, the holder message, the time limits, what `migrate status`, `backup` and `serve` do) is in the CLI reference under [`migrate`](../reference/cli#migrate). `serve` and `worker` take the command lock at start too (see [Start-up of serve and worker](#start-up-of-serve-and-worker)). |
 | `internal/attest` | Formats of the tamper-evidence chain: the signed text of an attestation, leaves files, the attestation file and the Ed25519 key files, and the signed statement of a GoBD export (`statement.go`). No database. |
 | `internal/gobd` | The GoBD export, [format v1](#gobd-export-format-v1): the writer with its directory and ZIP sinks, README.txt, index.xml, SHA256SUMS, and the offline `export verify`. No database. |
 | `internal/csvsafe` | The leading `'` that keeps spreadsheets from reading a CSV cell as a formula; used by the audit CSV, the deletion preview and the GoBD export. |
-| `internal/notify` | Alerts for accounts whose syncs keep failing, and for recurring fills whose runs do: compares each failure streak with what was last announced and posts the difference to a webhook. Leases in `account_sync_health` keep two notifiers from sending the same alert. It also sends the `loss_alerts` that sync runs wrote. |
+| `internal/notify` | Alerts for accounts whose syncs keep failing, and for recurring fills whose runs do: compares each failure streak with what was last announced and posts the difference to a webhook. Leases in `account_sync_health` keep two notifiers from sending the same alert. It also sends the `loss_alerts` that sync runs wrote and the storage transitions of `storage_states`. With alert mail on, a mail pass after each webhook pass queues the `notify_mail` jobs of the transitions due by the mail's own state, so a failing webhook neither holds mail back nor adds any (see [Alert mail](#alert-mail)). |
+| `internal/alertmail` | Alert mail to admins (#397, part 5): the SMTP client for the configured relay (TLS required, timeouts), the composed message and its texts in German and English, and the `notify_mail` job. `mailtest` is an in-process relay for tests. |
 | `internal/jobs` | Background jobs on the queue in the `jobs` table: the registry of kinds and the bounded pool that `serve` and `worker` run (see [Background jobs](#background-jobs)). |
 | `internal/web` | HTTP server, JSON API, request protection, embedded UI (`internal/web/ui`). Every route is listed once in `routes.go`, with the access it needs (session only, login, public, or session and API key with `read` or `sync`); `authenticate` enforces it, `openapi.yaml` describes it, and a test fails when the two differ. A request with `Authorization: Bearer ma_…` is authenticated by its key alone and skips the Origin check (`api_keys.go`). |
 | `internal/crypto` | AES-256-GCM for stored passwords. |
@@ -53,7 +54,7 @@ internal/web (JSON API, UI from web/) ──────────────
 | `accounts` | Account: `kind` (`imap`, or `import` for mail from files), owner (`owner_id`), server, login, encrypted password, folder filters, `enabled`, `removed_at`. Names are unique per owner. Import accounts have port 0 and are never enabled; check constraints enforce both. |
 | `folders` | Folder of an account, with its `UIDVALIDITY`, last archived UID, last sync time and `last_reconciled_at`. |
 | `messages` | Unique message content (by SHA-256): size, subject, sender, recipients, date, path of the file, body text and search vector, attachment names, the links to other messages (`in_reply_to`, `reference_ids`, `thread_id`) and `index_version`. |
-| `message_locations` | Place where a message was seen: folder, `UIDVALIDITY`, UID, flags, internal date, `last_seen_at`, and `gone_at` once a reconcile found it missing on the server. `fill_id` names the fill that imported a location into an smtp account (`NULL` otherwise). |
+| `message_locations` | Place where a message was seen: folder, `UIDVALIDITY`, UID, flags, internal date, `last_seen_at`, and `gone_at` once a reconcile found it missing on the server. `fill_id` names the fill that imported a location into an smtp account (`NULL` otherwise). `attachment_text_ok`: whether the location shows its message's attachment text in search (see [Attachment text per location](#attachment-text-per-location)). |
 | `smtp_fills` | Fill of an smtp account from an IMAP mailbox: server, login, the password (encrypted, only while it runs or keeps running), folder filters, the cut-off of a one-time fill, status. A recurring fill has `recurring_since`, `keep_running`, its own `interval_seconds` (`NULL` for the server's), `run_started_at` and the trash and spam folders its last run skipped (`unconfirmed_folders`). `folder_prefix` is set only for fills from before fills wrote into `JOURNAL`. One running fill per account (partial unique index). |
 | `smtp_fill_folders` | A fill's progress in one IMAP folder: the server's `UIDVALIDITY` and last UID, the archive folder it writes into, `done`, the counts (of the last run for a recurring fill, `waiting` included) and the error. |
 | `smtp_fill_health` | The failure streak of a recurring fill and what the notifier last announced about it, like `account_sync_health` for IMAP accounts. |
@@ -64,6 +65,7 @@ internal/web (JSON API, UI from web/) ──────────────
 | `attachment_texts` | Extracted text of one attachment of a message (`message_sha256`, `part_index` as in the parts API): file name, status (`ok`, `truncated`, `no_text`, `encrypted`, `too_large`, `failed`, `timeout`), the text for `ok` and `truncated`, and a generated `tsvector` with a GIN index. Deleted with its message. |
 | `attachment_index_state` | Extraction state of a message with attachments: `version`; the message is done at `store.AttachmentIndexVersion`, also without text (no readable attachment, an unreadable file). Deleted with its message. |
 | `jobs` | Background job (see [Background jobs](#background-jobs)). |
+| `storage_*` | Storage usage (see [Storage usage](#storage-usage)): the instance counters (`storage_counter_base`, `storage_counter_deltas`), the group deltas between snapshots (`storage_group_deltas`), the last snapshot per group and account (`storage_usage_groups`, `storage_usage_accounts`) and of the instance (`storage_snapshot`), the refresh requests (`storage_refresh_requests`), and the quota states with their alert outbox (`storage_states`). `customer_groups.quota_bytes` is a group's quota. |
 
 Deduplication is by exact content: the same bytes in two folders or accounts
 give one `messages` row and two `message_locations`. The same mail delivered
@@ -106,8 +108,11 @@ Sync and import store a message the same way (`internal/archive/ingest.go`):
 the bytes stream into the blob store while they are hashed,
 `archive.BuildMeta` extracts headers (at most 1 MiB) and the index data
 (body text, To and Cc, attachment names, `has_attachment`) for messages the
-database does not know yet, and a folder writer commits batches of 100
-messages with their locations and the folder's last UID (`Store.SaveBatch`).
+database does not know yet and for messages new to the saving account's
+customer group (see [Messages new to the customer
+group](#messages-new-to-the-customer-group)), and a folder writer commits
+batches of 100 messages with their locations and the folder's last UID
+(`Store.SaveBatch`).
 Fields extracted in `BuildMeta` thus apply to imported mail too.
 
 `messages.index_version` records which extraction filled a row
@@ -129,6 +134,145 @@ location in the folder (`LocationInFolder`), which makes a rerun add nothing.
 The first import into a folder sets its `UIDVALIDITY` to the import's start
 time; UIDs continue from the folder's last UID. An import holds the account's
 lock with `TryLockSyncForWrite`, like a sync, and records a `sync_runs` row.
+
+### Deleted messages per customer group
+
+A save does not store a message that retention or a purge deleted from its
+account or its customer group, where it would already be expired
+(`skipDeleted`, used by `SaveBatch`, fills, journal imports and SMTP
+deliveries; #539, part 1). Every deletion writes a row of
+`deletion_marks` in its transaction, before the locations go: a retention
+run with every account and group that held the message, a purge with the
+purged account and its group for every purged message, also one that stays
+in other accounts. A group is the owner's `group_id`, 0 for accounts
+without an owner. A tombstone (`deleted_messages`) that no mark references
+(`tombstone_id`, unique) counts for every group: those written before
+1.6.0, or by an older process after the upgrade.
+
+The save first locks its account and owner `FOR KEY SHARE`
+(`lockAccountGroup`, the same as storage usage, #397), so a move to another
+group waits for it. `DeletionMarksOf` then returns the batch's hashes with
+a mark of the account or the group, or a tombstone without a mark. For
+those only, `GroupHasLocations` checks whether an account of the group, the
+saving one included, holds a location: one probe of
+`message_locations_folder_sha_idx` per folder of the group and hash, never
+a lookup by hash in `message_locations_sha_idx`, so its time depends on the
+group's folders and the batch, not on copies in other groups. The
+`LIMIT 1` of its `LATERAL` keeps the planner from flattening it, in the
+custom and the generic plan (`TestGroupHasLocationsPlan`).
+
+Measured on PostgreSQL 16 with server and client pinned to two cores,
+warm cache, pgx with its statement cache, 100 hashes the group does not
+hold (every folder probed for every hash; medians,
+`TestDeletionMarkLookupCost` with `MAIL_ARCHIVE_BENCH=1`):
+
+| Folders of the group | `GroupHasLocations` per batch | `SaveBatch` of 100 marked messages (all skipped) |
+|---|---|---|
+| 40 | 8 ms | 97 ms |
+| 400 | 55 ms | 140 ms |
+| 1,500 | 195 ms | 296 ms |
+| 1,500 (group 0, an import before adoption) | 208 ms | 295 ms |
+| 5,000 (group 0) | 613 ms | 731 ms |
+
+About 1.3 µs per probe. A batch without marks does no group lookup
+(`SaveBatch` of 100 new messages: 30 to 47 ms on the same data).
+
+### Messages new to the customer group
+
+A message new to the saving account's customer group gets the work of a
+message new to the archive, whether or not another group archived the same
+bytes before (#539, part 3):
+
+- **Lookup.** Sync and fill pass `blobstore.SyncTempIf` to `Put` through
+  `archive.PutFor`; an SMTP delivery passes its own closure around
+  `archive.NewToGroup`. As soon as the hash is known, for a new and an
+  existing file alike, the predicate asks `store.GroupLookup.Holds`
+  whether an account of the account's group, this one included, holds a
+  location of the message. A sync or fill makes one `GroupLookup` per
+  folder run, an SMTP delivery one per recipient account; the delivery
+  counts as new to the group when one of their groups does not hold the
+  message. Every instance pays the lookup, also one with a single group.
+  - For every message, `Holds` reads the account's group
+    (`AccountGroupID`, one primary key probe). The group's folder list
+    (`GroupFolderIDs`) is read with the first message and again when the
+    account's group changed, and `FoldersHoldMessages` probes it: one
+    probe of `message_locations_folder_sha_idx` per folder, never a lookup
+    by hash in `message_locations_sha_idx` (the `LIMIT 1` of its
+    `LATERAL`, checked in the custom and the generic plan by
+    `TestFoldersHoldMessagesPlan`). Only folders that hold the message are
+    then checked against the group, so a folder whose account left the
+    group since the list was read never counts; one that joined it counts
+    from the next folder run (more work, never less).
+  - The lookup runs before the save's transaction, without its lock. A
+    save or deletion of the group in between changes how much work the
+    save does, never what it stores. A move of the account to another
+    group in between is caught by the save: each message carries the
+    group key its lookup used (`MessageMeta.LookupGroup`), and the save
+    compares it, right after `lockAccountGroup`, with the account's group;
+    from that lock to the commit no move can change it. On a difference
+    the save stores nothing and returns `store.ErrGroupChanged`. Sync and
+    fill then redo the batch in the run: each message's stored file goes
+    through `PutFor` and `BuildMeta` again, with a fresh lookup for the new
+    group, and the batch is saved again, at most three times; after that
+    the folder run stops with the error and the next run fetches the batch
+    again. An SMTP delivery answers 451, and the mail server's retry looks
+    up again. So every save commits with the work for the group it commits
+    into, and moves (`SetUserGroup`, `SetAccountOwner` across groups, the
+    adoption) never wait for a sync: the check adds no lock. A lock held
+    from the lookup to the save was the alternative: row locks on the
+    account and owner would block every `FOR UPDATE` on the user (2FA,
+    passkeys, API keys, settings) for a whole batch, and an advisory lock
+    would hold a pool connection per batch and per delivery and need moves
+    to take it before their row locks, or the save and the move would
+    deadlock across connections where PostgreSQL cannot see it. For the
+    same reason `skipDeleted` does not reuse the lookup's answer: it
+    decides what is stored, under `lockAccountGroup`, and looks up only
+    hashes with a deletion mark.
+- **File.** For a message new to the group, `Put` synchronizes and closes
+  its temporary file before it uses an existing file, as it does before it
+  links a new one.
+- **Parsing.** `BuildMeta` parses headers and body within the same limits
+  as for a new message and keeps `Known`.
+- **Row.** The save passes the parsed fields to `InsertMessage`.
+  PostgreSQL computes the generated `search` vector before it finds the
+  conflict and then writes nothing
+  (`TestInsertConflictComputesGeneratedColumns` checks this on CI's
+  PostgreSQL).
+- **What still differs, not measured.** A new file gets a directory entry,
+  and `syncShard` synchronizes a changed directory; for an existing file it
+  synchronizes the file itself and unchanged directories. A new row writes
+  its tuple, WAL, B-tree and GIN entries, where a known message is found by
+  `MessageExists` and its insert writes nothing.
+- `./ma import` (also into a journal folder) and `tools/demo` always do the
+  full work without a lookup (`blobstore.SyncTemp`, `BuildMeta` with
+  `newToGroup` set): only the operator sees an import's timing, and group 0
+  can be large before the adoption.
+
+Measured like the table above (`TestGroupLookupCost` with
+`MAIL_ARCHIVE_BENCH=1`), per batch of 100 messages the group does not
+hold, with all the group lookups of the save path. The folder list is read
+once per batch here; a folder run reads it once for all its batches. Part
+2's lookups (`MessagesWithAttachment`, `GroupAttachmentTextOK`) are
+measured for known messages that all have an attachment, part 1's for
+messages that all have a deletion mark: the worst case.
+
+| Folders of the group | Part 3: 100 × `Holds` | Part 2 | `GroupHeldMessages` (#397) | Part 1, all marked | Sum without marks | Sum with marks |
+|---|---|---|---|---|---|---|
+| 40 | 85–86 ms | 8–9 ms | 6 ms | 7 ms | 100–101 ms | 108–109 ms |
+| 400 | 121–136 ms | 53–54 ms | 51 ms | 52 ms | 236–254 ms | 289–303 ms |
+| 1,500 | 338–349 ms | 176–186 ms | 180–187 ms | 171–173 ms | 692–722 ms | 868–897 ms |
+| 1,500 (group 0) | 297–301 ms | 175–176 ms | none | 169–172 ms | 469–478 ms | 643–656 ms |
+| 1,500 (group 0, the only group) | 288–291 ms | 172–180 ms | none | 169–173 ms | 466–470 ms | 645–651 ms |
+| 5,000 (group 0) | 845–900 ms | 565–600 ms | none | 555–567 ms | 1.39–1.48 s | 1.99–2.03 s |
+
+Each range spans the medians of two runs, on PostgreSQL 16 with server and
+client pinned to two cores, warm cache, pgx with its statement cache, 20
+batches per run, load average 1.7 to 4.8 on the four-core machine from
+other test suites. The slowest batch with marks at 1,500 folders took
+0.95 to 1.01 s; a third run under a load average of up to 11 measured
+1.10 s (median) for that sum. `GroupHeldMessages` does not run for
+accounts without an owner. A one-group instance pays the lookup like any
+other.
 
 ## Sync and concurrency
 
@@ -217,7 +361,12 @@ counts as a failure, and the retry completes it. A file being visible,
   If a sweep or `verify --fix-orphans` removes the file between the lookup
   and its synchronization (SMTP puts run without the blob lock), `Put`
   publishes its own copy instead. After a failure the final file stays for
-  the retry; the temporary name is removed, but not durably.
+  the retry; the temporary name is removed, but not durably. With
+  `SyncTempIf`, `Put` asks a predicate once the hash is known and, if it
+  says so, synchronizes and closes the temporary file before it looks for
+  an existing file (see [Messages new to the customer
+  group](#messages-new-to-the-customer-group)); a predicate error fails the
+  `Put` before anything is published.
 - **Remove** unlinks the file and synchronizes its directory, also when the
   file was already gone: an earlier call may have unlinked it and failed
   before the barrier. If shard directories are missing, it synchronizes the
@@ -264,6 +413,11 @@ Encrypted backups use the same format with purpose 2 (backup, no binding):
 which needs no size or random access, holds one chunk, reads one byte ahead
 to tell the final chunk, and returns each chunk only after authenticating
 it, so a cut stream fails before its end instead of ending cleanly.
+A dump without the header is unauthenticated: `checkDumpKind`
+(`cmd/mail-archive/backup_crypt.go`) refuses it before `pg_restore` starts
+wherever the archive shows a sign of encryption at rest, unless the
+operator passes `--plaintext`; under `./ma` the holder (`--hold`) makes
+this decision from the facts `./ma` passes (`--dump-name`, `--dump-header`).
 `restore-dump` then calls `archive.ReconcileRestored` (`restore.go`), which
 reuses the start-up reconciliation of the keyring and `deriveFromFiles`.
 Only the Go standard library is used (`crypto/aes`, `crypto/cipher` GCM,
@@ -635,7 +789,7 @@ An smtp account has one folder, `store.SMTPFolder` (`JOURNAL`).
 `Store.ReceiveMessage` stores what arrives over SMTP there, with an
 envelope; a fill (`archive.Filler`) imports from IMAP into the same folder,
 without one. The envelope is what tells them apart: `filled` in the message
-view, `FindReceivedLocation`, `FirstReceived` and `JournaledMessageIDs` only
+view, `FindReceivedLocation`, `FirstReceived` and `JournaledMatchCandidates` only
 count locations with an envelope.
 
 Both write into one folder at the same time (deliveries take no sync lock),
@@ -702,7 +856,8 @@ After each run, `AfterRun` wakes the notifier.
 calls `StartFillRun`. A recurring fill whose account is disabled or removed
 is skipped without a change (`ErrFillSkipped`, also in `RunLocked` for a run
 already started), so it neither fails nor changes its health. One `now` per run decides by INTERNALDATE: journaled
-(Message-ID with an envelope in the account) first, then younger than
+(a message with an envelope in the account and the same `journalKey`, see
+below) first, then younger than
 `RecurringGrace` (two hours) waits, anything else is imported, also without a
 Message-ID; a date more than a day in the future counts as old. The headers
 are sorted by UID, and a folder's `last_uid` moves only over decided UIDs up
@@ -714,6 +869,24 @@ renamed folders and rescans after a `UIDVALIDITY` change cheap. Identical
 bytes without a Message-ID are caught by `LocationInFolder`, before the
 fetch and again under the folder lock. Moves and deletions in the mailbox
 are not reconciled.
+
+**The journaled check** (fills and `import --journal`, advisory
+GHSA-w6jg-ffvw-q4f5). `journalKey` (`internal/archive/journalkey.go`) is the
+only comparison: the Message-ID, the Date as Unix seconds, and a SHA-256
+over the From addresses (lowercased, without display names; the `<…>` parts
+when the decoded value no longer parses) and the Subject in NFC, all taken
+from what `ParseHeaders` returns. The mailbox side parses the four fields
+`ListHeaders` fetches (`BODY.PEEK[HEADER.FIELDS (MESSAGE-ID DATE FROM
+SUBJECT)]`; a fill keeps only the key per listed message, `fillHeader`) or
+the file's header. The journaled side uses the stored columns `message_id`,
+`sent_at`, `from_addr` and `subject`, which `BuildMeta` filled from
+`ParseHeaders` (NULL is empty), so no file is read and no migration was
+needed. `JournaledMatchCandidates` pre-selects rows with an envelope in the
+account by Message-ID (`messages_message_id_idx`) and
+`date_trunc('second', sent_at)`, at most ten per message of the batch; a cut
+can only cause duplicates. A message without a Message-ID, a Date that
+parses or a From never counts as journaled. `import --journal` schedules a
+file for removal only for a message the check matched.
 
 New IMAP folders are picked up through the fill's folder filters. A folder
 the server marks `\Trash` or `\Junk` is filled only if it already has a
@@ -949,7 +1122,11 @@ folder's `EXAMINE`, and the same account lock as the sync.
 1. `imapsync.ListFlags` sends `UID FETCH 1:* (UID FLAGS)` (never for an
    empty folder) and fails with `ErrIncomplete` if fewer messages came back
    than the folder holds after the command (`EXISTS`, kept current by the
-   client). Folders above `MaxReconcileMessages` (2,000,000) are refused.
+   client). Folders above `MaxReconcileMessages` (2,000,000 by default,
+   `MAIL_ARCHIVE_RECONCILE_MAX_MESSAGES`) are refused. The two slices are
+   allocated once for EXISTS + 1,000 messages, at most the limit, which is
+   all `ListFlags` accepts; distinct flag combinations may take 4 MiB,
+   each charged its bytes plus 88 B for its map entry (`flagSetOverhead`).
 2. The UIDs go into a `[]int64`; each message's flags without `\Recent`,
    sorted and joined by spaces, into a `[]string`, with one string per flag
    combination through a map.
@@ -1071,7 +1248,10 @@ copies in `queries/search.sql`) then also matches `m.sha256 = ANY
 matches, `att_walk` checks each walked message's attachments through
 `attachment_texts_pkey` instead, as `to_walk` does for envelopes. So a
 match is per document: all words in the message, or all in one attachment,
-negations included. There are no trigram indexes on attachment text, so it
+negations included. Both arms, and `AttachmentSnippets`, match only through
+a location of the scope whose `attachment_text_ok` is set (see
+[Attachment text per location](#attachment-text-per-location)); a filter
+hold matches as its owner (`OwnerScope`), so the owner's locations decide. There are no trigram indexes on attachment text, so it
 matches words, not substrings.
 
 Both listing queries also return `text_match`: the query arm without its
@@ -1084,14 +1264,21 @@ attachment as `matchedAttachment`.
 
 The text is extracted by two job kinds (`internal/archive/attachments.go`):
 - **`attachment_text`** (key and `message_sha256` = the message,
-  `MaxAttempts` 3, the crash-loop guard). The three insert sites (sync and
-  import, fills, SMTP) enqueue it with `PriorityNew` in the transaction that
-  inserts a new row with `has_attachment`. The handler skips a message that
-  is done, reads its file, runs `attachtext.Extractor.Message` and writes
-  the state and the texts in one transaction with a conditional
-  `MarkAttachmentsIndexed`: the second of two writers changes nothing. An
-  unreadable file is done without text; a message deleted meanwhile is
-  done (foreign key error). Extraction results (a damaged PDF, a timeout,
+  `MaxAttempts` 3, the crash-loop guard). The insert sites (sync and
+  import, fills, SMTP, the conversion of old fills) enqueue it with
+  `PriorityNew` and `RequeueIfRunning` in the transaction that inserts a
+  location with `attachment_text_ok` false. The handler first reads the
+  message's locations with the flag false (`needed`) and ends when the
+  message is done and none is needed; otherwise it reads the file, runs
+  `attachtext.Extractor.Message` (also for a done message) and in one
+  transaction sets the flag on `needed` (the locations first, in id order,
+  as a deletion locks them before the message) and writes the state and
+  the texts with a conditional `MarkAttachmentsIndexed`: the second of two
+  writers stores no texts. An unreadable file marks a message that is not
+  done as done without text and sets the flags, as it does for a done
+  message without searchable text; a done message with searchable text
+  fails at once with `message file unreadable`. A message deleted
+  meanwhile is done (foreign key error). Extraction results (a damaged PDF, a timeout,
   a password) are statuses, not errors; a PDF module that did not compile
   in the process fails the job at once with `extractor unavailable`. PDFs wait for their turn (one per process) without using up the message's 60 s, and one whose caller's deadline passes while it waits is retried (`pdf busy`), not stored as `timeout`.
 - **`attachment_backfill`** (key `v<AttachmentIndexVersion>`, priority
@@ -1110,6 +1297,82 @@ Neither ever writes a `messages` row. `reindex` enqueues the backfill and
 runs a pool of the two kinds with `UntilIdle` until none is due. Raising
 `AttachmentIndexVersion` extracts everything again: the backfill gets a new
 key, and its enqueues then need `RetryFailed`.
+
+### Attachment text per location
+
+Since 1.6.0 (#539, part 2; migration 00044), whether a customer group can
+search a message's attachment text does not depend on what other groups
+hold. The texts stay one set per message; each location has
+`attachment_text_ok`, and a location shows them only when it is set
+(`store/attachmentflag.go`). It is set when
+
+- an extraction started after the location existed: the job reads
+  `needed` at its start and sets it on those ids at its end, whatever group
+  the location is in by then; or
+- at its insert, the location's group (the account owner's; 0 for accounts
+  without an owner) already had a location of the message with the flag
+  set, or the message has no attachment.
+
+Nothing else sets it, and no move touches it: `SetUserGroup`,
+`SetAccountOwner` and the adoption carry it with the locations. The insert
+check runs only for messages whose row existed before the save
+(`MessagesWithAttachment`, by primary key) and that have an attachment.
+`GroupAttachmentTextOK` then probes the group's own folders with the shape
+of #446's `GroupHeldMessages`: one equality probe per folder and hash on
+`message_locations_folder_sha_idx`, fenced by `LIMIT 1` (and `OFFSET 0` on
+the folder list), so neither the custom nor the generic plan looks a hash
+up over the whole archive (`message_locations_sha_idx`), whose cost would
+depend on other groups' copies (`TestGroupAttachmentTextOKPlan`, on 400
+folders). A location inserted with the flag false queues the job in the
+same transaction with `RequeueIfRunning` (see [Background
+jobs](#background-jobs)): the `EnqueueJob` takes the job row's lock, so it
+is ordered against `FinishJob`, and a run that read `needed` before the
+location existed runs once more. The conversion of fills from before #112
+copies locations within one account and takes the flag of a copied
+location in SQL (`ConvertLegacyFillBatch`). `TestAttachmentTextWriters`
+fails for a statement that inserts locations without naming the column.
+
+**Cost on the target** (PostgreSQL 16 on 2 cores, warm cache, a batch of
+100 known messages with attachments, generic plans, medians;
+`TestAttachmentTextCost`, `MAIL_ARCHIVE_BENCH=1`):
+
+| Folders in the group | `MessagesWithAttachment` | `GroupAttachmentTextOK` | `GroupHeldMessages` (#446) | Sum per batch |
+|---|---|---|---|---|
+| 40 | 0.6 ms | 6 ms | 5 ms | 11 ms |
+| 400 | 0.4 ms | 53 ms | 60 ms | 113 ms |
+| 1,500 | 0.5 ms | 194 ms | 226 ms | 420 ms |
+| 5,000 (group 0) | | 643 ms | not run (no group) | 643 ms |
+
+The probes cost about 1.3 µs per folder and hash and grow linearly with
+the group's folders; they do not depend on other groups. An import of 100
+known messages with attachments into an account without an owner, with
+5,000 folders in group 0, took 652 ms per batch (`SaveBatch`), almost all
+of it this lookup. The lookup runs only for messages the archive already
+held; a batch of new mail needs none. Memory is constant.
+
+**Invariant and repair.** Every location with the flag false belongs to a
+message whose job is queued, running or failed, or that is not done at
+the current version (the backfill's). A process of a version before 1.6.0
+can break it after the upgrade: it inserts locations with the column's
+default false without a job, and ends a job done without setting flags.
+`RepairAttachmentText` checks the invariant against the data at the start
+of every process that runs a job pool (`serve` with workers, `worker`)
+and every 15 minutes there (`attachmentRepair` in
+`cmd/mail-archive/jobs.go`), and once at the start of `reindex`'s
+attachment pass (`reindexAttachments`): it sets the flag on false locations of
+messages without attachments, and queues the job at `PriorityBackfill` for
+every done message with a false location and no queued, running or failed
+job. Both walk the partial index `message_locations_attachment_pending_idx`
+(`WHERE NOT attachment_text_ok`), which in steady state holds only
+locations whose job is pending or failed. Measured on the target: a pass
+over 10,000 false locations of done messages without a job takes 11.5 s
+and queues them, one `EnqueueJob` per message in transactions of 1,000;
+the next pass, with their jobs queued, takes 47 ms.
+
+**Failed jobs** stay failed for every group: `EnqueueJob` leaves them
+alone, the repair and the backfill skip them, and only `jobs retry
+attachment_text` queues them again, so a message whose extraction crashes
+the process is still claimed at most three times in all.
 
 ## Conversations
 
@@ -1177,10 +1440,27 @@ implementation, no library; it generalizes the leases of `loss_alerts` and
   only moves it forward (lower priority, earlier `run_after`; a pending
   retry keeps its time), queues a done row again with the caller's payload
   and `attempts = 0`, and leaves running and failed rows alone (failed ones
-  unless `RetryFailed`). `store.EnqueueJobs` runs in a transaction of its
+  unless `RetryFailed`). A job enqueued with `RequeueIfRunning` (opt-in, so
+  far only `attachment_text` from a save) gives a running row only
+  `requeue = true` and the lower priority; `FinishJob` then queues it again
+  at once with `attempts = 0` and wakes the pools, while a retry, a lost
+  lease, a release and a continuation clear the flag (a crash is never
+  rerun at once, and a failed job stays failed). `store.EnqueueJobs` runs in a transaction of its
   own; `enqueueJobs` runs in the caller's, so a job is queued together with
-  what caused it, and storing never waits for it: the key is new, so the
-  insert meets no conflict.
+  what caused it. For a message new to the archive the key is new, so the
+  insert meets no conflict and the save waits for nothing. A save that
+  queues the `attachment_text` job of a message the archive already held
+  (a location without the flag, see [Attachment text per
+  location](#attachment-text-per-location)) updates that message's
+  existing job row and holds its lock until the save commits: a
+  `FinishJob` of that row, or another save or backfill batch that queues
+  it, waits for it. Saves take these rows in hash order (`sortBatch`), the
+  attachment backfill newest first, so a save and a backfill batch that
+  share two such messages, which are not done yet, can deadlock: PostgreSQL
+  aborts one of them, and the sync, import or fill batch is retried at its
+  next run, the backfill by the queue; nothing is lost. This can happen
+  only while the backfill runs, after an upgrade or a new
+  `AttachmentIndexVersion`.
 - **Claim and lease.** `ClaimJobs` takes due rows of the pool's kinds by
   `priority, run_after, id` with `FOR UPDATE SKIP LOCKED`, sets a random
   lease token per claim and `lease_until` = now + 60 s on the database's
@@ -1203,6 +1483,9 @@ implementation, no library; it generalizes the leases of `loss_alerts` and
 - **Priorities.** `store.PriorityNew` (0) for work caused by new mail,
   `store.PriorityBackfill` (100) for older mail. `/healthz/jobs` degrades
   only when a `PriorityNew` job has been due for 30 minutes.
+- **Done with a code.** A handler that ends a job without doing its work
+  returns `jobs.Done(code)`: the job is `done`, with the code in
+  `last_error` (`recipient_gone` of `notify_mail`).
 - **Continuation.** A handler that did part of its work returns
   `jobs.Continue(payload)`: the job is queued again at once with the new
   `payload` (a cursor, at most 1 KiB) and `attempts = 0`, as a new job.
@@ -1240,6 +1523,296 @@ with `Kind.NewJob(key, priority)` through `store.EnqueueJobs`, or
 for a job about one message. Return `jobs.Permanent` for errors a retry
 cannot fix and `jobs.Code` to name an error in `last_error`. Tests register
 their kinds in the test only.
+
+## Alert mail
+
+Alert mail (#397, part 5; `internal/alertmail`, migration 00045) goes to
+admins with a confirmed address (`user_notify_emails`, one row per user who set one; not columns on `users`, whose rows the store reads with every column, so that `status` keeps working while the migration is pending). It hangs off the
+notifier, so webhook and mail share the outboxes
+(`account_sync_health`, `smtp_fill_health`, `loss_alerts`,
+`storage_states`) but fail independently:
+
+- **Mail's own state.** The claims (`ClaimNotifications`,
+  `ClaimFillNotifications`, `ClaimLossAlerts`, `ClaimStorageNotifications`)
+  serve the webhook only and follow its delivery state (`notified_state`,
+  `notified_seq`, `notify_next_at`). Mail keeps its own state beside it:
+  `mailed_state` on `account_sync_health` and `smtp_fill_health` (what the
+  last mail said), `mailed_seq` on `storage_states` (the last transition
+  mailed), and `mail_enqueued_event` on `loss_alerts`, which also records
+  the last event mailed in the other three.
+- **Enqueue.** With `Notifier.Mail`, `Deliver` runs `deliverMail` after
+  every webhook pass, also after a failed request and without a webhook;
+  it is the only path that enqueues alert mail. `EnqueueDueSyncMail`,
+  `EnqueueDueFillMail`, `EnqueueDueLossMail` and `EnqueueDueStorageMail`
+  lock the rows whose mail is due by the mail's state alone (`FOR UPDATE
+  SKIP LOCKED`, no lease, batches of 50) and, in the same transaction,
+  insert one `notify_mail` job per recipient (`AlertMailRecipients`:
+  admins, not locked, address confirmed) and move the row's mail state on.
+  Due means: a streak at the threshold with `mailed_state` ok, or an ended
+  streak with `mailed_state` failing; a loss alert younger than 24 hours
+  without `mail_enqueued_event` (read through `loss_alerts_created_at_idx`);
+  `event_seq` above `mailed_seq`, where a scope back at `ok` counts only
+  after an earlier mail of it. So a failing webhook neither holds mail back
+  nor adds any (a short failure after a mailed recovery is no news to
+  mail), and a change undone before a pass saw it is not mailed. That state
+  update is what keeps an event from being mailed twice; the job key
+  `<event id>:<user id>` and the insert-only `EnqueueJobOnce` (`ON CONFLICT
+  DO NOTHING`, unlike `EnqueueJobs`, which queues a done job again) are a
+  second guard while the job exists. With no recipient a pass still moves
+  the state on, so turning mail on announces the current state once and an
+  admin who confirms later gets only later changes. The payload
+  (`store.AlertMailPayload`) holds IDs, figures and the level, never names.
+- **Delivery.** The `notify_mail` kind runs in a pool of one of its own in
+  the process that runs the notifier: `serve`, and `sync` at its end
+  (`UntilIdle`, 2.5 minutes). The worker does not register it and needs no
+  relay password. The handler reads the recipient again
+  (`AlertMailRecipient`; gone: `jobs.Done("recipient_gone")`), reads the
+  names, builds the text in the recipient's language and sends it
+  (`Sender`: dial 15 s, each command 30 s through a connection that caps
+  every deadline, 2 minutes in all, all below the job lease that the
+  heartbeat keeps). `4xx`, timeouts and network errors are retried (10
+  attempts, 1 minute doubling to an hour); `5.1.x` at `RCPT` unconfirms the
+  address (`BounceNotifyEmail`, only if it is still the address that
+  bounced); other `5xx` fail the job. The job's code and the logs carry the
+  reply code only.
+- **Codes.** The web server mails a confirmation code synchronously in the
+  request (`PUT /api/profile/notifications`), so the code never sits in the
+  queue; only its SHA-256, bound to the user, is stored. Every entered code
+  first counts a try in a statement of its own (`CountNotifyEmailCodeTry`,
+  conditional on the limit), so tries sent at the same time cannot pass the
+  limit of 5.
+
+## Storage usage
+
+What counts is **message bytes**: the plaintext size of each unique
+message (`messages.size`), counted once however many folders and accounts
+hold it. Migration 00041 holds the schema; the code is in
+`internal/store/storage.go` and `queries/storage.sql`, the jobs in
+`internal/jobs/storage.go`, the schedule in `cmd/mail-archive/jobs.go`.
+
+| Figure | How exact | Where |
+|---|---|---|
+| Instance (messages, bytes) | exact at all times | the counters: `storage_counter_base` plus `storage_counter_deltas` |
+| Customer group (messages, bytes, deduplicated within the group) | exact after each snapshot, then an upper bound with two exceptions (below) | the snapshot in `storage_usage_groups`, plus `storage_group_deltas` |
+| Account (messages, bytes, exclusive bytes) | as of the last snapshot | `storage_usage_accounts` |
+
+- **Counters.** Statement triggers on `messages` (`AFTER INSERT` and
+  `AFTER DELETE` with transition tables) append one delta row per
+  statement. An `INSERT … ON CONFLICT DO NOTHING` lists only the rows it
+  inserted, and a rollback takes the delta with it. Writers never update a
+  shared row, so they never wait for each other. `StorageTotals` reads the
+  base plus the deltas in one statement. A row trigger
+  `BEFORE UPDATE OF size, sha256 … WHEN …` refuses a change of either
+  column; updates of the search columns do not run it.
+- **Group deltas.** Every save that adds locations calls
+  `recordGroupUsage` in its transaction, after the location writes: one
+  query per batch (`GroupHeldMessages`) finds the hashes new to the account
+  that another account of the group already holds; the rest go into one
+  delta row. It probes `message_locations_folder_sha_idx` once per folder
+  of the group and hash, fenced (`LIMIT 1` per probe, plus `OFFSET 0`) so that neither the
+  custom nor the generic plan looks the hashes up by
+  `message_locations_sha_idx` (`TestUsageRefreshPlan`). So its time depends
+  only on the group's own folders and the batch, never on how many accounts
+  of other groups hold the same message (#539); it grows with the group's
+  folders (see [Hardware and budgets](../guide/operations#hardware-and-budgets)). Callers: `saveBatch` (syncs), `saveIntoJournal` (fills and journal
+  imports) and `ReceiveMessage` (SMTP). `TestGroupUsageGuardSQL` and
+  `TestGroupUsageGuardCallers` keep every writer of `message_locations` on
+  this path or on the exempt list (`ConvertLegacyFillBatch`, which adds no
+  hash new to the account). Two saves that add the same message to two
+  accounts of one group at the same time may both count it, and deletions
+  (retention, purges) lower a group's figure only at the next snapshot: so
+  between snapshots the figure is an upper bound, with two exceptions until
+  the next snapshot (#397 revision 4, point 5). Right after a user or
+  account moves between groups (or the adoption), the groups show the moved
+  bytes only from the snapshot the move requests; this includes a save
+  whose probe found the message in an account that moved out of the group
+  before the save committed. And a message whose only other copy in the
+  group is deleted while it is being added is missing, one message per
+  such race.
+- **Locks of a save.** Every save first locks its account and the
+  account's owner `FOR KEY SHARE` (`lockAccountGroup`), before the folder
+  lock, and reads the owner's group. Moving a user to another group
+  (`SetUserGroup`, `FOR UPDATE` on the user), changing an account's owner
+  (`SetAccountOwner`) and the adoption of unowned accounts by the first
+  user (`LockUnownedAccounts`, `FOR UPDATE`) therefore wait until the open
+  saves of that owner or account end, and a save that starts during a move
+  waits for it and then reads the new group. `KEY SHARE` does not conflict
+  with ordinary updates of either row (logins, settings, account edits).
+- **Refresh requests.** A move, the adoption, the end of a purge
+  (`FinishPurge`, `CancelPurge`), of a deletion run and of an import,
+  `restore-dump` and `RequestUsageRefresh` bump
+  `storage_refresh_requests.seq` and enqueue `usage_refresh` (also a
+  failed one) in their transaction, last.
+- **`storage_fold`** (every 5 minutes, and at the start of a job pool)
+  takes the storage advisory lock for its transaction, adds the counter
+  deltas to the base and the group deltas to `added_*` of their group's
+  row, and then enqueues `usage_refresh` while
+  `storage_refresh_requests.seq` is above `storage_snapshot.covered_seq`.
+  A request is therefore covered within about two fold periods (about 10
+  minutes) while a job pool runs and no retry backoff is pending: the
+  fold's check can fall between a snapshot's last read of `seq` and the end
+  of its job. A refresh that failed in
+  the last hour is left alone by the fold.
+- **`usage_refresh`** (hourly, on request, and at the start of a job pool
+  while no snapshot exists): on a connection of its own it takes the
+  storage advisory lock for its session, folds, and then, in one
+  `REPEATABLE READ` transaction, reads `seq` with a plain `SELECT`, writes
+  every account's and group's figures in one statement (hash aggregates
+  over `message_locations ⋈ folders`; the sizes come from the covering
+  index `messages_sha_size_idx` by an index-only scan, not from the message
+  heap), compares the counters with an exact count (a difference is logged
+  as an error), deletes the group deltas it saw and writes
+  `storage_snapshot` last, with that `seq` as `covered_seq`. If `seq` grew
+  meanwhile, or the transaction failed with `40001` (an account or group
+  changed during it), the job runs again at once (`jobs.Continue`).
+  `work_mem` is 32 MB, so each hash node may use up to 64 MB
+  (`hash_mem_multiplier` 2, PostgreSQL's default) before it spills; each
+  statement may take 5 minutes.
+- **Priority.** Both jobs run at `store.PriorityStorage` (50): after the
+  work of new mail and before backfills, so that a long attachment
+  backfill does not hold back a requested snapshot.
+- **No per-user figures.** Usage is shown per instance, group and account
+  (`./ma usage`). The measured costs are in
+  [Hardware and budgets](../guide/operations#hardware-and-budgets).
+
+## Storage quotas
+
+The gate is `internal/quota` (#397, part 2): `quota.Gate`, one per process
+that stores mail (`serve`, and `./ma sync`, `./ma import`, `./ma account
+fill`), on `store.StorageGateFigures` and `store.TransitionStorageState`
+(`internal/store/quota.go`). The settings are `config.Storage`; group quotas
+are `customer_groups.quota_bytes`, the states `storage_states` (00041).
+
+- **Read.** Every 10 seconds (`serve` runs `Gate.Run`; the commands read
+  when they check after that time) one statement reads the instance's exact
+  bytes, each group's figure (snapshot, folded and open deltas, as in
+  `GroupStorageUsage`), the quotas, the persisted states and whether a
+  snapshot exists, plus `statfs` of the data directory. The store tells the
+  gate after every committed save what it added (`SetWriteObserver`;
+  `recordGroupUsage` returns the bytes new to the group, an upper bound for
+  the instance too); the gate adds these local bytes until its next read.
+  Before that, each writer counts the files of its open batch as pending
+  (`Gate.Pending`: `Add` at `Blobs.Put`, `Settle` when the batch is saved,
+  fails or is dropped), so a sync, fill or import stops within one message
+  of a limit. A refusal while files are pending saves the batch and asks
+  again (`folderWriter.admit`, `journalImport.admit`), so duplicates never
+  pause a sync or an import.
+- **States.** `quota.Thresholds.Next` is the state machine: up to the level
+  a figure reached, down only 1 % of the quota below a threshold.
+  `disk_low` is the instance's, entered below the reserve and left 1 % of
+  it above. The effective state of a group's account is the worst of the
+  group's (only with a quota and after the first snapshot), the
+  instance's and the disk's.
+- **Transitions** are written by the gate that holds the storage state
+  writer lock (`store.StorageWriter`, a session-level advisory lock on a
+  connection of its own outside the pool, like `LockMigrations`; a held
+  lock is checked at every read and taken again when its session ended):
+  `serve` takes it at its first read and holds it for its run
+  (`Config.ClaimWriter`); a command's gate tries it only for a read with a
+  transition to write, so it writes only while no `serve` runs, and reads
+  once more at its end (`finalStorageRead`). While `serve` runs, the
+  commands decide in memory, so a command with other limits cannot flip
+  the persisted state. `serve`'s gate wakes the notifier after each
+  transition (`Config.OnTransition`); without `serve`, `./ma sync` sends
+  the `storage` alerts (part 3) at its end. They come from the database
+  figures alone: under
+  `SELECT … FROM storage_states … FOR UPDATE` the scope's figures are read
+  again (and `statfs` for the instance), and the row is updated with
+  `state_since` and `event_seq + 1` only if the state changes. Event IDs are
+  `storage:<instance|group id>:<event_seq>` (`store.StorageEventID`). The
+  local bytes never reach the database.
+- **Enforcement.** `Gate.Admit` (below full) is asked by the sync runner's
+  schedule, at the start of a sync, fill or import, and in the fetch sink
+  and the import loop before each `Blobs.Put`; a refusal from a sink is
+  `imapsync.Stop`, which closes the IMAP connection instead of draining the
+  rest of the answer. The SMTP server asks `Gate.State` (`Deferred`:
+  overflow or worse) at `RCPT` (step e, with the group from
+  `LookupSMTPAddress`) and again at the start of `DATA`. Accounts carry
+  their owner's group (`Account.GroupID`, `SMTPRoute.GroupID`,
+  `SyncHealth.GroupID`, `FillHealth.GroupID`) from a join in the same
+  statement. The web server answers manual syncs `409 storage_full` and
+  lists paused accounts in `/healthz/sync`.
+
+## Start-up of serve and worker
+
+`serve` and `worker` run `prepareInstance` (`cmd/mail-archive/startup.go`,
+#396) before they open their own store. The steps are numbered as in the
+plan of #396:
+
+| # | Step | serve | worker | other commands |
+|---|---|---|---|---|
+| 0 | Load the configuration; the secret key from `MAIL_ARCHIVE_SECRET_KEY_FILE` or `MAIL_ARCHIVE_SECRET_KEY` (`config.LoadSecretKey`). A refused key configuration is a `config.SecretKeyError` (exit 4). `serve` refuses without a key here, before it listens or migrates. | yes | yes | yes |
+| 1 | Listen, and answer with the starting handler (`web.Starting`): `/healthz` 503 `{"status":"starting"}`, everything else 503 with `Retry-After`, behind `protect`. | yes | no | no |
+| 2 | Open a short-lived store with `ForMigrations` and take the migration command lock (`LockMigrations`), logging once if it has to wait. | yes | yes | no |
+| 3 | With `MAIL_ARCHIVE_MIGRATE_ON_START=on`: refuse a migration whose failure is recorded with the same file (exit 3), log the pending migrations and the last `data.backup` audit entry (a warning when none is younger than 26 h), then run `applyMigrations`, the sequence `migrate` runs too (index rebuild, audit partitions, `Store.Migrate`, password upgrade). | yes | yes | `migrate` only, without the record check |
+| 4 | Schema check (`Store.SchemaState`): refuse when migrations are pending or the database has a newer migration than the binary (exit 4). | yes | yes | yes, in `openApp`; `backup` and `status` only warn |
+| 3b | Encryption at setup (`encryptionAtSetup`, `archive.EnableAtSetup`), on a current schema: on a new instance (`Store.FreshInstance`: setup not complete, no user, no message, no `blob_encryption` row) it runs `encryption enable` on the empty archive, creating a keyring with a slot for the archive key when there is no keyring file. It takes the writers lock and the blob lock exclusively without waiting, as `enable` does, so a command-line writer (an import before the first user) makes it refuse with exit 4 and the holder; under those locks it checks again that the instance is new. Every writer of this version takes the writers lock only at step 8, so it starts with state `on`. Without an archive key it refuses (exit 4), unless `MAIL_ARCHIVE_ENCRYPTION_AT_SETUP=off` (test instances). | yes | yes | no |
+| 5 | Secret key (`checkSecretKey`): refuse another key than the one whose check value `instance_state.secret_key_check` holds (HMAC-SHA256 with the key over `mail-archive secret key check v1`, `crypto.KeyCheck`), exit 4 with both fingerprints. Without a check value, the key must open one of up to 5 sealed account passwords and 5 TOTP secrets if there are any; then the value is recorded. `secret-key accept` replaces it. | yes | no | no |
+| 6 | The start-up checks of encryption at rest (`archive.OpenAtRest`), when the process opens its store after step 8. | yes | yes | writers and readers of message files |
+| 7 | Setup token (`recordSetupToken`): while setup is not complete, store the SHA-256 of the configured token (`MAIL_ARCHIVE_SETUP_TOKEN_FILE`, loaded at step 0 by `config.SetupTokenFromEnv`, a `config.SetupTokenError` is exit 4) with the time of the first start with it, or clear a stored one when none is configured. | yes | no | no |
+| 8 | Release the lock, close the store, then `openApp` and the process's own start; `serve` swaps the handler of its HTTP server to `web.Server`'s (`web.Swap`). | yes | yes | – |
+
+`serve` has one `http.Server` and one listener for its whole run
+(`runServe`, `web.Serve`): its handler is a `web.Swap`, an
+`atomic.Pointer` that holds the starting handler first and the app after
+step 8. No listener or connection is closed by the swap; a request that
+began before it ends with the handler it began with.
+
+Child processes get an environment built by `config.ChildEnv`: only the
+variables of an allowlist (`pgToolEnvNames` for `pg_dump` and `pg_restore`,
+`containerCheckEnvNames` for `prepare-data --check`) and what the caller
+adds (the libpq variables of the database connection, the data
+directory). A `MAIL_ARCHIVE_*` or `PG*` variable of the process is never
+passed on. For `pg_dump` and `pg_restore`, `pgToolConn` (`pgtools.go`,
+#540) builds those variables and a keyword/value string from one map: host,
+port, user, database and password from the app's `pgconn.ParseConfig`, the
+TLS and authentication keys from the connection string only, every one
+named with the value pgx takes where the string leaves it out (with the
+`sslmode` pgx derives for `sslnegotiation=direct` and `sslrootcert=system`),
+and always `PGGSSENCMODE=disable`. It refuses
+TLS `PG*` variables the string does not override, services and
+`sslpassword`, and parses the string with `pgconn.ParseConfig` to compare
+its ordered connection attempts with the app's; any difference refuses.
+
+Steps 3 to 7 (but 6) run under the lock, so starts and `migrate` at the
+same time apply each migration once: the first runs them, the others wait
+and find nothing left; so with encryption at setup and the setup token.
+goose's own lock stays nested inside, as for `migrate`.
+
+The setup link (`POST /api/setup`, `internal/web/setup.go`) creates the
+first admin in one transaction (`Store.CompleteSetup`): it locks the row of
+`instance_state` (`SELECT … FOR UPDATE`), requires that setup is not
+complete, that no user exists and that the SHA-256 of the token matches
+(`crypto/subtle`) within 7 days of `setup_token_since`, creates the admin,
+and sets `setup_completed_at` and `setup_user_id` and clears the token. Every
+other creation of a user (`createUser`) locks the same row first and
+completes the setup with the first user, so the two are serialized. Wrong
+or expired tokens count as failed logins of the address
+(`Limiter.BeginAddr`); the token is checked before the password is hashed.
+`GET /api/session` without a session reports `setup`: `cli`, `token`,
+`expired` or `complete`. The web UI reads the token from the URL fragment
+(`web/src/setupLink.ts`), removes it with `history.replaceState` and sends
+it in the request body.
+
+goose runs each migration in a transaction of its own and stops at the
+first failure; `Store.Migrate` turns its `PartialError` into
+`MigrationFailed` with the failed file, its SHA-256 and the migrations of
+the run that stayed applied. `TestMigrationsAreTransactional` refuses
+`-- +goose NO TRANSACTION`, so a failure always rolls back completely. A
+failure whose SQLSTATE class repeats on the same SQL and data (22, 23, 42,
+0A, P0) is written to `instance_state` (migration 00039) in a separate
+statement, keyed on the version and the file's SHA-256; others (timeouts,
+lock and serialization failures, lost connections, cancels) are not, so
+the next start retries them. Before `instance_state` exists, nothing is
+read or written. A successful `applyMigrations` clears the record.
+`Store.InstanceStatus` reports the binary and schema versions, the pending
+migrations, the record, the setup state with its times and the state of
+encryption at rest (numbers, enums and times only, no error texts); the
+caller adds whether `MAIL_ARCHIVE_ENCRYPTION_AT_SETUP=off` is configured.
+
+Exit codes come from `codedError` in `main`: `3` for a failed migration
+(also `migrate`), `4` for a refused start-up check (also any command that
+uses the database while its schema does not match).
 
 ## Web server
 

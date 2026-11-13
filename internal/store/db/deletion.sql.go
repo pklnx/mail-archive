@@ -244,6 +244,64 @@ func (q *Queries) DeletionCounts(ctx context.Context) (DeletionCountsRow, error)
 	return i, err
 }
 
+const deletionMarksOf = `-- name: DeletionMarksOf :many
+WITH hit AS (
+    SELECT k.sha256, k.archived_at
+    FROM deletion_marks k
+    WHERE k.sha256 = ANY ($1::bpchar[])
+      AND ($2::bigint = ANY (k.account_ids) OR $3::bigint = ANY (k.group_ids))
+    UNION ALL
+    SELECT d.sha256, d.archived_at
+    FROM deleted_messages d
+    WHERE d.sha256 = ANY ($1::bpchar[])
+      AND NOT EXISTS (SELECT 1 FROM deletion_marks k WHERE k.tombstone_id = d.id)
+)
+SELECT h.sha256::text AS sha256, min(h.archived_at)::timestamptz AS archived_at,
+       EXISTS (SELECT 1 FROM messages m WHERE m.sha256 = h.sha256) AS archived
+FROM hit h
+GROUP BY h.sha256
+`
+
+type DeletionMarksOfParams struct {
+	Shas      []string
+	AccountID int64
+	GroupID   int64
+}
+
+type DeletionMarksOfRow struct {
+	Sha256     string
+	ArchivedAt time.Time
+	Archived   bool
+}
+
+// The hashes of a batch deleted from the account or its customer group
+// (group_id 0: accounts without an owner): a deletion mark names the
+// account or the group, or a tombstone has no mark (written before 1.6.0,
+// or by a process of an older version since; it counts for every group).
+// With the earliest matching archived_at, and whether the message row
+// exists now (then the file belongs to another copy). Marks of other
+// accounts and groups do not count, so the answer never depends on what
+// other groups deleted (#539).
+func (q *Queries) DeletionMarksOf(ctx context.Context, arg DeletionMarksOfParams) ([]DeletionMarksOfRow, error) {
+	rows, err := q.db.Query(ctx, deletionMarksOf, arg.Shas, arg.AccountID, arg.GroupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DeletionMarksOfRow
+	for rows.Next() {
+		var i DeletionMarksOfRow
+		if err := rows.Scan(&i.Sha256, &i.ArchivedAt, &i.Archived); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const deletionRunSummary = `-- name: DeletionRunSummary :many
 SELECT coalesce(u.name, '')::text AS owner, a.name AS account, f.name AS folder,
        (extract(year FROM (c.retain_until + interval '1 day') AT TIME ZONE 'UTC') - 1)::int AS year,
@@ -400,6 +458,60 @@ func (q *Queries) GetDeletionRun(ctx context.Context, id int64) (GetDeletionRunR
 	return i, err
 }
 
+const groupHasLocations = `-- name: GroupHasLocations :many
+SELECT DISTINCT s.sha::text AS sha256
+FROM unnest($1::bpchar[]) AS s (sha)
+CROSS JOIN (
+    SELECT f.id FROM folders f
+    JOIN accounts a ON a.id = f.account_id
+    LEFT JOIN users o ON o.id = a.owner_id
+    WHERE coalesce(o.group_id, 0) = $2::bigint
+    OFFSET 0
+) gf
+JOIN LATERAL (
+    SELECT 1 FROM message_locations ml
+    WHERE ml.folder_id = gf.id AND ml.message_sha256 = s.sha
+    LIMIT 1
+) held ON true
+`
+
+type GroupHasLocationsParams struct {
+	Shas    []string
+	GroupID int64
+}
+
+// The hashes of a batch that an account of the customer group holds, the
+// saving account included (gone locations too); group 0 is the accounts
+// without an owner. Driven from the group's own folders: one probe of
+// message_locations_folder_sha_idx per folder and hash, so the cost
+// depends only on the group's folders and the batch, never on how many
+// accounts of other groups hold the same bytes (#539). The LATERAL
+// subquery's LIMIT 1 is the fence: without it the planner flattens the
+// probes into a lookup of each hash in message_locations_sha_idx, in the
+// custom and in the generic plan (TestGroupHasLocationsPlan). OFFSET 0 on
+// the group's folders is the second fence of the shape GroupHeldMessages
+// uses. Unlike GroupHeldMessages (storage usage), it counts the saving
+// account and group 0 (TestDeletionMarksGroupZero, TestDeletionMarksRetention).
+func (q *Queries) GroupHasLocations(ctx context.Context, arg GroupHasLocationsParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, groupHasLocations, arg.Shas, arg.GroupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var sha256 string
+		if err := rows.Scan(&sha256); err != nil {
+			return nil, err
+		}
+		items = append(items, sha256)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const insertDeletionCandidates = `-- name: InsertDeletionCandidates :execrows
 INSERT INTO deletion_candidates (run_id, message_sha256, size, retain_until)
 SELECT $1::bigint, l.message_sha256, max(m.size),
@@ -447,6 +559,40 @@ SELECT seq, sha256, 'retention' FROM messages WHERE sha256 = ANY ($1::bpchar[]) 
 // transaction as the tombstones.
 func (q *Queries) InsertRetentionDeletions(ctx context.Context, shas []string) (int64, error) {
 	result, err := q.db.Exec(ctx, insertRetentionDeletions, shas)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const insertRetentionMarks = `-- name: InsertRetentionMarks :execrows
+INSERT INTO deletion_marks (sha256, archived_at, account_ids, group_ids, run_id, tombstone_id)
+SELECT d.sha256, d.archived_at,
+       ARRAY(SELECT DISTINCT f.account_id
+             FROM message_locations l JOIN folders f ON f.id = l.folder_id
+             WHERE l.message_sha256 = d.sha256 ORDER BY 1),
+       ARRAY(SELECT DISTINCT coalesce(o.group_id, 0)
+             FROM message_locations l
+             JOIN folders f ON f.id = l.folder_id
+             JOIN accounts a ON a.id = f.account_id
+             LEFT JOIN users o ON o.id = a.owner_id
+             WHERE l.message_sha256 = d.sha256 ORDER BY 1),
+       d.run_id, d.id
+FROM deleted_messages d
+WHERE d.run_id = $1::bigint AND d.sha256 = ANY ($2::bpchar[])
+ORDER BY d.id
+`
+
+type InsertRetentionMarksParams struct {
+	RunID int64
+	Shas  []string
+}
+
+// The deletion marks of a run's batch (#539), after its tombstones and
+// before its locations go: every account and customer group (0: without
+// an owner) that holds the message, with the tombstone.
+func (q *Queries) InsertRetentionMarks(ctx context.Context, arg InsertRetentionMarksParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertRetentionMarks, arg.RunID, arg.Shas)
 	if err != nil {
 		return 0, err
 	}
@@ -669,38 +815,4 @@ func (q *Queries) SkipRearchive(ctx context.Context, arg SkipRearchiveParams) (b
 	var skip bool
 	err := row.Scan(&skip)
 	return skip, err
-}
-
-const tombstonedOf = `-- name: TombstonedOf :many
-SELECT d.sha256::text AS sha256, min(d.archived_at)::timestamptz AS archived_at
-FROM deleted_messages d
-WHERE d.sha256 = ANY ($1::bpchar[])
-  AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.sha256 = d.sha256)
-GROUP BY d.sha256
-`
-
-type TombstonedOfRow struct {
-	Sha256     string
-	ArchivedAt time.Time
-}
-
-// Hashes of a batch that were deleted and are not in the archive now.
-func (q *Queries) TombstonedOf(ctx context.Context, shas []string) ([]TombstonedOfRow, error) {
-	rows, err := q.db.Query(ctx, tombstonedOf, shas)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []TombstonedOfRow
-	for rows.Next() {
-		var i TombstonedOfRow
-		if err := rows.Scan(&i.Sha256, &i.ArchivedAt); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }

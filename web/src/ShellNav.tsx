@@ -1,6 +1,6 @@
 import { forwardRef, type ComponentType, type MouseEvent, type ReactNode } from "react";
 import { SideNav, SideNavDivider, SideNavItems, SideNavLink } from "@carbon/react";
-import { Archive, Email, RecentlyViewed, Settings, Time, UserAvatar, UserMultiple, UserIdentification } from "@carbon/icons-react";
+import { Archive, DataBase, Email, RecentlyViewed, Settings, Time, UserAvatar, UserMultiple, UserIdentification } from "@carbon/icons-react";
 import { isPlainClick } from "./clicks";
 import { formatState, type ViewState } from "./urlState";
 import { t } from "./i18n";
@@ -85,6 +85,7 @@ export const ShellNav = forwardRef<HTMLElement, Props>(function ShellNav({ id, s
         {admin && link({ view: "users" }, state.view === "users", UserMultiple, t.users)}
         {link({ view: "log" }, state.view === "log", RecentlyViewed, t.log)}
         {admin && link({ view: "retention" }, state.view === "retention", Time, t.retention)}
+        {admin && link({ view: "storage" }, state.view === "storage", DataBase, t.storage)}
         {link({ view: "profile" }, state.view === "profile", UserAvatar, t.profile)}
       </SideNavItems>
     </SideNav>

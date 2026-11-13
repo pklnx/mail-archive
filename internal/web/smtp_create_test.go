@@ -146,13 +146,24 @@ func TestSMTPServerState(t *testing.T) {
 	if f.accounts().SMTP != nil {
 		t.Fatal("smtp on without SMTPListen")
 	}
-	s := New(f.st, f.blobs, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{AllowedHosts: []string{"127.0.0.1"}, SMTPListen: ":2525"})
-	srv := httptest.NewServer(s.Handler())
-	t.Cleanup(srv.Close)
 	_, token := sessionFor(t, f.st, "kim")
-	g := *f
-	g.srv, g.cookie = srv, token
-	if g.accounts().SMTP == nil {
-		t.Error("smtp off with SMTPListen")
+	// The mode tells the mail server setup which Postfix lines to show
+	// (#395 part 3): with a login, or the allowlist alone.
+	for _, c := range []struct {
+		auth bool
+		want string
+	}{{false, "off"}, {true, "required"}} {
+		s := New(f.st, f.blobs, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{AllowedHosts: []string{"127.0.0.1"}, SMTPListen: ":2525", SMTPAuth: c.auth})
+		srv := httptest.NewServer(s.Handler())
+		t.Cleanup(srv.Close)
+		g := *f
+		g.srv, g.cookie = srv, token
+		got := g.accounts().SMTP
+		if got == nil {
+			t.Fatalf("auth %v: smtp off with SMTPListen", c.auth)
+		}
+		if got.Auth != c.want {
+			t.Errorf("auth %v: smtp.auth %q, want %q", c.auth, got.Auth, c.want)
+		}
 	}
 }

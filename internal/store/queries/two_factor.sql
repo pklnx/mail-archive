@@ -58,5 +58,21 @@ SELECT * FROM two_factor_challenges WHERE id = $1 AND expires_at > now() FOR UPD
 -- name: GetTwoFactorChallengeUser :one
 SELECT user_id FROM two_factor_challenges WHERE id = $1 AND expires_at > now();
 
+-- name: ReserveTwoFactorAttempt :one
+-- Autocommit, before the login transaction: the count survives its
+-- rollback, and the row lock orders parallel requests on one challenge.
+UPDATE two_factor_challenges SET attempts = attempts + 1
+WHERE id = @id AND expires_at > now() AND attempts < @max_attempts::smallint
+RETURNING attempts;
+
+-- name: TwoFactorChallengeExhausted :one
+SELECT EXISTS (
+    SELECT 1 FROM two_factor_challenges
+    WHERE id = @id AND expires_at > now() AND attempts >= @max_attempts::smallint
+);
+
+-- name: DeleteExhaustedTwoFactorChallenge :exec
+DELETE FROM two_factor_challenges WHERE id = @id AND attempts >= @max_attempts::smallint;
+
 -- name: DeleteExpiredTwoFactorChallenges :exec
 DELETE FROM two_factor_challenges WHERE expires_at <= now();

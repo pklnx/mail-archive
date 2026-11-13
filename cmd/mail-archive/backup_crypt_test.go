@@ -83,13 +83,15 @@ func assertNoMarkers(t *testing.T, what string, data []byte) {
 	}
 }
 
-// fakePgDumpMarkers is a pg_dump whose dump holds the marker words.
+// fakePgDumpMarkers is a pg_dump whose dump holds the marker words; it
+// fails while a file "fail" lies next to it (pg_dump gets no variable of
+// the test's environment).
 func fakePgDumpMarkers(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	script := `#!/bin/sh
 if [ "$1" = --version ]; then echo "pg_dump (PostgreSQL) 18.1"; exit 0; fi
-if [ -n "$FAKE_FAIL" ]; then printf 'PGDMP half'; echo "connection refused" >&2; exit 1; fi
+if [ -e "$(dirname "$0")/fail" ]; then printf 'PGDMP half'; echo "connection refused" >&2; exit 1; fi
 printf 'PGDMP ` + leakMarker1 + ` '
 i=0; while [ $i -lt 3000 ]; do printf '` + leakMarker2 + ` %d\n' $i; i=$((i+1)); done
 `
@@ -118,8 +120,8 @@ func TestBackupSealed(t *testing.T) {
 	}
 	dir := filepath.Join(t.TempDir(), "backups")
 	job := backupJob{
-		PgDump: pgDump, DatabaseURL: "postgres://u:p@h/db", Dir: dir, Name: "mailarchive-20261104T120000Z.dump",
-		ServerMajor: 18, Note: "the note\n", Seal: ring,
+		PgDump: testPgTool(t, pgDump, "postgres://u:p@h/db", 18), Dir: dir, Name: "mailarchive-20261104T120000Z.dump",
+		Note: "the note\n", Seal: ring,
 	}
 	path, err := runBackup(context.Background(), job)
 	if err != nil {
@@ -158,7 +160,9 @@ func TestBackupSealed(t *testing.T) {
 		}
 	}
 
-	t.Setenv("FAKE_FAIL", "1")
+	if err := os.WriteFile(filepath.Join(filepath.Dir(pgDump), "fail"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	job.Name = "second.dump"
 	if _, err := runBackup(context.Background(), job); err == nil || !strings.Contains(err.Error(), "connection refused") {
 		t.Errorf("failing pg_dump: %v", err)
@@ -192,6 +196,9 @@ func TestBackupNoteSealed(t *testing.T) {
 			if !strings.Contains(note, want) {
 				t.Errorf("compose %v: note lacks %q:\n%s", compose, want, note)
 			}
+		}
+		if strings.Contains(note, "--plaintext") {
+			t.Errorf("compose %v: the note of an encrypted dump names --plaintext:\n%s", compose, note)
 		}
 		for _, key := range [][]byte{kek, rk} {
 			if strings.Contains(note, blobcrypt.EncodeKEK(key)) {
@@ -292,14 +299,17 @@ func TestSealUnsealStream(t *testing.T) {
 }
 
 // fakePgRestore is a pg_restore that copies its standard input to
-// logDir/stdin and writes logDir/done only after reading it to the end.
+// logDir/stdin and writes logDir/done only after reading it to the end. It
+// records its environment in logDir/version-env for --version and in
+// logDir/env for the restore.
 func fakePgRestore(t *testing.T, version string) (path, logDir string) {
 	t.Helper()
 	dir := t.TempDir()
 	logDir = t.TempDir()
 	script := `#!/bin/sh
-if [ "$1" = --version ]; then echo "pg_restore (PostgreSQL) ` + version + `"; exit 0; fi
+if [ "$1" = --version ]; then env > "` + logDir + `/version-env"; echo "pg_restore (PostgreSQL) ` + version + `"; exit 0; fi
 printf '%s\n' "$@" > "` + logDir + `/args"
+env > "` + logDir + `/env"
 cat > "` + logDir + `/stdin"
 echo done > "` + logDir + `/done"
 `
@@ -333,8 +343,9 @@ func TestRunRestore(t *testing.T) {
 		return r
 	}
 
+	basics := setEnvMarkers(t)
 	pgRestore, logDir := fakePgRestore(t, "18.0")
-	job := restoreJob{PgRestore: pgRestore, DatabaseURL: "postgres://u:p@h/archive", ServerMajor: 18, In: open(sealed.Bytes()), Name: "x.dump.enc", Sealed: true}
+	job := restoreJob{PgRestore: testPgTool(t, pgRestore, "postgres://u:p@h/archive", 18), In: open(sealed.Bytes()), Name: "x.dump.enc", Sealed: true}
 	var out bytes.Buffer
 	if err := runRestore(context.Background(), job, &out); err != nil {
 		t.Fatal(err)
@@ -343,13 +354,16 @@ func TestRunRestore(t *testing.T) {
 		t.Errorf("pg_restore read %d bytes, want %d", len(got), len(plain))
 	}
 	args, _ := os.ReadFile(filepath.Join(logDir, "args"))
-	for _, want := range []string{"--no-owner", "--single-transaction", "--exit-on-error", "--dbname=archive"} {
+	for _, want := range []string{"--no-owner", "--single-transaction", "--exit-on-error", "--dbname=dbname='archive'"} {
 		if !strings.Contains(string(args), want+"\n") {
 			t.Errorf("args lack %s:\n%s", want, args)
 		}
 	}
 	if !strings.Contains(out.String(), "restored the encrypted dump x.dump.enc") {
 		t.Errorf("output %q", out.String())
+	}
+	for _, name := range []string{"version-env", "env"} {
+		assertPgToolEnv(t, "pg_restore "+name, filepath.Join(logDir, name), append(basics, "PGPASSWORD=p", "PGDATABASE=archive")...)
 	}
 
 	// Cut at a chunk boundary: everything before the cut reaches
@@ -364,8 +378,11 @@ func TestRunRestore(t *testing.T) {
 	}
 
 	old, oldLog := fakePgRestore(t, "16.4")
-	job.PgRestore, job.In = old, open(sealed.Bytes())
-	if err := runRestore(context.Background(), job, io.Discard); err == nil || !strings.Contains(err.Error(), "version 16, the server 18") {
+	conn, err := resolvePgToolConn("pg_restore", "postgres://u:p@h/archive", os.Environ())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := checkPgTool(context.Background(), "pg_restore", old, conn, 18); err == nil || !strings.Contains(err.Error(), "version 16, the server 18") {
 		t.Errorf("old pg_restore: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(oldLog, "args")); !errors.Is(err, os.ErrNotExist) {
@@ -439,6 +456,16 @@ func TestBackupCommandRefusesPlaintext(t *testing.T) {
 // server's version.
 func restoreEnv(t *testing.T) (*archiveSetup, *blobcrypt.Keyring, []byte) {
 	t.Helper()
+	s := restoreEnvPlain(t)
+	ring, kek := testKeyring(t, s.dataDir)
+	turnOn(t, s.st, ring)
+	return s, ring, kek
+}
+
+// restoreEnvPlain is restoreEnv on an archive that never used encryption
+// at rest: no archive key, no keyring.
+func restoreEnvPlain(t *testing.T) *archiveSetup {
+	t.Helper()
 	s := newArchiveSetup(t)
 	secret, _ := crypto.GenerateKey()
 	t.Setenv(config.EnvSecretKey, secret)
@@ -462,9 +489,7 @@ func restoreEnv(t *testing.T) (*archiveSetup, *blobcrypt.Keyring, []byte) {
 	if _, err := s.st.CreateUser(context.Background(), leakMarker1, "h", false); err != nil {
 		t.Fatal(err)
 	}
-	ring, kek := testKeyring(t, s.dataDir)
-	turnOn(t, s.st, ring)
-	return s, ring, kek
+	return s
 }
 
 func runRestoreDump(t *testing.T, args ...string) (string, error) {
@@ -546,11 +571,14 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 		t.Fatalf("add-key left generation %d", file.Generation())
 	}
 
-	st, _ := switchDatabase(t)
+	// The dump's request seq; restore-dump requests a snapshot on top.
+	requests := usageRequestSeq(t, connectDB(t, os.Getenv("MAIL_ARCHIVE_DATABASE_URL")))
+	st, conn := switchDatabase(t)
 	out, err = runRestoreDump(t, dumps[0])
 	if err != nil {
 		t.Fatalf("restore-dump: %v\n%s", err, out)
 	}
+	requireUsageRequested(t, conn, "restore-dump", requests)
 	for _, want := range []string{
 		"restored the encrypted dump",
 		"restored database: encryption at rest on, keyring copy generation 1",
@@ -580,10 +608,13 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 		t.Errorf("the database copy lost the recovery key: %d slots, generation %d", len(dbRing.Slots()), dbRing.Generation())
 	}
 
-	// Again: the copies agree now.
+	// Again: the copies agree now; the reconciliation requests a snapshot
+	// too.
+	requests = usageRequestSeq(t, conn)
 	if out, err := runRestoreDump(t, "--reconcile-only"); err != nil || !strings.Contains(out, "agree") {
 		t.Errorf("reconcile again: %v\n%s", err, out)
 	}
+	requireUsageRequested(t, conn, "restore-dump --reconcile-only", requests)
 }
 
 // TestRestoreDumpRefusals: restore-dump refuses while a writer runs, and
@@ -615,7 +646,7 @@ func TestRestoreDumpRefusals(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatal(ok, err)
 	}
-	for _, args := range [][]string{{dumps[0]}, {"--hold"}, {"--reconcile-only"}} {
+	for _, args := range [][]string{{dumps[0]}, holdArgs("sealed", "x.dump.enc"), {"--reconcile-only"}} {
 		if _, err := runRestoreDump(t, args...); !errors.Is(err, archive.ErrBlobLockHeld) {
 			t.Errorf("%v with the blob lock held: %v", args, err)
 		}
@@ -699,21 +730,36 @@ func TestRestoreDumpIntoNonEmptyDatabase(t *testing.T) {
 		t.Errorf("the refused restore changed the database: %v", err)
 	}
 	// --hold, which ./ma runs around its own pg_restore, refuses too.
-	if _, err := runRestoreDump(t, "--hold"); err == nil || !strings.Contains(err.Error(), "not empty") {
+	if _, err := runRestoreDump(t, holdArgs("sealed", "x.dump.enc")...); err == nil || !strings.Contains(err.Error(), "not empty") {
 		t.Errorf("--hold on an existing database: %v", err)
 	}
 }
 
-// startHold runs restore-dump --hold as ./ma does, with its input and
-// output as pipes, and waits for "ready".
+// holdArgs are the arguments ./ma gives the holder for a dump whose
+// header it read as header (sealed or plain), plus extra.
+func holdArgs(header, name string, extra ...string) []string {
+	return append([]string{"--hold", "--dump-header", header, "--dump-name", name}, extra...)
+}
+
+// startHold runs restore-dump --hold as ./ma does for an encrypted dump,
+// with its input and output as pipes, and waits for "ready".
 func startHold(t *testing.T) (in io.WriteCloser, out *bufio.Reader, done <-chan error) {
+	t.Helper()
+	return startHoldWith(t, io.Discard, holdArgs("sealed", "mailarchive-T.dump.enc")...)
+}
+
+// startHoldWith is startHold with the holder's arguments and its standard
+// error on errOut. It fails the test unless the first line of the
+// holder's standard output is exactly "ready", as ./ma requires.
+func startHoldWith(t *testing.T, errOut io.Writer, args ...string) (in io.WriteCloser, out *bufio.Reader, done <-chan error) {
 	t.Helper()
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
 	cmd := newRestoreDumpCmd()
-	cmd.SetArgs([]string{"--hold"})
+	cmd.SetArgs(args)
 	cmd.SetIn(inR)
 	cmd.SetOut(outW)
+	cmd.SetErr(errOut)
 	cmd.SilenceUsage, cmd.SilenceErrors = true, true
 	ctx, cancel := context.WithTimeout(context.Background(), testwait.Limit(t))
 	t.Cleanup(cancel)
@@ -726,6 +772,10 @@ func startHold(t *testing.T) (in io.WriteCloser, out *bufio.Reader, done <-chan 
 	out = bufio.NewReader(outR)
 	line, err := out.ReadString('\n')
 	if err != nil || line != holdReady+"\n" {
+		// Unblock a holder that still writes or waits for its input
+		// before waiting for it.
+		_ = outR.CloseWithError(io.ErrClosedPipe)
+		_ = inW.Close()
 		t.Fatalf("--hold said %q, %v; then %v", line, err, <-ch)
 	}
 	return inW, out, ch
@@ -834,7 +884,375 @@ func TestRestoreDumpForeignKeyring(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv(envKeyringCopy, base64.StdEncoding.EncodeToString(copyData))
-	if _, err := runRestoreDump(t, "--hold"); !errors.Is(err, blobcrypt.ErrOtherArchive) {
+	if _, err := runRestoreDump(t, holdArgs("sealed", filepath.Base(dumps[0]))...); !errors.Is(err, blobcrypt.ErrOtherArchive) {
 		t.Errorf("--hold with another archive's copy: %v", err)
+	}
+}
+
+// TestCheckDumpKind: a dump without encryption is refused wherever the
+// archive shows a sign of encryption at rest, each sign on its own, unless
+// the operator passes --plaintext; --plaintext on an encrypted dump is
+// refused; without any sign a dump without encryption passes
+// (GHSA-w6jg-ffvw-q4f5).
+func TestCheckDumpKind(t *testing.T) {
+	key := make([]byte, blobcrypt.KeySize)
+	for _, c := range []struct {
+		name          string
+		facts         dumpFacts
+		ring          bool // the data directory has a keyring
+		key           bool // an archive key is configured
+		refused       error
+		wantErr, note []string // substrings; note nil: no note
+	}{
+		{name: "no sign", facts: dumpFacts{Name: "x.dump"}},
+		{name: ".enc name only", facts: dumpFacts{Name: "x.dump.enc"}, refused: errPlaintextDump,
+			wantErr: []string{"x.dump.enc has no encryption header", "the file name ends in .enc", "--plaintext", "nothing was restored"}},
+		{name: "sibling only", facts: dumpFacts{Name: "x.dump", SiblingKeyring: true}, refused: errPlaintextDump,
+			wantErr: []string{"a keyring copy lies next to the dump"}},
+		{name: "data-dir keyring only", facts: dumpFacts{Name: "x.dump"}, ring: true, refused: errPlaintextDump,
+			wantErr: []string{"the data directory has a keyring", filepath.Join(blobcrypt.KeysDir, blobcrypt.KeyringFile)}},
+		{name: "archive key only", facts: dumpFacts{Name: "x.dump"}, key: true, refused: errPlaintextDump,
+			wantErr: []string{"an archive key is configured", config.EnvArchiveKeyFile}},
+		{name: "all signs, --plaintext", facts: dumpFacts{Name: "x.dump.enc", SiblingKeyring: true, Plaintext: true}, ring: true, key: true,
+			note: []string{"restoring an unencrypted dump (--plaintext)", "not authenticated", "archive key", "data directory has a keyring", ".enc", "keyring copy"}},
+		{name: "no sign, --plaintext", facts: dumpFacts{Name: "x.dump", Plaintext: true}},
+		{name: "sealed, --plaintext", facts: dumpFacts{Name: "x.dump.enc", Sealed: true, SiblingKeyring: true, Plaintext: true}, ring: true, key: true,
+			wantErr: []string{"x.dump.enc is encrypted; drop --plaintext"}},
+		{name: "sealed", facts: dumpFacts{Name: "x.dump.enc", Sealed: true, SiblingKeyring: true}, ring: true, key: true},
+		{name: "sealed, no sign", facts: dumpFacts{Name: "x", Sealed: true}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dataDir := t.TempDir()
+			if c.ring {
+				if err := os.MkdirAll(filepath.Dir(blobcrypt.KeyringPath(dataDir)), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(blobcrypt.KeyringPath(dataDir), []byte("x"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var archiveKey []byte
+			if c.key {
+				archiveKey = key
+			}
+			note, err := checkDumpKind(c.facts, dataDir, archiveKey)
+			if c.wantErr == nil && err != nil {
+				t.Fatalf("refused: %v", err)
+			}
+			if c.wantErr != nil {
+				if err == nil {
+					t.Fatalf("not refused (note %q)", note)
+				}
+				if c.refused != nil && !errors.Is(err, c.refused) {
+					t.Errorf("error %v, want %v", err, c.refused)
+				}
+				for _, want := range c.wantErr {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("error lacks %q: %v", want, err)
+					}
+				}
+			}
+			if c.note == nil && note != "" {
+				t.Errorf("note %q", note)
+			}
+			for _, want := range c.note {
+				if !strings.Contains(note, want) {
+					t.Errorf("note lacks %q: %q", want, note)
+				}
+			}
+		})
+	}
+}
+
+// publicTables counts the tables of the database conn points at.
+func publicTables(t *testing.T, conn *pgx.Conn) int {
+	t.Helper()
+	var n int
+	if err := conn.QueryRow(context.Background(), `SELECT count(*) FROM pg_tables WHERE schemaname = 'public'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// TestRestoreDumpRefusesPlaintextDowngrade: a real pg_dump without
+// encryption in place of an encrypted backup is refused by restore-dump
+// before pg_restore runs, with every sign of encryption at rest and with
+// each sign on its own, so the new database stays empty
+// (GHSA-w6jg-ffvw-q4f5). With --plaintext it restores and prints the note
+// first; --plaintext on an encrypted dump and flags that do nothing are
+// refused.
+func TestRestoreDumpRefusesPlaintextDowngrade(t *testing.T) {
+	s, ring, kek := restoreEnv(t)
+	dir := filepath.Join(t.TempDir(), "backups")
+	captureStdout(t, func() {
+		if err := runCmd(t, newBackupCmd(), "", dir); err != nil {
+			t.Fatal(err)
+		}
+	})
+	dumps, _ := filepath.Glob(filepath.Join(dir, "*.dump.enc"))
+	if len(dumps) != 1 {
+		t.Fatalf("dumps %v", dumps)
+	}
+	sealed, err := os.ReadFile(dumps[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := unsealBytes(t, sealed, ring)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyData, err := os.ReadFile(filepath.Join(dir, keyringCopyName(filepath.Base(dumps[0]))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ringPath := blobcrypt.KeyringPath(s.dataDir)
+	ringData, err := os.ReadFile(ringPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write := func(path string, data []byte) string {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	refused := func(what, file string, signs ...string) {
+		t.Helper()
+		_, conn := switchDatabase(t)
+		out, err := runRestoreDump(t, file)
+		if !errors.Is(err, errPlaintextDump) {
+			t.Errorf("%s: %v\n%s", what, err, out)
+			return
+		}
+		for _, sign := range signs {
+			if !strings.Contains(err.Error(), sign) {
+				t.Errorf("%s: the refusal lacks %q: %v", what, sign, err)
+			}
+		}
+		if n := publicTables(t, conn); n != 0 {
+			t.Errorf("%s: the refused restore left %d tables", what, n)
+		}
+	}
+
+	// (a) Over the real .dump.enc, in place: every sign.
+	encrypted := write(filepath.Join(t.TempDir(), "real", filepath.Base(dumps[0])), sealed)
+	write(filepath.Join(filepath.Dir(encrypted), keyringCopyName(filepath.Base(encrypted))), copyData)
+	write(dumps[0], plain)
+	refused("in place", dumps[0], "archive key is configured", "data directory has a keyring", "ends in .enc", "keyring copy lies next to")
+
+	// (f) --plaintext on an encrypted dump.
+	_, conn := switchDatabase(t)
+	if _, err := runRestoreDump(t, "--plaintext", encrypted); err == nil || !strings.Contains(err.Error(), "is encrypted; drop --plaintext") {
+		t.Errorf("--plaintext on an encrypted dump: %v", err)
+	}
+	if n := publicTables(t, conn); n != 0 {
+		t.Errorf("--plaintext on an encrypted dump left %d tables", n)
+	}
+
+	// (g) Flags that do nothing are refused before any lock is taken:
+	// with a writer running, the refusal is the flag's, not the lock's.
+	lock, err := s.st.HoldWriters(context.Background(), "serve")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--reconcile-only", "--plaintext"}, "--plaintext has no effect with --reconcile-only"},
+		{[]string{"--reconcile-only", "--dump-header", "plain"}, "only for --hold"},
+		{[]string{dumps[0], "--dump-name", "x.dump"}, "only for --hold"},
+		{[]string{dumps[0], "--dump-header", "plain"}, "only for --hold"},
+		{holdArgs("plain", "x.dump", "--keyring", "k"), "--keyring has no effect with --hold"},
+		{[]string{"--hold"}, "./ma is older than the image"},
+		{[]string{"--hold", "--dump-header", "sealed"}, "./ma is older than the image"},
+		{holdArgs("maybe", "x.dump"), `--dump-header "maybe"`},
+	} {
+		if _, err := runRestoreDump(t, c.args...); err == nil || errors.Is(err, store.ErrWritersRunning) || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%v: %v, want %q", c.args, err, c.want)
+		}
+	}
+	lock.Release()
+
+	// (e) The same file with --plaintext restores, after the note.
+	st, _ := switchDatabase(t)
+	out, err := runRestoreDump(t, "--plaintext", dumps[0])
+	if err != nil {
+		t.Fatalf("--plaintext: %v\n%s", err, out)
+	}
+	note := strings.Index(out, "restoring an unencrypted dump (--plaintext)")
+	restored := strings.Index(out, "restored the dump "+dumps[0])
+	if note < 0 || restored < 0 || note > restored {
+		t.Errorf("--plaintext: the note does not come before the restore:\n%s", out)
+	}
+	if _, err := st.GetUserByName(context.Background(), leakMarker1); err != nil {
+		t.Errorf("--plaintext: restored user: %v", err)
+	}
+
+	// One sign at a time.
+	// (b) Only a keyring copy next to the dump.
+	t.Setenv(config.EnvArchiveKey, "")
+	if err := os.Remove(ringPath); err != nil {
+		t.Fatal(err)
+	}
+	only := t.TempDir()
+	write(filepath.Join(only, "x.keyring"), copyData)
+	refused("sibling only", write(filepath.Join(only, "x.dump"), plain), "keyring copy lies next to")
+	// (c) Only the data directory's keyring.
+	write(ringPath, ringData)
+	refused("data-directory keyring only", write(filepath.Join(t.TempDir(), "y.dump"), plain), "data directory has a keyring")
+	// (d) Only the archive key.
+	if err := os.Remove(ringPath); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(config.EnvArchiveKey, blobcrypt.EncodeKEK(kek))
+	refused("archive key only", write(filepath.Join(t.TempDir(), "z.dump"), plain), "archive key is configured")
+}
+
+// TestRestoreDumpHoldRefusesPlaintext: the holder ./ma runs refuses a dump
+// that ./ma read as without encryption on an encrypted archive before it
+// says anything on its standard output, so ./ma never starts pg_restore
+// (GHSA-w6jg-ffvw-q4f5). With --plaintext its first line is exactly
+// "ready" and the note is on its standard error. --hold without the facts
+// of a current ./ma is refused.
+func TestRestoreDumpHoldRefusesPlaintext(t *testing.T) {
+	restoreEnv(t)
+	switchDatabase(t)
+	copyData, err := os.ReadFile(blobcrypt.KeyringPath(config.DataDirFromEnv()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name string
+		args []string
+		env  bool // ./ma passes a keyring copy next to the dump
+	}{
+		{"name .dump.enc", holdArgs("plain", "x.dump.enc"), false},
+		{"name .dump", holdArgs("plain", "x.dump"), false},
+		{"keyring copy next to it", holdArgs("plain", "x.dump"), true},
+	} {
+		t.Setenv(envKeyringCopy, "")
+		if c.env {
+			t.Setenv(envKeyringCopy, base64.StdEncoding.EncodeToString(copyData))
+		}
+		out, err := runRestoreDump(t, c.args...)
+		if !errors.Is(err, errPlaintextDump) || out != "" {
+			t.Errorf("%s: %v, standard output %q", c.name, err, out)
+		}
+	}
+	t.Setenv(envKeyringCopy, "")
+	if out, err := runRestoreDump(t, "--hold"); err == nil || !strings.Contains(err.Error(), "./ma is older than the image") || out != "" {
+		t.Errorf("--hold without --dump-header: %v, standard output %q", err, out)
+	}
+
+	var stderr bytes.Buffer
+	in, out, done := startHoldWith(t, &stderr, holdArgs("plain", "x.dump.enc", "--plaintext")...)
+	_ = in.Close()
+	rest, _ := io.ReadAll(out)
+	if err := <-done; err == nil || !strings.Contains(err.Error(), "did not finish") || len(rest) != 0 {
+		t.Errorf("--plaintext, then no restore: %v\n%s", err, rest)
+	}
+	if !strings.Contains(stderr.String(), "restoring an unencrypted dump (--plaintext)") {
+		t.Errorf("--plaintext: standard error %q", stderr.String())
+	}
+}
+
+// TestRestoreDumpPlaintextArchive: on an archive that never used
+// encryption at rest (no archive key, no keyring), the dump backup writes
+// restores without --plaintext, and the note names no --plaintext.
+func TestRestoreDumpPlaintextArchive(t *testing.T) {
+	restoreEnvPlain(t)
+	dir := filepath.Join(t.TempDir(), "backups")
+	captureStdout(t, func() {
+		if err := runCmd(t, newBackupCmd(), "", dir); err != nil {
+			t.Fatal(err)
+		}
+	})
+	dumps, _ := filepath.Glob(filepath.Join(dir, "mailarchive-*.dump"))
+	if len(dumps) != 1 {
+		t.Fatalf("dumps %v", dumps)
+	}
+	if note, err := os.ReadFile(filepath.Join(dir, backupNoteName)); err != nil || strings.Contains(string(note), "--plaintext") {
+		t.Errorf("note: %v\n%s", err, note)
+	}
+	st, _ := switchDatabase(t)
+	out, err := runRestoreDump(t, dumps[0])
+	if err != nil {
+		t.Fatalf("restore-dump: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "restored the dump "+dumps[0]) || strings.Contains(out, "--plaintext") {
+		t.Errorf("output:\n%s", out)
+	}
+	if _, err := st.GetUserByName(context.Background(), leakMarker1); err != nil {
+		t.Errorf("restored user: %v", err)
+	}
+}
+
+// TestBackupNotePlaintext: the note of a dump without encryption on an
+// archive with an archive key or a keyring (after encryption disable)
+// gives restore-dump --plaintext, the command the restore needs; without
+// a sign it does not.
+func TestBackupNotePlaintext(t *testing.T) {
+	_, url := storetest.NewWithURL(t)
+	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
+	secret, _ := crypto.GenerateKey()
+	t.Setenv(config.EnvSecretKey, secret)
+	kek, err := blobcrypt.GenerateKEK()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name      string
+		key, ring bool
+		compose   bool
+		want      bool
+	}{
+		{"no sign", false, false, false, false},
+		{"no sign, ./ma", false, false, true, false},
+		{"archive key", true, false, false, true},
+		{"archive key, ./ma", true, false, true, true},
+		{"keyring", false, true, false, true},
+	} {
+		dataDir := t.TempDir()
+		t.Setenv(config.EnvDataDir, dataDir)
+		t.Setenv(config.EnvArchiveKey, "")
+		t.Setenv("MAIL_ARCHIVE_COMMAND", "")
+		if c.key {
+			t.Setenv(config.EnvArchiveKey, blobcrypt.EncodeKEK(kek))
+		}
+		if c.ring {
+			if err := os.MkdirAll(filepath.Dir(blobcrypt.KeyringPath(dataDir)), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(blobcrypt.KeyringPath(dataDir), []byte("x"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if c.compose {
+			t.Setenv("MAIL_ARCHIVE_COMMAND", "./ma")
+		}
+		a, err := openApp(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		note, err := backupNote(context.Background(), a, "mailarchive-x.dump", nil, time.Now())
+		a.close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := "mail-archive restore-dump --plaintext mailarchive-x.dump"
+		if c.compose {
+			cmd = "./ma restore-dump --plaintext <this directory>/mailarchive-x.dump"
+		}
+		if got := strings.Contains(note, cmd); got != c.want {
+			t.Errorf("%s: %q in the note: %v, want %v\n%s", c.name, cmd, got, c.want, note)
+		}
+		if !c.want && strings.Contains(note, "--plaintext") {
+			t.Errorf("%s: the note names --plaintext:\n%s", c.name, note)
+		}
 	}
 }

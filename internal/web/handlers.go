@@ -337,6 +337,12 @@ type messageJSON struct {
 	// OnHold: one of the user's own locations is on legal hold. Only for
 	// admins; locations in shared accounts do not count (decision 12).
 	OnHold *bool `json:"onHold,omitempty"`
+	// RemoteImagesRefused: the HTML body has inline SVG or MathML, so
+	// /html?images=1 loads no remote image (foreignContent). The stored
+	// body holds "<svg" or "<math" exactly when the served bytes do:
+	// inlining, the preamble and the neutralizers add none and split none
+	// (FuzzServedMailHTML).
+	RemoteImagesRefused bool `json:"remoteImagesRefused"`
 }
 
 func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
@@ -366,7 +372,7 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 	out := messageJSON{
 		summaryJSON: toSummary(d.MessageSummary),
 		MessageID:   d.MessageID, InReplyTo: d.InReplyTo, To: m.To, Cc: m.Cc, DateRaw: m.Date,
-		Text: m.Text, HasHTML: m.HTML != "", Truncated: m.Truncated,
+		Text: m.Text, HasHTML: m.HTML != "", RemoteImagesRefused: foreignContent(m.HTML) != "", Truncated: m.Truncated,
 		Parts: make([]partJSON, 0, len(m.Parts)), Locations: make([]locationJSON, 0, len(d.Locations)),
 		RetainUntil: d.RetainUntil,
 	}
@@ -493,9 +499,25 @@ const frameSandbox = "allow-same-origin allow-popups allow-popups-to-escape-sand
 // document).
 //
 // The served bytes are built by servedMailHTML: it also neutralizes
-// declarative shadow roots and srcdoc frames (#209), which the app's link
-// blocker cannot see into. Only the served rendering changes: the stored
-// message, /raw, /parts/{n} and exports keep the archived bytes.
+// declarative shadow roots and frames (srcdoc and src, #209), which the
+// app's link blocker cannot see into or which connect to the sender's host,
+// and the attributes with which a mail would change
+// how the browser makes requests: resource hints (<link rel>), referrer
+// policies (<meta name=referrer>, referrerpolicy) and crossorigin. No
+// directive of the CSP reliably governs resource hints, so they are removed
+// from the bytes, and Referrer-Policy: no-referrer holds for link clicks and
+// for remote <img> and SVG image elements. Images a mail would load through
+// CSS would send the archive's origin whatever the policy (neutralizecss.go),
+// so servedMailHTML makes every URL in the mail's CSS inert. With
+// ?images=1 no remote image is allowed for this response (img-src stays
+// data:) when the served bytes hold "<svg" or "<math" (foreignContent: in
+// SVG and MathML x/net/html and the browser can build different trees), or
+// when cssFetchSurvivors parses them and finds CSS that could still load
+// anything; the audit entry records images_refused: "svg", "math" or
+// "css". The mail itself is shown. The message's JSON tells the UI the
+// first case in advance (remoteImagesRefused). Only the served rendering
+// changes: the stored message, /raw, /parts/{n} and exports keep the
+// archived bytes.
 func (s *Server) handleMessageHTML(w http.ResponseWriter, r *http.Request) {
 	sha, ok := s.pathSHA(w, r)
 	if !ok {
@@ -524,10 +546,20 @@ func (s *Server) handleMessageHTML(w http.ResponseWriter, r *http.Request) {
 		s.log.Warn("inline images not read; shown as empty images", "message", sha, "err", err)
 	}
 	images := r.URL.Query().Get("images") == "1"
+	// The checks read exactly the bytes served below, and they run before
+	// the audit entry, so the entry records a refusal.
+	refused := ""
+	if images {
+		refused = remoteImagesRefusal(body)
+	}
 	e := s.messageEntry(r, "message.html", sha)
 	viaLocations(e, sc.Viewer, d.Locations)
 	if images {
 		e.Detail("images", true)
+	}
+	if refused != "" {
+		e.Detail("images_refused", refused)
+		s.log.Info("remote images refused: the mail has inline SVG or MathML, or its CSS could still load an image", "message", sha, "reason", refused)
 	}
 	e.Detail("inline_images", inl.Inlined)
 	if inl.Omitted > 0 {
@@ -537,9 +569,11 @@ func (s *Server) handleMessageHTML(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Only data: images (the inlined parts); remote ones only on request.
+	// Only data: images (the inlined parts); remote ones only on request,
+	// and never for a mail with inline SVG or MathML or whose CSS could
+	// still load an image.
 	img := "data:"
-	if images {
+	if images && refused == "" {
 		img += " https: http:"
 	}
 	h := w.Header()
@@ -558,26 +592,40 @@ func (s *Server) handleMessageHTML(w http.ResponseWriter, r *http.Request) {
 // body: inline images (cid:...) embedded as data: URLs (img-src has no
 // 'self', and the Fetch Metadata guard refuses image requests to the API,
 // so the frame could not load them from the parts endpoint), then the
-// preamble, then neutralizeHTML. That renames the attributes that make a
+// preamble, then neutralizeHTML, then neutralizeCSS. neutralizeHTML renames the attributes that make a
 // nested document the app's link blocker cannot reach (#209): declarative
-// shadow roots (shadowroot... on <template>) and srcdoc frames (srcdoc... on
-// <iframe>) get the prefix "data-", so their content is not shown. It also
+// shadow roots (shadowroot... on <template>) and frames (src..., srcdoc
+// among them, on <iframe> and <frame>) get the prefix "data-", so their
+// content is not shown and no connection is opened for them. It also
 // renames every href and xlink:href that is not an external link (not to
 // one of hosts, the app's own host names), and every ping, attributeName and
-// http-equiv (#459), so no link in the served HTML points into the app.
+// http-equiv (#459), so no link in the served HTML points into the app. And
+// it renames every rel, referrerpolicy, crossorigin, content,
+// attributionsrc, browsingtopics and sharedstoragewritable, so no <link> or
+// <meta> takes effect and the mail cannot change how the browser requests.
 //
-// neutralizeHTML runs last, on exactly the bytes that are served: any
-// rewrite after it could change how the scanned bytes tokenize. Inlining
+// neutralizeCSS then makes the URLs in the mail's CSS inert: it puts
+// "data:," in front of every URL in url() and "_" before the "(" of every
+// function not known to load nothing (neutralizecss.go).
+//
+// Neutralization (neutralizeHTML, then neutralizeCSS) runs last, on exactly
+// the bytes that are served: any rewrite after it could change how the
+// scanned bytes tokenize. neutralizeCSS only inserts bytes that end no token
+// and start none, in any context, and that form no name neutralizeHTML
+// renames, so neutralizeHTML is still a fixpoint on its output
+// (FuzzServedMailHTML). Its insertions can change what the CSS means only
+// where its Tokenizer and the browser disagree on context (inside SVG
+// <style>); the parse check in handleMessageHTML covers that. Inlining
 // replaces a cid: URL together with the bytes after it up to a quote, white
 // space, ")", "<" or ">", "=" and "/" included, so before the rename it
 // could turn an attribute value into attribute names. The preamble's tags
 // (<base target>, <style>) are candidates of any tag, but hold no attribute
-// the rename touches, so they come out as they are. The rename changes no
-// other byte: the output is the inlined
-// mail with the preamble and the prefixes inserted.
+// the rename touches, so they come out as they are. Neither rewrite changes
+// any other byte: the output is the inlined mail with the preamble, the
+// prefixes and the CSS insertions inserted.
 func servedMailHTML(html string, parts []mime.Part, open func() (io.ReadCloser, error), hosts appHosts) (string, inlineResult, error) {
 	inl, err := inlineImages(html, parts, open)
-	return neutralizeHTML(withPreamble(inl.HTML), hosts), inl, err
+	return neutralizeCSS(neutralizeHTML(withPreamble(inl.HTML), hosts)), inl, err
 }
 
 func (s *Server) handleMessageRaw(w http.ResponseWriter, r *http.Request) {

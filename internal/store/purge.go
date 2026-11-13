@@ -202,6 +202,7 @@ func purgeFromRow(r db.GetAccountPurgeRow) *AccountPurge {
 // PurgeKept counts the messages a purge keeps by where else they are.
 type PurgeKept struct {
 	Owner    string // empty: no owner
+	OwnerID  *int64 // nil: no owner
 	Account  string
 	Messages int64
 }
@@ -219,7 +220,10 @@ type PurgePreview struct {
 	DeletedBytes int64
 	Kept         int64
 	KeptIn       []PurgeKept
-	Blockers     PurgeBlockers
+	// KeptOutsideOwner of Kept are in no other account of the account's
+	// owner, only in accounts of other owners or of none.
+	KeptOutsideOwner int64
+	Blockers         PurgeBlockers
 	// Open is this account's open purge, if there is one.
 	Open *AccountPurge
 }
@@ -240,7 +244,7 @@ func (s *Store) PurgePreview(ctx context.Context, accountID int64) (*PurgePrevie
 	if err != nil {
 		return nil, err
 	}
-	return purgePreview(ctx, s.q, r, syncing[accountID])
+	return purgePreview(ctx, s.q, r.Account, syncing[accountID])
 }
 
 func purgePreview(ctx context.Context, q *db.Queries, r db.Account, syncing bool) (*PurgePreview, error) {
@@ -262,7 +266,10 @@ func purgePreview(ctx context.Context, q *db.Queries, r db.Account, syncing bool
 		return nil, err
 	}
 	for _, k := range kept {
-		p.KeptIn = append(p.KeptIn, PurgeKept{Owner: k.Owner, Account: k.Account, Messages: k.Messages})
+		p.KeptIn = append(p.KeptIn, PurgeKept{Owner: k.Owner, OwnerID: k.OwnerID, Account: k.Account, Messages: k.Messages})
+	}
+	if p.KeptOutsideOwner, err = q.PurgeKeptOutsideOwner(ctx, r.ID); err != nil {
+		return nil, err
 	}
 	b := &p.Blockers
 	b.NotRemoved = r.RemovedAt == nil
@@ -573,8 +580,9 @@ type PurgeBatchResult struct {
 // rules and the holds naming or covering it (PurgeBlockedError; the caller
 // then cancels the purge with CancelPurge), and that it deletes no more
 // than confirmed (PurgeChangedError). For the messages without a location
-// elsewhere it writes the tombstones and the deletion records, deletes
-// the account's locations of all of them, deletes those messages and
+// elsewhere it writes the tombstones and the deletion records; for all of
+// them a deletion mark of the account and its customer group (#539). It
+// deletes the account's locations of all of them, deletes those messages and
 // schedules their files for removal after grace. The caller holds the
 // blob lock exclusively, so no writer adds a location meanwhile. An audit
 // entry from WithAudit in ctx is written with it.
@@ -625,6 +633,13 @@ func (s *Store) PurgeBatch(ctx context.Context, purgeID int64, limit int, grace 
 			if _, err := q.InsertPurgeDeletions(ctx, last); err != nil {
 				return fmt.Errorf("deletion records: %w", err)
 			}
+		}
+		// Every purged message gets a mark of the account and its group,
+		// also one that stays in other accounts and so gets no tombstone:
+		// whether it is archived again in this group then never depends on
+		// other groups (#539).
+		if _, err := q.InsertPurgeMarks(ctx, db.InsertPurgeMarksParams{AccountID: a.ID, PurgeID: purgeID, Shas: shas}); err != nil {
+			return fmt.Errorf("deletion marks: %w", err)
 		}
 		if err := q.SetPurgeAccount(ctx, strconv.FormatInt(a.ID, 10)); err != nil {
 			return err
@@ -691,8 +706,9 @@ func (s *Store) CheckPurgeCount(ctx context.Context, purgeID int64) error {
 // transaction it re-checks the account, its rules and the holds naming it
 // (as PurgeBatch does; deleting the account would drop its rules), deletes
 // its folders and the account row with everything that belongs to it,
-// and marks the purge done. The account's name is free again. An audit
-// entry from WithAudit in ctx is written with it.
+// and marks the purge done. The account's name is free again. It requests
+// a usage snapshot (requestUsageRefresh). An audit entry from WithAudit in
+// ctx is written with it.
 func (s *Store) FinishPurge(ctx context.Context, purgeID int64) (*AccountPurge, error) {
 	err := s.inTx(ctx, func(q *db.Queries) error {
 		if err := q.LockRetentionChanges(ctx, retentionLockClass); err != nil {
@@ -729,6 +745,10 @@ func (s *Store) FinishPurge(ctx context.Context, purgeID int64) (*AccountPurge, 
 		if err := one(q.FinishAccountPurge(ctx, purgeID)); err != nil {
 			return err
 		}
+		// The group's figure drops only at a snapshot.
+		if err := requestUsageRefresh(ctx, q); err != nil {
+			return err
+		}
 		if e := auditFrom(ctx); e != nil {
 			r, err := q.GetAccountPurge(ctx, purgeID)
 			if err != nil {
@@ -752,9 +772,9 @@ func (s *Store) FinishPurge(ctx context.Context, purgeID int64) (*AccountPurge, 
 
 // CancelPurge cancels a confirmed purge, with a note on why. What its
 // batches deleted stays deleted; the account stays removed, with the mail
-// that is left. Unknown IDs are ErrNotFound, a purge that is not confirmed
-// is ErrPurgeState. An audit entry from WithAudit in ctx is written with
-// it.
+// that is left, and a usage snapshot is requested. Unknown IDs are
+// ErrNotFound, a purge that is not confirmed is ErrPurgeState. An audit
+// entry from WithAudit in ctx is written with it.
 func (s *Store) CancelPurge(ctx context.Context, purgeID int64, note string) error {
 	note = strings.TrimSpace(note)
 	if note == "" {
@@ -774,6 +794,10 @@ func (s *Store) CancelPurge(ctx context.Context, purgeID int64, note string) err
 		}
 		if n == 0 {
 			return fmt.Errorf("purge %d is %s and cannot be cancelled: %w", purgeID, r.State, ErrPurgeState)
+		}
+		// What its batches deleted leaves the group's figure at a snapshot.
+		if err := requestUsageRefresh(ctx, q); err != nil {
+			return err
 		}
 		if e := auditFrom(ctx); e != nil {
 			setPurgeTarget(e, r.AccountID, r.AccountName)

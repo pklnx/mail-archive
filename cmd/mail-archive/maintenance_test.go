@@ -192,16 +192,19 @@ func TestExportCommand(t *testing.T) {
 	}
 }
 
-// fakePgDump writes a pg_dump that records its arguments and environment.
+// fakePgDump writes a pg_dump that records its arguments and environment
+// (logDir/version-env for --version, logDir/env for the dump). It fails
+// while logDir/fail exists: pg_dump gets no variable of the test's
+// environment.
 func fakePgDump(t *testing.T, version string) (path, logDir string) {
 	t.Helper()
 	dir := t.TempDir()
 	logDir = t.TempDir()
 	script := `#!/bin/sh
-if [ "$1" = --version ]; then echo "pg_dump (PostgreSQL) ` + version + `"; exit 0; fi
+if [ "$1" = --version ]; then env > "` + logDir + `/version-env"; echo "pg_dump (PostgreSQL) ` + version + `"; exit 0; fi
 printf '%s\n' "$@" > "` + logDir + `/args"
 env > "` + logDir + `/env"
-if [ -n "$FAKE_FAIL" ]; then echo "connection refused" >&2; printf 'half'; exit 1; fi
+if [ -e "` + logDir + `/fail" ]; then echo "connection refused" >&2; printf 'half'; exit 1; fi
 printf 'PGDMP'
 `
 	path = filepath.Join(dir, "pg_dump")
@@ -213,13 +216,12 @@ printf 'PGDMP'
 
 func TestBackup(t *testing.T) {
 	pgDump, logDir := fakePgDump(t, "18.1 (Debian 18.1-1)")
-	t.Setenv("PGPASSWORD", "inherited")
-	t.Setenv("PGAPPNAME", "inherited")
+	basics := setEnvMarkers(t)
 	dir := filepath.Join(t.TempDir(), "backups")
+	const dbURL = "postgres://mailarchive:s3cret-pw@db.internal:5433/archive?sslmode=require"
 	job := backupJob{
-		PgDump:      pgDump,
-		DatabaseURL: "postgres://mailarchive:s3cret-pw@db.internal:5433/archive?sslmode=require",
-		Dir:         dir, Name: "mailarchive-20261007T190102Z.dump", ServerMajor: 18, Note: "the note\n",
+		PgDump: testPgTool(t, pgDump, dbURL, 18),
+		Dir:    dir, Name: "mailarchive-20261007T190102Z.dump", Note: "the note\n",
 	}
 	path, err := runBackup(context.Background(), job)
 	if err != nil {
@@ -239,8 +241,8 @@ func TestBackup(t *testing.T) {
 			t.Errorf("env lacks %q", want)
 		}
 	}
-	if strings.Contains(string(env), "inherited") {
-		t.Error("inherited PG variables reach pg_dump")
+	for _, name := range []string{"version-env", "env"} {
+		assertPgToolEnv(t, "pg_dump "+name, filepath.Join(logDir, name), append(basics, "PGPASSWORD=s3cret-pw", "PGHOST=db.internal")...)
 	}
 	for _, p := range []string{path, filepath.Join(dir, backupNoteName)} {
 		fi, err := os.Stat(p)
@@ -253,7 +255,9 @@ func TestBackup(t *testing.T) {
 	}
 
 	// A failing pg_dump leaves neither a dump nor a partial file.
-	t.Setenv("FAKE_FAIL", "1")
+	if err := os.WriteFile(filepath.Join(logDir, "fail"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	job.Name = "second.dump"
 	if _, err := runBackup(context.Background(), job); err == nil || !strings.Contains(err.Error(), "connection refused") {
 		t.Errorf("failing pg_dump: %v", err)
@@ -264,8 +268,11 @@ func TestBackup(t *testing.T) {
 
 	// An older pg_dump than the server is refused before it runs.
 	old, oldLog := fakePgDump(t, "16.4")
-	job.PgDump, job.Name = old, "third.dump"
-	if _, err := runBackup(context.Background(), job); err == nil || !strings.Contains(err.Error(), "version 16, the server 18") {
+	conn, err := resolvePgToolConn("pg_dump", dbURL, os.Environ())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := checkPgTool(context.Background(), "pg_dump", old, conn, 18); err == nil || !strings.Contains(err.Error(), "version 16, the server 18") {
 		t.Errorf("old pg_dump: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(oldLog, "args")); !os.IsNotExist(err) {
@@ -301,14 +308,128 @@ func TestBackupNote(t *testing.T) {
 	}
 }
 
-func TestSSLSettings(t *testing.T) {
-	got := sslSettings("postgresql://u@h/db?sslmode=verify-full&sslrootcert=/ca.pem&application_name=x")
-	if len(got) != 2 || got["PGSSLMODE"] != "verify-full" || got["PGSSLROOTCERT"] != "/ca.pem" {
-		t.Errorf("URL: %v", got)
+// envMarker is a value no variable passed to pg_dump or pg_restore may hold.
+const envMarker = "marker-must-not-leak"
+
+// setEnvMarkers puts the marker into the secrets of this process, an
+// unrelated variable and a parent PGPASSWORD, gives every allowlisted
+// basic but PATH a known value, and returns those basics as NAME=value.
+func setEnvMarkers(t *testing.T) []string {
+	t.Helper()
+	tmp := t.TempDir() // TMPDIR must stay a usable directory
+	var basics []string
+	for _, name := range []string{"MAIL_ARCHIVE_SECRET_KEY", "MAIL_ARCHIVE_ARCHIVE_KEY", "MAIL_ARCHIVE_DATABASE_URL",
+		"MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION", "MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL", "UNRELATED_L15", "PGPASSWORD", "PGAPPNAME"} {
+		t.Setenv(name, envMarker+"-"+name)
 	}
-	got = sslSettings("host=h dbname=db sslmode='verify-ca' sslkey=/k.pem")
-	if len(got) != 2 || got["PGSSLMODE"] != "verify-ca" || got["PGSSLKEY"] != "/k.pem" {
-		t.Errorf("key=value: %v", got)
+	for _, name := range pgToolEnvNames {
+		value := "basic-" + name
+		switch name {
+		case "PATH": // the fake tools are shell scripts
+			continue
+		case "TMPDIR":
+			value = tmp
+		}
+		t.Setenv(name, value)
+		basics = append(basics, name+"="+value)
+	}
+	return basics
+}
+
+// pgURLEnvNames are the variables pgToolConn.env derives from the database
+// URL.
+var pgURLEnvNames = []string{"PGHOST", "PGPORT", "PGUSER", "PGDATABASE", "PGPASSWORD", "PGSSLMODE", "PGSSLROOTCERT", "PGSSLCERT", "PGSSLKEY",
+	"PGSSLSNI", "PGSSLNEGOTIATION", "PGTARGETSESSIONATTRS", "PGCHANNELBINDING", "PGREQUIREAUTH", "PGGSSENCMODE"}
+
+// checkPgToolEnv reports what is wrong with env, the environment pg_dump or
+// pg_restore got after setEnvMarkers: a marker, a variable outside the
+// allowlist or a missing want entry.
+func checkPgToolEnv(env []string, want ...string) []string {
+	allowed := map[string]bool{}
+	for _, name := range append(append([]string{}, pgToolEnvNames...), pgURLEnvNames...) {
+		allowed[name] = true
+	}
+	var problems []string
+	have := map[string]bool{}
+	for _, kv := range env {
+		have[kv] = true
+		name, _, _ := strings.Cut(kv, "=")
+		if strings.Contains(kv, envMarker) {
+			problems = append(problems, "marker in "+name)
+		}
+		if !allowed[name] {
+			problems = append(problems, "not allowlisted: "+name)
+		}
+	}
+	for _, kv := range want {
+		if !have[kv] {
+			problems = append(problems, "lacks "+kv)
+		}
+	}
+	return problems
+}
+
+// assertPgToolEnv checks the environment a fake tool wrote to path with env.
+func assertPgToolEnv(t *testing.T, what, path string, want ...string) {
+	t.Helper()
+	data, err := os.ReadFile(path) //nolint:gosec // the test's own log
+	if err != nil {
+		t.Errorf("%s: %v", what, err)
+		return
+	}
+	var env []string
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		// env prints the variables the shell itself sets, too.
+		if name, _, _ := strings.Cut(line, "="); name != "PWD" && name != "SHLVL" && name != "_" && name != "OLDPWD" {
+			env = append(env, line)
+		}
+	}
+	for _, p := range checkPgToolEnv(env, want...) {
+		t.Errorf("%s: %s", what, p)
+	}
+}
+
+// TestPgEnvAllowlist: pg_dump and pg_restore get the libpq variables of the
+// URL and the allowlisted basics, never a MAIL_ARCHIVE_* variable, an
+// unrelated one or a PG* variable of this process.
+func TestPgEnvAllowlist(t *testing.T) {
+	// The allowlist is fixed; a change here is a security change.
+	if got, want := strings.Join(pgToolEnvNames, " "), "PATH HOME TMPDIR TZ LANG LC_ALL LC_CTYPE LC_MESSAGES LD_LIBRARY_PATH "+
+		"SSL_CERT_FILE SSL_CERT_DIR OPENSSL_CONF KRB5CCNAME KRB5_CONFIG"; got != want {
+		t.Errorf("allowlist %q, want %q", got, want)
+	}
+	basics := setEnvMarkers(t)
+	t.Setenv("PATH", "/opt/pg/bin:/usr/bin")
+	env := pgToolEnv(t, "postgres://u:url-pw@db.example:6543/arch?sslmode=require&connect_timeout=5&application_name=x")
+	for _, p := range checkPgToolEnv(env, append(basics, "PATH=/opt/pg/bin:/usr/bin", "PGHOST=db.example", "PGPORT=6543", "PGUSER=u",
+		"PGDATABASE=arch", "PGPASSWORD=url-pw", "PGSSLMODE=require", "PGGSSENCMODE=disable",
+		"PGSSLROOTCERT=basic-HOME/.postgresql/root.crt", "PGSSLCERT=basic-HOME/.postgresql/postgresql.crt", "PGSSLKEY=basic-HOME/.postgresql/postgresql.key",
+		"PGSSLSNI=1", "PGSSLNEGOTIATION=postgres", "PGTARGETSESSIONATTRS=any", "PGCHANNELBINDING=prefer")...) {
+		t.Error(p)
+	}
+	// Every basic (PATH included), the five connection variables, the TLS
+	// variables but the empty require_auth, and PGGSSENCMODE=disable; the
+	// other URL parameters are not passed on, as before, and neither is
+	// the parent's PGAPPNAME (setEnvMarkers). TestPgToolConn covers the
+	// TLS keys.
+	if len(env) != len(pgToolEnvNames)+5+8+1 {
+		t.Errorf("%d variables: %v", len(env), env)
+	}
+
+	// An unset basic is left out, not passed on empty. (A URL without a
+	// password takes PGPASSWORD of this process as the app's connection
+	// does, through pgconn, so it is unset here.)
+	for _, name := range []string{"TZ", "PGPASSWORD"} {
+		t.Setenv(name, "")
+		if err := os.Unsetenv(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	env = pgToolEnv(t, "postgres://u@db.example/arch")
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "TZ=") || strings.HasPrefix(kv, "PGPASSWORD=") || strings.Contains(kv, envMarker) {
+			t.Errorf("passed on: %s", kv)
+		}
 	}
 }
 

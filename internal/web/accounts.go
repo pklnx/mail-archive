@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,8 @@ import (
 	"time"
 
 	"github.com/pklnx/mail-archive/internal/archive"
+	"github.com/pklnx/mail-archive/internal/config"
+	"github.com/pklnx/mail-archive/internal/imapsync"
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
@@ -123,9 +126,15 @@ type folderJSON struct {
 	Delimiter *string `json:"delimiter"`
 }
 
-// smtpServerJSON says the SMTP server is on. Where Postfix reaches it (host
-// and published port) only the admin knows, so it carries no address.
-type smtpServerJSON struct{}
+// smtpServerJSON says the SMTP server is on, and whether mail servers log
+// in (#395): the mail server setup shows the lines of that mode. Where
+// Postfix reaches it (host and published port) only the admin knows, so it
+// carries no address.
+type smtpServerJSON struct {
+	// Auth is "required" (MAIL_ARCHIVE_SMTP_AUTH=required, the default:
+	// STARTTLS and an SMTP secret) or "off" (the allowlist alone).
+	Auth string `json:"auth"`
+}
 
 type accountsResponse struct {
 	Accounts []accountJSON `json:"accounts"`
@@ -153,6 +162,10 @@ type accountsResponse struct {
 	// OtherFailing, for admins only, counts the failing accounts of other
 	// users. Admins never see their names.
 	OtherFailing *int64 `json:"otherFailing,omitempty"`
+	// NotifyEmailBounced, for admins only: a relay refused the admin's own
+	// notification address, which gets no alert mail until it is
+	// confirmed again (#397, part 5).
+	NotifyEmailBounced bool `json:"notifyEmailBounced,omitempty"`
 }
 
 // auditorAccountJSON is an account of an auditor's grant (#393): what
@@ -227,10 +240,22 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
+	// The open purge is read before the accounts: a purge that finishes in
+	// between deletes its account, so the list never shows it removed and
+	// no longer purging, a state it never had. The page would then poll
+	// slowly and keep the deleted account for 30 s (#555 CI).
+	purge, err := s.store.OpenAccountPurge(ctx)
+	if err != nil {
+		s.failStore(w, r, err)
+		return
+	}
 	accounts, err := s.store.ListOwnedAccounts(ctx, userID(r))
 	if err != nil {
 		s.failStore(w, r, err)
 		return
+	}
+	if s.afterAccountsListed != nil {
+		s.afterAccountsListed()
 	}
 	sc, ok := s.requestScope(w, r)
 	if !ok {
@@ -278,11 +303,6 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 		s.failStore(w, r, err)
 		return
 	}
-	purge, err := s.store.OpenAccountPurge(ctx)
-	if err != nil {
-		s.failStore(w, r, err)
-		return
-	}
 	shares, err := s.store.OwnerShares(ctx, me)
 	if err != nil {
 		s.failStore(w, r, err)
@@ -323,7 +343,10 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 	}
 	out := accountsResponse{Accounts: make([]accountJSON, 0, len(accounts)), Shared: shared, Manage: s.syncer != nil && s.runner != nil, AlertAfter: s.alertAfter}
 	if s.smtpListen != "" {
-		out.SMTP = &smtpServerJSON{}
+		out.SMTP = &smtpServerJSON{Auth: config.SMTPAuthOff}
+		if s.smtpAuth {
+			out.SMTP.Auth = config.SMTPAuthRequired
+		}
 	}
 	if sess := currentSession(r); sess != nil && sess.IsAdmin {
 		failing, err := s.store.CountFailingByOwner(ctx, s.alertAfter)
@@ -338,6 +361,10 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		out.OtherFailing = &others
+		if out.NotifyEmailBounced, err = s.notifyEmailBounced(ctx, me); err != nil {
+			s.failStore(w, r, err)
+			return
+		}
 	}
 	now := s.currentTime()
 	if sched := s.schedule(); sched.Sync > 0 {
@@ -670,9 +697,11 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusConflict, fmt.Sprintf("an account named %q already exists (removed accounts keep their name)", a.Name), nil)
 		return
 	}
-	folders, err := s.syncer.CheckLogin(r.Context(), a, *in.Password)
-	if err != nil {
-		s.fail(w, r, http.StatusUnprocessableEntity, "login failed: "+err.Error(), nil)
+	var folders []imapsync.Folder
+	if !s.loginCheck(w, r, a, false, http.StatusUnprocessableEntity, func(ctx context.Context) (err error) {
+		folders, err = s.syncer.CheckLogin(ctx, a, *in.Password)
+		return err
+	}) {
 		return
 	}
 	// Trash and spam are archived like any folder, but only after the user
@@ -822,7 +851,6 @@ func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusConflict, store.ErrNoServer.Error(), nil)
 		return
 	}
-	ctx := r.Context()
 	own, err := s.ownIntervalChange(&in, a.SyncInterval)
 	if err != nil {
 		s.fail(w, r, http.StatusBadRequest, err.Error(), nil)
@@ -855,8 +883,10 @@ func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 			}
 			password = pw
 		}
-		if _, err := s.syncer.CheckLogin(ctx, &conn, password); err != nil {
-			s.fail(w, r, http.StatusUnprocessableEntity, "login failed: "+err.Error(), nil)
+		if !s.loginCheck(w, r, &conn, false, http.StatusUnprocessableEntity, func(ctx context.Context) error {
+			_, err := s.syncer.CheckLogin(ctx, &conn, password)
+			return err
+		}) {
 			return
 		}
 		enc, err := archive.SealPassword(s.syncer.Sealer, a.ID, password)
@@ -947,9 +977,14 @@ func (s *Server) handleServerFolders(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	list, err := s.syncer.ListFolders(r.Context(), a)
-	if err != nil {
-		s.fail(w, r, http.StatusBadGateway, "cannot list folders: "+err.Error(), nil)
+	// With the saved password, which the request cannot choose: the check
+	// does not count against the IMAP login, so that nobody can block
+	// another user's folder list. Failing upstream, it answers 502.
+	var list []imapsync.Folder
+	if !s.loginCheck(w, r, a, true, http.StatusBadGateway, func(ctx context.Context) (err error) {
+		list, err = s.syncer.ListFolders(ctx, a)
+		return err
+	}) {
 		return
 	}
 	out := make([]serverFolderJSON, 0, len(list))
@@ -968,6 +1003,9 @@ func (s *Server) handleSyncAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	a, ok := s.pathIMAPAccount(w, r)
 	if !ok {
+		return
+	}
+	if s.refuseStorageFull(w, a.GroupID) {
 		return
 	}
 	var in struct {
@@ -998,6 +1036,24 @@ func (s *Server) handleSyncAccount(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusAccepted, map[string]int{"queued": 1})
 }
 
+// errStorageFull: a manual sync while the account's group or the instance
+// is full (#397).
+const errStorageFull = "storage_full"
+
+// refuseStorageFull answers 409 storage_full while the storage gate pauses
+// the group's syncs. The answer is the same whichever limit was reached
+// (the group's, the instance's or the disk's): users learn only that new
+// mail is not archived, never another group's figures or state.
+func (s *Server) refuseStorageFull(w http.ResponseWriter, group *int64) bool {
+	if !s.storagePaused(group) {
+		return false
+	}
+	s.writeJSON(w, http.StatusConflict, apiError{
+		Error: "the storage limit is reached: new mail is not archived until space is freed", Code: errStorageFull,
+	})
+	return true
+}
+
 // reconcileFloor: the reconcile button skips folders compared this
 // recently, so that repeated clicks do not hammer the mail server.
 const reconcileFloor = 5 * time.Minute
@@ -1015,6 +1071,10 @@ func (s *Server) handleSyncAll(w http.ResponseWriter, r *http.Request) {
 	for _, a := range accounts {
 		if a.Enabled && a.RemovedAt == nil && a.Kind == store.KindIMAP {
 			ids = append(ids, a.ID)
+			// The caller's own accounts are all in the caller's group.
+			if s.refuseStorageFull(w, a.GroupID) {
+				return
+			}
 		}
 	}
 	// All of the caller's own accounts: their own act, in their group.

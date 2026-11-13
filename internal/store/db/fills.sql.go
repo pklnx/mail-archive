@@ -50,11 +50,14 @@ WITH p AS (
     ORDER BY l.message_sha256, l.folder_id, l.uid
     LIMIT (SELECT max_rows FROM p)
 )
-INSERT INTO message_locations (message_sha256, folder_id, uidvalidity, uid, flags, internal_date, fill_id)
+INSERT INTO message_locations (message_sha256, folder_id, uidvalidity, uid, flags, internal_date, fill_id, attachment_text_ok)
 SELECT b.message_sha256, p.journal_id, p.uidvalidity, p.last_uid + row_number() OVER (ORDER BY b.message_sha256),
-       b.flags, b.internal_date, p.fill_id
+       b.flags, b.internal_date, p.fill_id,
+       EXISTS (SELECT 1 FROM message_locations o
+               WHERE o.folder_id = ANY (p.folders) AND o.message_sha256 = b.message_sha256 AND o.attachment_text_ok)
+       OR NOT EXISTS (SELECT 1 FROM messages m WHERE m.sha256 = b.message_sha256 AND m.has_attachment)
 FROM batch b, p
-RETURNING message_sha256
+RETURNING message_sha256, attachment_text_ok
 `
 
 type ConvertLegacyFillBatchParams struct {
@@ -67,12 +70,20 @@ type ConvertLegacyFillBatchParams struct {
 	MaxRows     int32
 }
 
+type ConvertLegacyFillBatchRow struct {
+	MessageSha256    string
+	AttachmentTextOk bool
+}
+
 // Copies the locations of a fill's own folders into the journal folder,
 // one per message and none for a message the journal folder holds, in
 // the order of the hashes after @after. The copies take the journal
 // folder's UIDVALIDITY and UIDs after @last_uid; the caller holds its row
-// lock and reserves the UIDs (AllocateUIDs).
-func (q *Queries) ConvertLegacyFillBatch(ctx context.Context, arg ConvertLegacyFillBatchParams) ([]string, error) {
+// lock and reserves the UIDs (AllocateUIDs). A copy shows its message's
+// attachment text (attachment_text_ok) when a location it is copied from
+// does, since they are in the same account and group, or when the message
+// has no attachment; the caller queues the extraction of the others.
+func (q *Queries) ConvertLegacyFillBatch(ctx context.Context, arg ConvertLegacyFillBatchParams) ([]ConvertLegacyFillBatchRow, error) {
 	rows, err := q.db.Query(ctx, convertLegacyFillBatch,
 		arg.JournalID,
 		arg.Uidvalidity,
@@ -86,13 +97,13 @@ func (q *Queries) ConvertLegacyFillBatch(ctx context.Context, arg ConvertLegacyF
 		return nil, err
 	}
 	defer rows.Close()
-	var items []string
+	var items []ConvertLegacyFillBatchRow
 	for rows.Next() {
-		var message_sha256 string
-		if err := rows.Scan(&message_sha256); err != nil {
+		var i ConvertLegacyFillBatchRow
+		if err := rows.Scan(&i.MessageSha256, &i.AttachmentTextOk); err != nil {
 			return nil, err
 		}
-		items = append(items, message_sha256)
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -379,35 +390,59 @@ func (q *Queries) JournalFolder(ctx context.Context, arg JournalFolderParams) (i
 	return id, err
 }
 
-const journaledMessageIDs = `-- name: JournaledMessageIDs :many
-SELECT DISTINCT m.message_id::text AS message_id
+const journaledMatchCandidates = `-- name: JournaledMatchCandidates :many
+SELECT DISTINCT m.message_id::text AS message_id, m.sent_at, m.from_addr, m.subject
 FROM messages m
 JOIN message_locations l ON l.message_sha256 = m.sha256
 JOIN envelopes e ON e.location_id = l.id
 JOIN folders f ON f.id = l.folder_id
 WHERE f.account_id = $1 AND m.message_id = ANY ($2::text[])
+  AND m.sent_at IS NOT NULL AND date_trunc('second', m.sent_at) = ANY ($3::timestamptz[])
+LIMIT $4
 `
 
-type JournaledMessageIDsParams struct {
+type JournaledMatchCandidatesParams struct {
 	AccountID int64
 	Ids       []string
+	Dates     []time.Time
+	MaxRows   int32
 }
 
-// Message-IDs among @ids of messages the account received over SMTP (with
-// an envelope); uses messages_message_id_idx.
-func (q *Queries) JournaledMessageIDs(ctx context.Context, arg JournaledMessageIDsParams) ([]string, error) {
-	rows, err := q.db.Query(ctx, journaledMessageIDs, arg.AccountID, arg.Ids)
+type JournaledMatchCandidatesRow struct {
+	MessageID string
+	SentAt    *time.Time
+	FromAddr  *string
+	Subject   *string
+}
+
+// The Message-ID, Date, From and Subject of messages the account received
+// over SMTP (with an envelope) whose Message-ID is among @ids and whose
+// Date, to the second, among @dates: the candidates for the journaled check
+// of a fill or a journal import, which compares all four. Uses
+// messages_message_id_idx; at most @max_rows rows.
+func (q *Queries) JournaledMatchCandidates(ctx context.Context, arg JournaledMatchCandidatesParams) ([]JournaledMatchCandidatesRow, error) {
+	rows, err := q.db.Query(ctx, journaledMatchCandidates,
+		arg.AccountID,
+		arg.Ids,
+		arg.Dates,
+		arg.MaxRows,
+	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []string
+	var items []JournaledMatchCandidatesRow
 	for rows.Next() {
-		var message_id string
-		if err := rows.Scan(&message_id); err != nil {
+		var i JournaledMatchCandidatesRow
+		if err := rows.Scan(
+			&i.MessageID,
+			&i.SentAt,
+			&i.FromAddr,
+			&i.Subject,
+		); err != nil {
 			return nil, err
 		}
-		items = append(items, message_id)
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

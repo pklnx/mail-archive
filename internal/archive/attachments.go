@@ -82,18 +82,36 @@ func (x *AttachmentIndexer) log() *slog.Logger {
 	return x.Logger
 }
 
+// CodeMessageUnreadable is the job error of a message whose file cannot
+// be read while its stored attachment text can be searched: locations
+// that do not show that text yet cannot get it without an extraction. The
+// job fails at once; `jobs retry attachment_text` queues it again.
+const CodeMessageUnreadable = "message file unreadable"
+
 // extractMessage is the handler of store.JobAttachmentText. Results of the
 // extraction (a damaged PDF, a timeout, a password) are stored as statuses
 // and the job is done; only a cancel (shutdown, a lost lease) and errors
 // of the database are errors. A message whose extraction crashed the
 // process is retried by the queue up to its attempts, and then fails.
+//
+// Attachment text per location (#539, part 2): at its start the job reads
+// the message's locations that do not show the text yet (needed). It ends
+// at once when the message is done at the current version and none is
+// needed; otherwise it always extracts, also for a message that is done,
+// and stores the texts (unless done) and the flags of needed in one
+// transaction. A location inserted after the start is not in needed: its
+// save asked this job to run once more (store.NewJob.RequeueIfRunning).
 func (x *AttachmentIndexer) extractMessage(ctx context.Context, j jobs.Job) error {
 	sha := j.MessageSHA256
 	if sha == "" {
 		sha = j.Key
 	}
+	needed, err := x.Store.AttachmentTextNeeded(ctx, sha)
+	if err != nil {
+		return err
+	}
 	done, err := x.Store.AttachmentIndexed(ctx, sha)
-	if err != nil || done {
+	if err != nil || (done && len(needed) == 0) {
 		return err
 	}
 	m, err := x.Store.GetMessage(ctx, sha)
@@ -107,9 +125,13 @@ func (x *AttachmentIndexer) extractMessage(ctx context.Context, j jobs.Job) erro
 	f, err := x.Blobs.OpenMessage(m.SHA256)
 	if err != nil {
 		// Done without text, so that the backfill does not queue it again;
-		// as reindex does for bodies.
+		// as reindex does for bodies. A message whose stored text can be
+		// searched fails instead (store.AttachmentTextUnreadable).
 		x.log().Warn("attachment text: cannot read message", "sha256", sha, "err", err)
-		_, err := x.Store.SaveAttachmentTexts(ctx, sha, nil)
+		err := x.Store.AttachmentTextUnreadable(ctx, sha, needed)
+		if errors.Is(err, store.ErrAttachmentTextUnreadable) {
+			return jobs.Permanent(jobs.Code(CodeMessageUnreadable, err))
+		}
 		return err
 	}
 	results, err := x.Extractor.Message(ctx, f)
@@ -134,7 +156,7 @@ func (x *AttachmentIndexer) extractMessage(ctx context.Context, j jobs.Job) erro
 		// Never the file name or text: no message content in logs.
 		x.log().Debug("attachment text", "sha256", sha, "part", r.Part, "status", r.Status)
 	}
-	stored, err := x.Store.SaveAttachmentTexts(ctx, sha, texts)
+	stored, err := x.Store.SaveAttachmentTexts(ctx, sha, texts, needed)
 	if err != nil {
 		return err
 	}
@@ -142,7 +164,7 @@ func (x *AttachmentIndexer) extractMessage(ctx context.Context, j jobs.Job) erro
 		x.extracted.Add(int64(withText))
 	}
 	x.log().Debug("attachment text extracted", "sha256", sha, "attachments", len(results), "with_text", withText,
-		"stored", stored, "took", time.Since(start).Round(time.Millisecond))
+		"stored", stored, "locations", len(needed), "took", time.Since(start).Round(time.Millisecond))
 	if x.afterSave != nil {
 		x.afterSave(sha)
 	}

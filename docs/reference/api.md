@@ -21,9 +21,9 @@ answer `404`.
 | Endpoint | Description |
 |---|---|
 | `GET /api/session` | The logged-in user: `{"user": {"name": "patrick", "admin": true, "language": "auto", "locale": "auto"}}`. Without a session `401` with `{"error": "login required", "setupRequired": false}`; `setupRequired` is `true` while no user exists, `passkeyOrigin` says where passkeys work (missing when they are off). |
-| `POST /api/session` | Log in with `{"username": "...", "password": "..."}`. Answers like `GET` and sets the cookie. For a user with 2FA it answers `200 {"twoFactorRequired": true, "challenge": "..."}` instead and sets no cookie; the challenge is valid for 5 minutes and once. `401` for a wrong name or password, `403` for a locked user and for an [auditor](#auditors) without an active grant (`"you have no active auditor access"`, only after a correct password and second factor), `429` with `Retry-After` (and `retryAfter` in seconds) after too many failures. |
-| `POST /api/session/2fa` | Second step for users with 2FA: `{"challenge": "...", "code": "..."}`. `code` is a TOTP code or a recovery code. Answers like `GET` and sets the cookie. `401` for a wrong code or an expired challenge, `429` like the password step. |
-| `POST /api/session/passkey/begin` | Start a passkey login: `{"token", "publicKey"}`, where `publicKey` holds the options for `navigator.credentials.get()` (binary values in base64url). `503` without `MAIL_ARCHIVE_PUBLIC_URL`, `429` after 30 starts per minute from one address (IPv6: one `/64`). |
+| `POST /api/session` | Log in with `{"username": "...", "password": "..."}`. Answers like `GET` and sets the cookie. For a user with 2FA it answers `200 {"twoFactorRequired": true, "challenge": "..."}` instead and sets no cookie; the challenge is valid for 5 minutes and once. `401` for a wrong name or password, `403` for a locked user and for an [auditor](#auditors) without an active grant (`"you have no active auditor access"`, only after a correct password and second factor), `429` with `Retry-After` (and `retryAfter` in seconds) after too many failures, and after waiting 60 seconds for parallel attempts ahead of it. |
+| `POST /api/session/2fa` | Second step for users with 2FA: `{"challenge": "...", "code": "..."}`. `code` is a TOTP code or a recovery code. Answers like `GET` and sets the cookie. `401` for a wrong code or an expired challenge. A challenge accepts at most 3 codes: the wrong code that uses the last one, and every request after it, answer `401` with `too many wrong codes; the login has expired, log in again`, and the login starts again with the password. `429` like the password step. |
+| `POST /api/session/passkey/begin` | Start a passkey login: `{"token", "publicKey"}`, where `publicKey` holds the options for `navigator.credentials.get()` (binary values in base64url). `503` without `MAIL_ARCHIVE_PUBLIC_URL`, `429` with `Retry-After` (and `retryAfter` in seconds) after 30 starts per minute from one address (IPv6: one `/64`), after 50 starts within 5 minutes from one address (IPv6: one `/64`) or 200 from one IPv6 `/48`, and after 50,000 starts within 5 minutes in total. For the limits within 5 minutes, `Retry-After` is the exact time until the oldest start that blocks this one is 5 minutes old. |
 | `POST /api/session/passkey/finish` | `{"token": "...", "credential": {...}}` with the browser's answer in JSON. Answers like `POST /api/session` and sets the cookie. `401` for a passkey that is not accepted or an expired token; for an unknown passkey also `"unknownCredential": true` with `credentialId` and `rpId`. `403` for a locked user. |
 | `DELETE /api/session` | Log out (`204`). |
 
@@ -57,12 +57,13 @@ curl -H "Authorization: Bearer $KEY" -o mail.eml http://localhost:8080/api/messa
 curl -X POST -H "Authorization: Bearer $KEY" http://localhost:8080/api/sync
 ```
 
-A key has one or both scopes:
+A key has `read`, `sync` or both, or, for admins, `metrics` alone:
 
 | Scope | Endpoints |
 |---|---|
 | `read` | `GET /api/status`, `GET /api/accounts`, `GET /api/messages` (list and search) and every `GET /api/messages/{id}…` endpoint |
 | `sync` | `POST /api/sync`, `POST /api/accounts/{name}/sync` |
+| `metrics` | `GET /api/metrics` only. Only an admin creates it (`403` for anyone else), and it is the key's only scope (`400` with another). It works while its owner is an admin: a demoted owner's key gets `403`. |
 
 `sync` does not include `read`: a cron job that only starts syncs needs no
 access to mail. Everything else (logins, the profile, users, adding and
@@ -76,7 +77,7 @@ admin's own accounts and those shared with them, like a session.
 | Endpoint outside the key's scopes | `403` `{"error": "this API key lacks the sync scope", "scope": "sync"}` |
 | Endpoint for sessions only | `403` `{"error": "not available with an API key"}` |
 | The owner must change their password or set up 2FA | `403` with `passwordChangeRequired` or `twoFactorSetupRequired`, as for a session |
-| More than 600 requests per key and minute, or more than 30 invalid keys per client address (IPv6: per `/64`) and minute | `429` with `Retry-After` |
+| More than 600 requests per key and minute, more than 30 invalid keys per client address (IPv6: per `/64`) and minute, or a wait of 60 seconds for the key checks in flight from that address | `429` with `Retry-After` |
 
 A request with `Authorization: Bearer ma_…` never uses the session cookie,
 also when the key is invalid. Other `Authorization` headers, such as Basic
@@ -100,15 +101,17 @@ own group only on the command line or through another admin.
 | `GET /api/users` | All users: `name`, `admin`, `locked`, `mustChangePassword`, `twoFactorEnabled`, `passkeys` (a count), `apiKeys` (active keys), `accounts` (a count), `createdAt`, `lastLoginAt`, `self`, `group` (the user's [customer group](../guide/users#customer-groups), `{"id", "name"}`), `auditor`. |
 | `POST /api/users` | Add a user with `{"name": "...", "admin": false}`. Answers `201 {"name", "password"}` with a generated password, shown only here. `"group"` is the id of the user's [customer group](../guide/users#customer-groups): needed while several groups exist (`400 "choose a group"`), otherwise the user joins the only one; an unknown id is `400 "unknown group"`. `"auditor": true` creates an [auditor](#auditors) (never with `admin`: `400`). |
 | `POST /api/users/{name}/password` | Generate a new password (`{"name", "password"}`). The user is logged out and must change it at the next login. Their passkeys are removed and their API keys revoked too, unless the body says `{"removePasskeys": false}` or `{"revokeApiKeys": false}`. |
-| `PATCH /api/users/{name}` | Exactly one of `{"admin": true\|false}`, `{"locked": true\|false}` or `{"group": id}` (`400` for none or more). `admin` and `locked` answer `204`; `409` for the last admin. `group` moves the user, with the accounts they own, into that [customer group](../guide/users#customer-groups) and ends every share that would then cross groups; it answers `200 {"sharesEnded": n, "grantsRevoked": m}` (both `0` when the user already was in the group, which writes no entry) and `400 "unknown group"` for an unknown id; `grantsRevoked` counts the [auditor grants](#auditors) of the user, as auditor or as owner, that the move revoked. Audited as `user.group_change`, with the ended shares and revoked grants. `{"admin": true}` for an auditor is `409`. |
+| `PATCH /api/users/{name}` | Exactly one of `{"admin": true\|false}`, `{"locked": true\|false}` or `{"group": id}` (`400` for none or more). `admin` answers `204`, `locked` `200 {"smtpCredentialsActive": n}`: for a lock, how many usable [SMTP secrets](#smtp-secrets) the smtp accounts the user owns have, which the lock does not stop (`0` for an unlock); `409` for the last admin. `group` moves the user, with the accounts they own, into that [customer group](../guide/users#customer-groups) and ends every share that would then cross groups; it answers `200 {"sharesEnded": n, "grantsRevoked": m}` (both `0` when the user already was in the group, which writes no entry) and `400 "unknown group"` for an unknown id; `grantsRevoked` counts the [auditor grants](#auditors) of the user, as auditor or as owner, that the move revoked. Audited as `user.group_change`, with the ended shares and revoked grants. `{"admin": true}` for an auditor is `409`. |
 | `POST /api/users/{name}/2fa/reset` | Turn off the user's 2FA and end their sessions (`204`). |
 | `DELETE /api/users/{name}/passkeys` | Remove all passkeys of another user and end their sessions (`204`). |
 | `DELETE /api/users/{name}` | Remove a user, with their API keys (`204`). `409` while they own accounts, or for the last admin. Removing an [auditor](#auditors) first revokes their unrevoked grants and answers `200 {"grantsRevoked": [{"id", "label", "owner", "auditor"}]}`; the grants stay in their owners' lists without the auditor's name (`revokeReason: "user_removed"`). |
 | `GET /api/api-keys` | Every user's API keys, like `GET /api/profile/api-keys` plus `user`. Never the keys themselves. |
 | `DELETE /api/api-keys/{id}` | Revoke any user's key, also an own one (`204`). |
-| `GET /api/groups` | All [customer groups](../guide/users#customer-groups) by name: `{"groups": [{"id", "name", "users", "accounts", "createdAt"}]}`; `accounts` counts the accounts of the group's users, removed ones included. |
+| `GET /api/admin/smtp-credentials` | Every smtp account's [SMTP secrets](#smtp-secrets), also of removed accounts, by account: like the account's list plus `account`, `username`, `owner` (empty without one) and `accountRemoved`. Never the secrets. |
+| `DELETE /api/admin/smtp-credentials/{id}` | Revoke any smtp account's secret (`204`), for example after locking its owner. Audited as `smtp_credential.revoke` with `by_admin`. |
+| `GET /api/groups` | All [customer groups](../guide/users#customer-groups) by name: `{"groups": [{"id", "name", "users", "accounts", "createdAt", "quotaBytes", "bytes", "state"}]}`; `accounts` counts the accounts of the group's users, removed ones included. `quotaBytes` is the group's [storage quota](../guide/operations#storage-and-quotas) in message bytes (`null` without one), `bytes` its usage (deduplicated within the group; an upper bound between counts) and `state` its quota state (`ok`, `warn`, `full`, `overflow`). |
 | `POST /api/groups` | Add a group with `{"name": "..."}` (1 to 100 characters, without control characters; spaces at either end are removed). Answers `201` with the group. `409` for a name a group has already, in any case. Audited as `group.add`. |
-| `PATCH /api/groups/{id}` | Rename a group with `{"name": "..."}` (`204`). `404` for an unknown id, `409` for a name another group has. Audited as `group.rename`. |
+| `PATCH /api/groups/{id}` | Exactly one of `{"name": "..."}` and `{"quotaBytes": n}` (`400` for none, both or another field). `name` renames the group (`204`; `409` for a name another group has; audited as `group.rename`). `quotaBytes` sets the group's [storage quota](../guide/operations#storage-and-quotas) in message bytes, a positive whole number, or removes it with `null` (`204`); `400` above the instance quota (`MAIL_ARCHIVE_STORAGE_QUOTA`) or above 1 EiB, the CLI's bound too. The storage gate applies it at once in the web server and within 10 seconds in every other process. Audited as `group.quota`, with the old and new value in bytes. `404` for an unknown id. |
 | `DELETE /api/groups/{id}` | Remove a group without users (`204`). `409` while it has users, while a [legal hold](../guide/retention#holds-per-customer-group) names it (also a released one: `"a legal hold names the group, so it stays"`), and for the last group. Audited as `group.remove`. |
 | `GET /api/profile/2fa` | `{"enabled", "required", "admin", "setupPending"}`. |
 | `POST /api/profile/2fa/setup` | Start setup: `{"secret", "otpauthUri", "qrDataUrl"}` (a PNG data URL). `409` while 2FA is on. |
@@ -119,8 +122,12 @@ own group only on the command line or through another admin.
 | `POST /api/profile/passkeys/begin` | Start adding a passkey: `{"name": "...", "currentPassword": "...", "code": "..."}`; `code` (TOTP or recovery code) only with 2FA on. Answers `{"token", "publicKey"}` for `navigator.credentials.create()`. `401` for a wrong password or code (counts like a failed login), `409` for a name in use or 10 passkeys. |
 | `POST /api/profile/passkeys/finish` | `{"token", "credential"}` → `201 {"name"}`. `409` for a passkey that is already registered or the limit, `400` for an expired token or a passkey that is not accepted. |
 | `DELETE /api/profile/passkeys/{id}` | Remove an own passkey; all other sessions end. Answers `{"credentialId", "rpId"}` for `PublicKeyCredential.signalUnknownCredential()`. |
+| `GET /api/profile/notifications` | Admins only (`403` for anyone else, before any lookup): the own address for [alert mail](../guide/email-alerts), `{"available", "email", "confirmed", "confirmedAt", "bounced", "codeExpiresAt"}`. `available` is false without `MAIL_ARCHIVE_MAIL_URL`. |
+| `PUT /api/profile/notifications` | Admins only: set the address with `{"email": "...", "language": "de"\|"en"}` and mail a 6-character code to it (valid 30 minutes). `400` for anything but one address, `409` `mail_off`, `429` `code_limit` after 3 codes in an hour, `502` `mail_failed` when the relay did not take the code mail. |
+| `POST /api/profile/notifications/confirm` | Admins only: `{"code": "..."}` confirms the address. `400` `wrong_code`; `409` `no_code` (none waits or it expired) or `code_spent` (5 tries). |
+| `DELETE /api/profile/notifications` | Admins only: remove the address (`204`). |
 | `GET /api/profile/api-keys` | Own API keys, also revoked and expired ones for 30 days: `{"max", "keys": [{"id", "name", "hint", "scopes", "createdAt", "expiresAt", "lastUsedAt", "revokedAt", "state"}]}`. `hint` is the last 4 characters, `state` is `active`, `expired` or `revoked`. |
-| `POST /api/profile/api-keys` | Create a key: `{"name": "...", "scopes": ["read", "sync"], "expiresInDays": 90, "currentPassword": "...", "code": "..."}`. `expiresInDays` from 1 to 3650, or `null` for no expiry; `code` only with 2FA on. Answers `201` with the listed fields and `key`, shown only here. `401` for a wrong password or code (counts like a failed login), `409` for a name in use or 20 active keys, `400` for an unknown scope. |
+| `POST /api/profile/api-keys` | Create a key: `{"name": "...", "scopes": ["read", "sync"], "expiresInDays": 90, "currentPassword": "...", "code": "..."}`. `expiresInDays` from 1 to 3650, or `null` for no expiry; `code` only with 2FA on. Answers `201` with the listed fields and `key`, shown only here. `401` for a wrong password or code (counts like a failed login), `409` for a name in use or 20 active keys, `400` for an unknown scope or `metrics` with another scope, `403` for `metrics` from a user who is not an admin (before the password is checked). |
 | `DELETE /api/profile/api-keys/{id}` | Revoke an own key (`204`). No password needed. |
 | `PATCH /api/profile` | Change the own web UI settings: `{"language": "de", "locale": "de-AT"}`, one or both. `language` is `auto` or a language code (`de`, `pt-BR`), `locale` is `auto` or a BCP 47 tag for dates and numbers. The UI treats values it has no use for like `auto`. Answers `204`, also when nothing changed; `400` for an empty body, an unknown field or an invalid value. The settings are read from `user` in `GET /api/session`. |
 | `PUT /api/profile/password` | Every user: `{"current": "...", "new": "..."}`. `401` for a wrong current password (counts like a failed login, then `429`), `400` for a new password that is too short or unchanged. Other sessions end. |
@@ -167,15 +174,18 @@ headers what a request is for. Requests to `/api` answer `403`
   `Sec-Fetch-Site` is absent, `same-origin` or `none` (the app's own links,
   a typed address, a bookmark). A navigation from another site
   (`Sec-Fetch-Site` `cross-site` or `same-site`) gets `403` even for these
-  routes, so a link elsewhere that redirects back to the archive cannot open
-  them; or
+  routes, so over HTTPS or on `localhost` a link elsewhere that redirects
+  back to the archive cannot open them; or
 - for anything but a fetch (`Sec-Fetch-Dest` other than `empty`: an image,
   a style sheet, a font and so on).
 
 The check comes first, so such a request writes no audit entry. It keeps an
 HTML mail, which runs with the app's origin, from reaching the API; see
-[HTML mail](./security#html-mail). Requests without these headers, from
-curl, scripts and API clients, are not affected.
+[HTML mail](./security#html-mail). Requests without these headers, from curl,
+scripts and API clients, are not affected. Browsers send them only over HTTPS
+and to `localhost`, so over plain HTTP on any other address (a LAN or VPN
+address) the check does not apply; see
+[Plain LAN access](./security#plain-lan-access).
 
 ## Audit log
 
@@ -203,8 +213,8 @@ See [`retention` and `hold`](./cli#retention) on the command line.
 | `GET /api/retention/rules` | `{"rules": [{"id", "accountId", "account", "accountKind", "accountRemoved", "owner", "group", "folder", "years", "timeZone", "note", "createdAt", "createdBy"}], "accounts": [{"id", "name", "kind", "removed", "owner", "group", "folders"}], "groups", "minYears", "defaultTimeZone"}`. `folder` is empty for every folder; `createdBy` is empty for the command line. `accounts` lists every account to choose from. `group` is the [customer group](../guide/users#customer-groups) of the account's owner, `{"id", "name"}`, or `null` without an owner; `groups` lists every group by name, `[{"id", "name"}]`. |
 | `POST /api/retention/rules` | `{"accountId", "folder", "years", "timeZone", "note", "force"}`: `201 {"id"}`. `years` from 1 to 100; under `minYears` (6) only with `force: true`. `timeZone` defaults to `Europe/Berlin`. `409` if the account (or folder) has a rule, `400` for an unknown account or time zone. |
 | `DELETE /api/retention/rules/{id}` | Remove a rule (`204`). |
-| `GET /api/legal-holds[?released=1]` | `{"holds": [{"id", "name", "reason", "user", "accountId", "account", "accountOwner", "group", "coveredGroup", "filter", "since", "until", "matchedAt", "matched", "createdAt", "createdBy", "releasedAt", "releasedBy", "releaseNote"}]}`, active ones, and released ones too with `released=1`. `group` is the [customer group](../guide/users#customer-groups) the hold names, `coveredGroup` the group whose mail it covers (that one, or the group of its user or account's owner); both `{"id", "name"}` or `null` (`coveredGroup` `null`: every group). |
-| `POST /api/legal-holds` | `{"name", "reason", "user", "accountId", "group", "filter": {"q", "from", "to", "attachment", "hasAttachment"}, "since", "until", "all"}`: `201 {"id", "matched"}`. Every condition that is set must match; `until` is exclusive. `group` is a customer group's id: the hold covers the accounts of its users, also of users who join it later; `400 "unknown group"` for an unknown id, `400` when `user` or `accountId` is not in the group. A filter is matched at once (`matched`); until then the hold covers its whole scope. Without any condition the hold covers the whole archive and needs `all: true`. |
+| `GET /api/legal-holds[?released=1]` | `{"holds": [{"id", "name", "reason", "user", "accountId", "account", "accountOwner", "group", "coveredGroup", "filter", "since", "until", "matchedAt", "matched", "createdAt", "createdBy", "releasedAt", "releasedBy", "releaseNote"}]}`, active ones, and released ones too with `released=1`. `group` is the [customer group](../guide/users#customer-groups) the hold names, `coveredGroup` the group whose mail it covers (that one, or the group of its user or account's owner); both `{"id", "name"}` or `null` (`coveredGroup` `null`: every group). `matched` is the number of messages the filter matched so far, only for a hold on the caller or on one of their own accounts; it is `null` for every other hold (other users, their accounts, groups, the instance). |
+| `POST /api/legal-holds` | `{"name", "reason", "user", "accountId", "group", "filter": {"q", "from", "to", "attachment", "hasAttachment"}, "since", "until", "all"}`: `201 {"id", "matched"}`. Every condition that is set must match; `until` is exclusive. `group` is a customer group's id: the hold covers the accounts of its users, also of users who join it later; `400 "unknown group"` for an unknown id, `400` when `user` or `accountId` is not in the group. A filter is matched at once; until then the hold covers its whole scope. It searches headers and text: `to` matches To and Cc only, never envelope (BCC) recipients. `matched` is the number of messages the new hold's filter matched, only for a hold on the caller or on one of their own accounts; it is absent otherwise, and when matching failed. Without any condition the hold covers the whole archive and needs `all: true`. |
 | `POST /api/legal-holds/{id}/release` | `{"note"}` (required): `204`. `409` if it is released already. |
 | `GET /api/retention/runs` | The last 50 [deletion runs](./cli#deletion), newest first: `{"runs": [{"id", "state", "createdAt", "createdBy", "candidates", "bytes", "confirmedAt", "confirmedBy", "finishedAt", "deleted", "kept"}]}`. `state` is `proposed`, `confirmed` (deleting), `done` or `cancelled`. |
 | `POST /api/retention/runs` | Propose a run (`201`, the run). Deletes nothing. `409` while another run is open. |
@@ -217,9 +227,9 @@ See [`retention` and `hold`](./cli#retention) on the command line.
 | Endpoint | Description |
 |---|---|
 | `GET /api/messages` | List or search messages, newest first. |
-| `GET /api/messages/{id}` | Headers, plain text, attachment list and every location (account, folder, UID, flags, `superseded`, `goneAt`, `lastSeenAt`). A superseded location is from before the folder's `UIDVALIDITY` changed (the server renumbered it); current locations come first. `goneAt` is when a [reconcile](../guide/syncing#reconcile) found the location missing on the server (`null` while it is there or before the folder was reconciled); `lastSeenAt` is when the server last listed it. Also `thread` (the thread key) and, for a reply, `inReplyTo` (the Message-ID it answers, without angle brackets). A location in an smtp account has an `envelope`: `mailFrom`, `rcptTo` (the original recipients, BCC included), `receivedAt`, `clientIp` and `helo`; other locations have `null`. `filled` is true for a location in an smtp account without an envelope: a [fill](#fills) copied it from IMAP or [`import --journal`](../guide/importing#into-an-smtp-account) imported it from files, so BCC recipients are unknown. `fill` names that fill and its mailbox, `{"id", "username", "host"}`; `import` names that import of files and its label, `{"id", "label"}`. Both are `null` for other locations, and when unknown. `retainUntil` is when the [retention period](./cli#retention) ends, per location and for the message (the latest over the user's locations); `null` when no rule covers a location, so it is kept for ever. Admins also get `onHold` on their own locations and for the message (any own location on hold); locations in [shared accounts](#shared-accounts) never have it. `owner` is the owner's user name for a location in a shared account, `null` for the user's own. |
+| `GET /api/messages/{id}` | Headers, plain text, attachment list and every location (account, folder, UID, flags, `superseded`, `goneAt`, `lastSeenAt`). A superseded location is from before the folder's `UIDVALIDITY` changed (the server renumbered it); current locations come first. `goneAt` is when a [reconcile](../guide/syncing#reconcile) found the location missing on the server (`null` while it is there or before the folder was reconciled); `lastSeenAt` is when the server last listed it. Also `thread` (the thread key) and, for a reply, `inReplyTo` (the Message-ID it answers, without angle brackets). A location in an smtp account has an `envelope`: `mailFrom`, `rcptTo` (the original recipients, BCC included), `receivedAt`, `clientIp` and `helo`; other locations have `null`. `filled` is true for a location in an smtp account without an envelope: a [fill](#fills) copied it from IMAP or [`import --journal`](../guide/importing#into-an-smtp-account) imported it from files, so BCC recipients are unknown. `fill` names that fill and its mailbox, `{"id", "username", "host"}`; `import` names that import of files and its label, `{"id", "label"}`. Both are `null` for other locations, and when unknown. `retainUntil` is when the [retention period](./cli#retention) ends, per location and for the message (the latest over the user's locations); `null` when no rule covers a location, so it is kept for ever. Admins also get `onHold` on their own locations and for the message (any own location on hold); locations in [shared accounts](#shared-accounts) never have it. `owner` is the owner's user name for a location in a shared account, `null` for the user's own. `remoteImagesRefused` is true when the HTML body has inline SVG or MathML, so `/html?images=1` loads no remote images. |
 | `GET /api/messages/{id}/conversation` | The conversation of the message; see below. `404` like `GET /api/messages/{id}`. |
-| `GET /api/messages/{id}/html[?images=1]` | The HTML body for a sandboxed iframe. Scripts are blocked (`script-src 'none'`); the sandbox allows the same origin, so the web UI can size the frame to the mail, but never scripts. Remote images only with `images=1`. Inline `cid:` images (PNG, JPEG, GIF, WebP; up to 10 MiB per message) are embedded as `data:` URLs; others become `data:,`. Then declarative shadow roots and `srcdoc` frames are neutralized in the bytes as served: attribute names starting with `shadowroot` on `<template>` and `srcdoc` on `<iframe>` get the prefix `data-`; the rename changes no other byte. Requests the frame makes to `/api` (images, links) are refused with `403`; see [Browser requests](#browser-requests). |
+| `GET /api/messages/{id}/html[?images=1]` | The HTML body for a sandboxed iframe. Scripts are blocked (`script-src 'none'`); the sandbox allows the same origin, so the web UI can size the frame to the mail, but never scripts. Remote images only with `images=1`. Inline `cid:` images (PNG, JPEG, GIF, WebP; up to 10 MiB per message) are embedded as `data:` URLs; others become `data:,`. Then declarative shadow roots and `srcdoc` frames are neutralized in the bytes as served: attribute names starting with `shadowroot` on `<template>` and `srcdoc` on `<iframe>` get the prefix `data-`; the rename changes no other byte. URLs in the mail's CSS (`style` attributes, SVG attributes such as `fill`, `<style>`) are made inert: `data:,` goes in front of every `url()` that is not a `data:` URL or `#…`, and `_` before the parenthesis of every CSS function not known to load nothing. With `images=1`, a mail with inline SVG or MathML (the bytes `<svg` or `<math`, in any case, anywhere in the served HTML) or whose CSS could still load an image gets no remote images (`img-src data:`); the mail is still shown. Requests the frame makes to `/api` (images, links) are refused with `403`; see [Browser requests](#browser-requests). |
 | `GET /api/messages/{id}/raw` | The original `.eml`. |
 | `GET /api/messages/{id}/parts/{n}` | One attachment. PNG, JPEG, GIF and WebP are shown inline; everything else is a download. |
 
@@ -290,11 +300,11 @@ counted, in conversations, grouped rows and `thread=` alike.
 
 | Endpoint | Description |
 |---|---|
-| `GET /api/accounts` | All accounts with `kind` (`imap`, `import` for mail imported from files, or `smtp` for mail a mail server delivers over SMTP), server settings (never the password), folders with message counts and the hierarchy `delimiter` (`/` or `.` as the IMAP server reports it, `""` if it has none, `null` until the folder's first sync after the upgrade; always `/` for import and smtp accounts), and the sync state. Import and smtp accounts have an empty `host`, `tls` and `username` and `port` 0; import accounts have `enabled` false. smtp accounts list their `addresses` and `lastReceivedAt`, when they last accepted a message (`null` before the first); other kinds have `[]` and `null`. The response's `smtp` is `{}` when the SMTP server is on and `null` when `MAIL_ARCHIVE_SMTP_LISTEN` is empty. smtp accounts also have `fill`, their latest [fill](#fills) (`null` without one), `fills`, their recurring fills and the latest one, and `firstReceived`, the first message they received that is still stored (`{"at", "subject"}`, `null` without one); other kinds have `null`, `[]` and `null`. `purging` is `true` while a removed account is being [deleted completely](../guide/accounts#deleting-a-removed-account-completely), and `purge` then has the progress (`{"id", "expected", "locations", "deleted", "kept"}`; `null` otherwise). `sharedWith` lists the users an account is [shared](#shared-accounts) with (`[{"user", "since"}]`). The response's `shared` lists the accounts other users shared with the user: `key` (`owner/name`), `name`, `owner`, `kind`, `enabled`, `removed` and `folders` (with counts, `lastSyncedAt` and `lastReconciledAt`), nothing else: no server, login, sync errors or sync health. |
+| `GET /api/accounts` | All accounts with `kind` (`imap`, `import` for mail imported from files, or `smtp` for mail a mail server delivers over SMTP), server settings (never the password), folders with message counts and the hierarchy `delimiter` (`/` or `.` as the IMAP server reports it, `""` if it has none, `null` until the folder's first sync after the upgrade; always `/` for import and smtp accounts), and the sync state. Import and smtp accounts have an empty `host`, `tls` and `username` and `port` 0; import accounts have `enabled` false. smtp accounts list their `addresses` and `lastReceivedAt`, when they last accepted a message (`null` before the first); other kinds have `[]` and `null`. The response's `smtp` is `null` when `MAIL_ARCHIVE_SMTP_LISTEN` is empty; when the SMTP server is on it is `{"auth"}`, the mode of `MAIL_ARCHIVE_SMTP_AUTH`: `required` (mail servers log in with an [SMTP secret](#smtp-secrets)) or `off`. smtp accounts also have `fill`, their latest [fill](#fills) (`null` without one), `fills`, their recurring fills and the latest one, and `firstReceived`, the first message they received that is still stored (`{"at", "subject"}`, `null` without one); other kinds have `null`, `[]` and `null`. `purging` is `true` while a removed account is being [deleted completely](../guide/accounts#deleting-a-removed-account-completely), and `purge` then has the progress (`{"id", "expected", "locations", "deleted", "kept"}`; `null` otherwise). `sharedWith` lists the users an account is [shared](#shared-accounts) with (`[{"user", "since"}]`). The response's `shared` lists the accounts other users shared with the user: `key` (`owner/name`), `name`, `owner`, `kind`, `enabled`, `removed` and `folders` (with counts, `lastSyncedAt` and `lastReconciledAt`), nothing else: no server, login, sync errors or sync health. |
 | `POST /api/accounts` | Add an account. The login is checked first; the first sync starts right away. With `{"kind": "smtp", "name": "journal", "addresses": ["archive@archive.local"]}` (admins only, otherwise `403`) it adds an smtp account: no server fields, no login check; `409` names an address another account receives for. |
 | `PATCH /api/accounts/{name}` | Change some fields, including `name` to rename the account. `addresses` replaces an smtp account's list (admins only; `409` on other kinds). A new connection or password is checked with a login first; if that fails, nothing changes. All fields are saved together or not at all. `409` when the name is taken or when the account was changed since it was loaded (reload and try again). Works while the account is being synced; the change applies from the next sync. |
 | `DELETE /api/accounts/{name}` | Remove the account. Returns `{"result": "removed"}` if archived mail was kept, `{"result": "deleted"}` if the account had none. `409` while the account is being synced or filled. |
-| `GET /api/accounts/{name}/purge` | Admins only (`403`), own accounts only (other users' are `404`). What [deleting the removed account completely](../guide/accounts#deleting-a-removed-account-completely) would do, without changing anything: `locations` removed, `messages`, `deleted` (only in this account; the number to type) with `deletedBytes`, `kept` (also in other accounts) with `keptIn` (`[{"owner", "account", "messages"}]`), `grace` (`MAIL_ARCHIVE_RETENTION_FILE_GRACE`, `"168h0m0s"`), `blockers` (`notRemoved`, `syncing`, `purgeOpen`, `rules` `[{"id", "folder", "years"}]`, `holds` `[{"id", "name", "released", "namesAccount"}]`, and `messages` naming them) and `purge`, the account's confirmed purge while it is being executed (`{"id", "state", "expected", "locations", "deleted", "kept"}`, otherwise `null`). |
+| `GET /api/accounts/{name}/purge` | Admins only (`403`), own accounts only (other users' are `404`). What [deleting the removed account completely](../guide/accounts#deleting-a-removed-account-completely) would do, without changing anything: `locations` removed, `messages`, `deleted` (only in this account; the number to type) with `deletedBytes`, `kept` (also in other accounts) with `keptIn` (`[{"owner", "account", "messages"}]`, the caller's own other accounts only) and `keptByOthers` (of `kept`, the messages in none of the caller's other accounts, only in accounts the caller does not own; they are counted, never named), `grace` (`MAIL_ARCHIVE_RETENTION_FILE_GRACE`, `"168h0m0s"`), `blockers` (`notRemoved`, `syncing`, `purgeOpen`, `rules` `[{"id", "folder", "years"}]`, `holds` `[{"id", "name", "released", "namesAccount"}]`, and `messages` naming them) and `purge`, the account's confirmed purge while it is being executed (`{"id", "state", "expected", "locations", "deleted", "kept"}`, otherwise `null`). |
 | `POST /api/accounts/{name}/purge` | Confirm it with `{"count": N}`, the preview's `deleted`. Answers `202` with `{"purge": id}`; the web server's retention job deletes in the background, and `purging` in `GET /api/accounts` is `true` until it is done, with the progress in `purge`. `400` without `count`; `409` names the blocking rules and holds, an open purge or a changed account, or says the number changed (with `deleted`, the current number: review again); `503` without the retention job. |
 | `GET /api/accounts/{name}/server-folders` | The account's folders, live from the IMAP server: `name`, `specialUse` (role) and `selected`. |
 
@@ -334,6 +344,40 @@ smtp accounts `409`. A value equal to the stored one is accepted and changes
 nothing, so a value stored before `MAIL_ARCHIVE_SYNC_INTERVAL_MIN` was raised
 can be sent back. A change needs no login check and applies at the next
 minute's check of the schedule.
+
+### Login checks
+
+A login check connects to the IMAP server and lists its folders: adding an
+account, a `PATCH` with a new connection or password, `server-folders`, and
+a fill's folders, start, switch-on and resume. A failed check answers `422`
+(`server-folders`: `502`) with a fixed English `error` and a `code` naming
+the category: `imap_connect`, `imap_tls`, `imap_login`, `imap_timeout` (also
+when the check's minute runs out), `imap_server`, `imap_protocol` or
+`imap_limit` (also when the check reads more than its limit). The server's
+own text is only in the server log. Checks are limited
+([Security](./security#login-checks)); a refused check answers `429` with
+`Retry-After`, `retryAfter` and `code: too_many_checks`, before it connects.
+
+### SMTP secrets
+
+A mail server logs in to the SMTP server of an smtp account with the user
+name `smtp-<account id>` and a secret (`mas_` and 52 characters). The
+account's owner manages them, and must be an admin (otherwise `403`, also
+for an own account); another user's account is `404`, an account of
+another kind or a removed one `409`. Sessions only. Any admin also lists and
+revokes every account's secrets with `/api/admin/smtp-credentials`
+([Users and profile](#users-and-profile)). The command line does the same
+with [`./ma account smtp-secret`](./cli#smtp-secrets).
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/accounts/{name}/smtp-credentials` | `{"username": "smtp-42", "credentials": [{"id", "hint", "createdAt", "expiresAt", "lastUsedAt", "revokedAt", "state"}]}`, newest first; revoked and expired secrets for 30 days. `hint` is the last 4 characters; `state` is `active` (the current secret), `expiring` (superseded, usable until `expiresAt`), `expired` or `revoked`. |
+| `POST /api/accounts/{name}/smtp-credentials` | Create a secret: `{"currentPassword": "...", "code": "...", "graceDays": 7}`; `code` (TOTP or recovery code) only with 2FA on. The current secret stays usable for `graceDays` (0 to 30, default 7; 0 revokes it at once), and a secret that was already expiring is revoked, so at most two are usable. Answers `201 {"username", "secret", "credential", "previous": [{"id", "expiresAt"\|"revokedAt"}]}`; the secret is shown only here, and only its SHA-256 is stored. `401` for a wrong password or code (counts like a failed login), `400` for `graceDays` out of range. Audited as `smtp_credential.create` (`credential_id`, `hint`, `grace_days`, `superseded`). |
+| `DELETE /api/accounts/{name}/smtp-credentials/{id}` | Revoke a secret of the account at once (`204`). No password needed. `404` for a secret of another account or one already revoked. Audited as `smtp_credential.revoke` (`credential_id`, `hint`). |
+
+Locking the owner does not stop the secrets: the mail server keeps
+delivering, so no journal copy is lost. Revoke them, or create a new one with
+`graceDays` 0, when someone who knows a secret should no longer deliver.
 
 ### Shared accounts
 
@@ -444,8 +488,10 @@ limits the fill to these folders. Every IMAP folder goes into `JOURNAL`; a
 message filed in several folders is stored once. `folderPrefix` is no longer
 supported: a non-empty value is answered `400`. `before` is the cut-off,
 by default now: a message is copied when its INTERNALDATE is before the
-cut-off plus one hour, unless the account received a message with the same
-Message-ID over SMTP. The password is kept, encrypted, only while the fill
+cut-off plus one hour, unless the account received the same message over
+SMTP: the same Message-ID, Date, From and Subject (see
+[Journaling](../guide/journaling#bring-in-the-mail-from-before-journaling)).
+The password is kept, encrypted, only while the fill
 runs.
 
 With `"keepRunning": true` the fill is recurring and has no cut-off (`before`
@@ -499,7 +545,8 @@ one. Neither carries a password:
 started before fills wrote into `JOURNAL` have a `folderPrefix` and write
 into `PREFIX/<IMAP folder>`; for newer fills it is empty.
 The counters: `scanned` headers read, `imported` messages copied (`new` of
-them new to the archive), `afterCutoff` left to journaling, `journaled`
+them new to the account: not held before in any of its folders, even if the
+archive held the same bytes from another account), `afterCutoff` left to journaling, `journaled`
 skipped because the account received them over SMTP, `present` already in
 `JOURNAL` (a resumed fill, or a message in several IMAP folders), `deleted`
 deleted by retention before.
@@ -541,6 +588,10 @@ Each account in `GET /api/accounts` has a `sync` object:
   "health": "ok"
 }
 ```
+
+`lastRun.new` counts the messages new to the account: not held before in
+any of its folders, even if the archive held the same bytes from another
+account. Runs before 1.5.3 keep the figure they recorded.
 
 `state` is `idle`, `queued` or `running` (also when the command line syncs
 the account). `queued` covers a sync or fill of the web server from the
@@ -585,7 +636,9 @@ server cannot sync), `reconcileInterval`
 `alertAfter`
 (`MAIL_ARCHIVE_ALERT_AFTER_FAILURES`). For admins it also has
 `otherFailing`: how many accounts of other users are failing, as a number
-only.
+only, and `notifyEmailBounced: true` while a mail relay has refused the
+admin's own address for [alert mail](../guide/email-alerts) (left out
+otherwise).
 
 ## Sync
 
@@ -593,6 +646,9 @@ only.
 |---|---|
 | `POST /api/accounts/{name}/sync` | Queue a sync of one account, also a disabled one. Answers `202`. With the body `{"reconcile": true}` the sync also reconciles every folder not reconciled in the last 5 minutes. A sync already waiting is upgraded, not queued twice. `409` for import and removed accounts. |
 | `POST /api/sync` | Queue all enabled IMAP accounts. Answers `202` with `{"queued": n}`. |
+| `GET /api/usage` | Storage usage, with a session only; auditors get `403`. Admins get `{"instance", "groups", "ungrouped", "accounts", "computedAt"}`: `instance` has `messages` and `bytes` (exact), `quotaBytes` (`null` without a quota), `warnPercent`, `overflowPercent`, `minFreeDiskBytes` (the disk reserve), `state` (`ok`, `warn`, `full`, `overflow`, `disk_low`) and `stateSince`, `disk` (`{"freeBytes", "totalBytes"}`, `null` when it could not be measured), `databaseBytes` and `relations` (bytes by table at the last count), `lastBackupAt` (within 30 days) and `encryption`; each of `groups` has `id`, `name`, `messages`, `bytes`, `quotaBytes`, `state` and `stateSince`; `ungrouped` has `messages` and `bytes` of the accounts without an owner; each of `accounts` has `id`, `name`, `kind`, `removed`, `owner`, `groupId`, `own` (the caller's), `messages`, `bytes`, `exclusiveBytes` (bytes no other account holds) and `counted` (`false` before the first count that saw it). `computedAt` is the last count of accounts and groups, `null` before the first. Everyone else gets `{"state", "accounts": [{"name", "messages", "bytes"}]}`: their own accounts at the last count (`null` before it) and `state`, `ok`, `full` (syncs and imports of their group pause) or `overflow` (its journal mail is deferred too), the same whichever limit was reached, so it tells nothing about other groups. See [Storage and quotas](../guide/operations#storage-and-quotas). |
+| `POST /api/usage/refresh` | Admins only: count the accounts and groups again now, as the hourly count does; answers `202`. `computedAt` of `GET /api/usage` changes once it ran. |
+| `GET /api/metrics` | Admins only, with a session or a `metrics` key: the instance's figures in the Prometheus text format 0.0.4 (`text/plain; version=0.0.4`), IDs and counts only, cached for 15 seconds. `403` for other users and for `read` and `sync` keys. The metrics are listed in [Metrics](../guide/operations#metrics). |
 | `GET /api/status` | Messages per account with its `kind`, the last sync or import, `failureStreak`, `health` and `goneMessages`, like `./ma status`. For admins also `jobs`: the [background job](../guide/operations#background-jobs) queue per kind with work that is not done, `[{"kind":"attachment_text","queued":12,"retrying":0,"running":1,"failed":2,"oldestDueSeconds":180,"oldestNewSeconds":180}]` (`oldestNewSeconds` for jobs of new mail); other users do not get it, since it covers every user's mail. |
 
 ## Health checks

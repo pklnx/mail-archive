@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -29,5 +30,30 @@ func TestParseNow(t *testing.T) {
 		if _, err := parseNow(bad, clock); err == nil {
 			t.Errorf("%q: no error", bad)
 		}
+	}
+}
+
+// The server gives a mail with inline SVG or MathML no remote images (the
+// bytes "<svg" or "<math", any case; foreignContent in internal/web). The
+// mails whose remote images the e2e specs load (referrer.spec.ts,
+// css-images.spec.ts' controls, reading.spec.ts' long mail) must not have
+// them; the stereoscope mail must.
+func TestRemoteImageMailsHaveNoSVG(t *testing.T) {
+	d := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	foreign := func(raw string) bool {
+		l := strings.ToLower(raw)
+		return strings.Contains(l, "<svg") || strings.Contains(l, "<math")
+	}
+	mails := map[string]message{"periscope": hintCheck(d), "semaphore": referrerCheck(d), "zoetrope": cssCheck(d)}
+	for i, m := range offsite(func(days, hours int) time.Time { return d }) {
+		mails["offsite "+string(rune('0'+i))] = m
+	}
+	for name, m := range mails {
+		if foreign(m.raw) {
+			t.Errorf("%s has inline SVG or MathML: its remote images would be refused", name)
+		}
+	}
+	if !foreign(cssSVGCheck(d).raw) {
+		t.Error("stereoscope has no inline SVG or MathML")
 	}
 }

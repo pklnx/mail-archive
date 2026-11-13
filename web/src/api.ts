@@ -217,8 +217,14 @@ export interface AccountsResponse {
   alertAfter: number;
   /** Admins only: failing accounts of other users, as a count. */
   otherFailing?: number;
-  /** Null when the SMTP server is off: smtp accounts then receive nothing. */
-  smtp: Record<string, never> | null;
+  /** Admins only, set when true: a mail relay refused the admin's own address for alert mail. */
+  notifyEmailBounced?: boolean;
+  /**
+   * Null when the SMTP server is off: smtp accounts then receive nothing.
+   * auth: "required" when mail servers log in with an SMTP secret (#395),
+   * "off" when the allowlist is the only gate.
+   */
+  smtp: { auth: "required" | "off" } | null;
 }
 
 export interface AccountInput {
@@ -362,6 +368,8 @@ export interface MessageDetail extends MessageSummary {
   retainUntil: string | null;
   /** One of the locations is on legal hold; only sent to admins. */
   onHold?: boolean;
+  /** The HTML body has inline SVG or MathML: the server loads no remote images for it, even with images=1. */
+  remoteImagesRefused: boolean;
 }
 
 export interface Filter {
@@ -421,14 +429,17 @@ export class ApiError extends Error {
 export const UNAUTHORIZED_EVENT = "mail-archive:unauthorized";
 
 const sessionPath = "/api/session";
+const setupPath = "/api/setup";
 
 async function errorFor(path: string, res: Response): Promise<ApiError> {
   const err = await errorFrom(res);
   // The session ended, or the user still has to replace a generated
   // password: the login gate checks the session again.
   // An auditor's session without a grant (#393) likewise: the gate asks for one.
+  // A 401 of the login steps (a wrong password, a wrong setup token) is no
+  // ended session.
   const b = err.body;
-  if ((res.status === 401 && !path.startsWith(sessionPath)) || b.passwordChangeRequired === true || b.twoFactorSetupRequired === true || b.grantSelectionRequired === true) {
+  if ((res.status === 401 && !path.startsWith(sessionPath) && path !== setupPath) || b.passwordChangeRequired === true || b.twoFactorSetupRequired === true || b.grantSelectionRequired === true) {
     window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
   }
   return err;
@@ -519,7 +530,10 @@ export interface PurgePreview {
   deletedBytes: number;
   /** Messages also in other accounts: they stay there. */
   kept: number;
+  /** The caller's own other accounts that keep copies; accounts the caller does not own are never named. */
   keptIn: { owner: string; account: string; messages: number }[];
+  /** Kept messages in none of the caller's other accounts, only in accounts the caller does not own. */
+  keptByOthers: number;
   /** How long the files of deleted messages are kept, a Go duration ("168h0m0s"); empty if unknown. */
   grace: string;
   blockers: PurgeBlockers;
@@ -609,10 +623,19 @@ export interface Session {
 }
 
 /**
+ * How the first admin is created (#396): "cli" with `user add`, "token"
+ * with the operator's setup link, "expired" when its token is too old,
+ * "complete" once a first user exists or existed.
+ */
+export type SetupState = "cli" | "token" | "expired" | "complete";
+
+const setupStates: readonly string[] = ["cli", "token", "expired", "complete"];
+
+/**
  * The login state: a user, or none and whether the first admin is missing.
  * passkeyOrigin is where passkey logins work, if the server offers them.
  */
-export type SessionState = Session | { user: null; setupRequired: boolean; passkeyOrigin?: string };
+export type SessionState = Session | { user: null; setupRequired: boolean; setup?: SetupState; passkeyOrigin?: string };
 
 export const sessionApi = {
   get: async (signal?: AbortSignal): Promise<SessionState> => {
@@ -620,7 +643,13 @@ export const sessionApi = {
     if (res.status === 401) {
       const err = await errorFrom(res);
       const origin = err.body.passkeyOrigin;
-      return { user: null, setupRequired: err.body.setupRequired === true, passkeyOrigin: typeof origin === "string" ? origin : undefined };
+      const setup = err.body.setup;
+      return {
+        user: null,
+        setupRequired: err.body.setupRequired === true,
+        ...(typeof setup === "string" && setupStates.includes(setup) ? { setup: setup as SetupState } : {}),
+        passkeyOrigin: typeof origin === "string" ? origin : undefined,
+      };
     }
     if (!res.ok) throw await errorFrom(res);
     return (await res.json()) as Session;
@@ -629,6 +658,9 @@ export const sessionApi = {
     (await send<Partial<Session> & { twoFactorRequired?: boolean; challenge?: string }>("POST", sessionPath, { username, password }))!,
   login2FA: async (challenge: string, code: string) => (await send<Session>("POST", "/api/session/2fa", { challenge, code }))!,
   logout: () => send("DELETE", sessionPath),
+  /** Creates the first admin with the setup link's token and logs in (#396). */
+  setup: async (token: string, username: string, password: string) =>
+    (await send<Session>("POST", setupPath, { token, username, password }))!,
 };
 
 /** A ceremony started on the server: options for the browser and a token. */
@@ -670,7 +702,8 @@ export const passkeyApi = {
   remove: async (id: number) => (await send<{ credentialId: string; rpId?: string }>("DELETE", `/api/profile/passkeys/${id}`))!,
 };
 
-export type ApiKeyScope = "read" | "sync";
+/** metrics: admins only, alone in its key (only GET /api/metrics). */
+export type ApiKeyScope = "read" | "sync" | "metrics";
 
 /** An API key as listed: never the key itself. */
 export interface ApiKey {
@@ -784,6 +817,79 @@ export const usersApi = {
   list: async (signal?: AbortSignal) => (await getJSON<{ users: ManagedUser[] }>("/api/users", signal)).users,
 };
 
+/**
+ * A quota state (#397): warn from the warning share of the quota, full from
+ * 100 % (syncs, fills and imports pause), overflow from 100 % plus the SMTP
+ * overflow share (journal mail is deferred); disk_low, the instance's only,
+ * acts as overflow.
+ */
+export type StorageState = "ok" | "warn" | "full" | "overflow" | "disk_low";
+
+/** GET /api/usage for an admin (#397, part 4). */
+export interface UsageAdmin {
+  instance: {
+    messages: number;
+    bytes: number;
+    quotaBytes: number | null;
+    warnPercent: number;
+    overflowPercent: number;
+    minFreeDiskBytes: number;
+    state: StorageState;
+    stateSince: string;
+    disk: { freeBytes: number; totalBytes: number } | null;
+    databaseBytes: number;
+    relations: Record<string, number>;
+    lastBackupAt: string | null;
+    encryption: string;
+  };
+  groups: { id: number; name: string; messages: number; bytes: number; quotaBytes: number | null; state: StorageState; stateSince: string | null }[];
+  ungrouped: { messages: number; bytes: number };
+  accounts: {
+    id: number;
+    name: string;
+    kind: Account["kind"];
+    removed: boolean;
+    owner: string;
+    groupId: number | null;
+    own: boolean;
+    messages: number;
+    bytes: number;
+    exclusiveBytes: number;
+    counted: boolean;
+  }[];
+  computedAt: string | null;
+}
+
+/**
+ * GET /api/usage for everyone else: the own accounts' sizes (null before the
+ * first count) and whether new mail is archived, the same whichever limit
+ * was reached (#539).
+ */
+export interface UsageMember {
+  state: "ok" | "full" | "overflow";
+  accounts: { name: string; messages: number | null; bytes: number | null }[];
+}
+
+export type Usage = UsageAdmin | UsageMember;
+
+export const isAdminUsage = (u: Usage): u is UsageAdmin => "instance" in u;
+
+/** The size of an own account, from either view; null when not counted yet. */
+export function ownAccountSize(u: Usage | null, name: string): { messages: number; bytes: number } | null {
+  if (!u) return null;
+  if (isAdminUsage(u)) {
+    const a = u.accounts.find((x) => x.own && x.name === name);
+    return a?.counted ? { messages: a.messages, bytes: a.bytes } : null;
+  }
+  const a = u.accounts.find((x) => x.name === name);
+  return a && a.messages !== null && a.bytes !== null ? { messages: a.messages, bytes: a.bytes } : null;
+}
+
+export const usageApi = {
+  get: (signal?: AbortSignal) => getJSON<Usage>("/api/usage", signal),
+  refresh: () => send("POST", "/api/usage/refresh"),
+};
+
 /** A retention rule: an account's (or folder's) mail is kept for years after the end of its year. */
 export interface RetentionRule {
   id: number;
@@ -858,7 +964,8 @@ export interface LegalHold {
   since: string | null;
   until: string | null;
   matchedAt: string | null;
-  matched: number;
+  /** Messages the filter matched; null unless the hold is on the caller or one of their own accounts. */
+  matched: number | null;
   createdAt: string;
   createdBy: string;
   releasedAt: string | null;

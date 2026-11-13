@@ -51,7 +51,7 @@ func (e *archiveEnv) deliver(acc *store.Account, raw []byte) string {
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	meta, err := archive.BuildMeta(e.ctx, e.st, e.blobs, blob, created)
+	meta, err := archive.BuildMeta(e.ctx, e.st, e.blobs, blob, created, true)
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -206,7 +206,9 @@ func TestImportJournalKnownMessages(t *testing.T) {
 	e.deliver(acc, append([]byte("Received: from mx by archive\r\n"), stored(journalRaw("p1", "piler one"))...))
 
 	res := e.importJournal(acc, e.smtpImport(acc, "piler", "eml"), dir)
-	if tot := res.Total(); tot.Read != 2 || tot.Journaled != 1 || tot.Added != 1 || tot.New != 0 {
+	// p2 is new to the journal account, though the piler import account
+	// holds it.
+	if tot := res.Total(); tot.Read != 2 || tot.Journaled != 1 || tot.Added != 1 || tot.New != 1 {
 		t.Fatalf("%+v", tot)
 	}
 	if got := e.origin(acc, shaOf(stored(journalRaw("p1", "piler one")))); len(got) != 0 {

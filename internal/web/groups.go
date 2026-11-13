@@ -1,13 +1,16 @@
 package web
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
@@ -25,6 +28,12 @@ type groupJSON struct {
 	Users     int64     `json:"users"`
 	Accounts  int64     `json:"accounts"`
 	CreatedAt time.Time `json:"createdAt"`
+	// QuotaBytes is the group's storage quota, null without one; Bytes its
+	// usage (an upper bound between snapshots), State its quota state
+	// (#397, part 4).
+	QuotaBytes *int64 `json:"quotaBytes"`
+	Bytes      int64  `json:"bytes"`
+	State      string `json:"state"`
 }
 
 // groupRefJSON names a user's group in GET /api/users.
@@ -48,9 +57,24 @@ func (s *Server) handleListGroups(w http.ResponseWriter, r *http.Request) {
 		s.failStore(w, r, err)
 		return
 	}
+	usage, err := s.store.GroupsUsage(r.Context())
+	if err != nil {
+		s.failStore(w, r, err)
+		return
+	}
+	byID := make(map[int64]store.GroupUsage, len(usage))
+	for _, u := range usage {
+		byID[u.ID] = u
+	}
 	out := make([]groupJSON, 0, len(groups))
 	for _, g := range groups {
-		out = append(out, groupJSON{ID: g.ID, Name: g.Name, Users: g.Users, Accounts: g.Accounts, CreatedAt: g.CreatedAt})
+		// A group created after the usage read has no figures yet: ok, 0.
+		u, ok := byID[g.ID]
+		if !ok {
+			u.State = "ok"
+		}
+		out = append(out, groupJSON{ID: g.ID, Name: g.Name, Users: g.Users, Accounts: g.Accounts, CreatedAt: g.CreatedAt,
+			QuotaBytes: u.QuotaBytes, Bytes: u.Bytes, State: u.State})
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"groups": out})
 }
@@ -87,7 +111,7 @@ func (s *Server) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.log.Info("group added", "group", g.Name, "by", currentSession(r).UserName)
-	s.writeJSON(w, http.StatusCreated, groupJSON{ID: g.ID, Name: g.Name, CreatedAt: g.CreatedAt})
+	s.writeJSON(w, http.StatusCreated, groupJSON{ID: g.ID, Name: g.Name, CreatedAt: g.CreatedAt, State: "ok"})
 }
 
 // pathGroupID reads {id} of a group route, after the admin check.
@@ -103,13 +127,64 @@ func (s *Server) pathGroupID(w http.ResponseWriter, r *http.Request) (int64, boo
 	return id, true
 }
 
-func (s *Server) handleRenameGroup(w http.ResponseWriter, r *http.Request) {
+// groupChange is the body of PATCH /api/groups/{id}: exactly one of
+// "name" (a rename) and "quotaBytes" (the storage quota in bytes, null to
+// remove it; #397, part 4).
+type groupChange struct {
+	name  *string
+	quota *json.RawMessage
+}
+
+// decodeGroupChange reads a PATCH body with exactly one known field.
+func (s *Server) decodeGroupChange(w http.ResponseWriter, r *http.Request) (groupChange, bool) {
+	var fields map[string]json.RawMessage
+	dec := json.NewDecoder(io.LimitReader(r.Body, maxAccountBody))
+	if err := dec.Decode(&fields); err != nil {
+		s.fail(w, r, http.StatusBadRequest, "invalid request body: "+err.Error(), nil)
+		return groupChange{}, false
+	}
+	var c groupChange
+	for k, v := range fields {
+		switch k {
+		case "name":
+			var name string
+			if err := json.Unmarshal(v, &name); err != nil {
+				s.fail(w, r, http.StatusBadRequest, "invalid request body: name is a string", nil)
+				return groupChange{}, false
+			}
+			c.name = &name
+		case "quotaBytes":
+			c.quota = &v
+		default:
+			s.fail(w, r, http.StatusBadRequest, fmt.Sprintf("invalid request body: unknown field %q", k), nil)
+			return groupChange{}, false
+		}
+	}
+	if (c.name == nil) == (c.quota == nil) {
+		s.fail(w, r, http.StatusBadRequest, `give exactly one of "name" and "quotaBytes"`, nil)
+		return groupChange{}, false
+	}
+	return c, true
+}
+
+// handleUpdateGroup renames a group or sets its storage quota. The admin
+// check comes before the path and the body are read.
+func (s *Server) handleUpdateGroup(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.pathGroupID(w, r)
 	if !ok {
 		return
 	}
-	name, ok := s.groupName(w, r)
+	c, ok := s.decodeGroupChange(w, r)
 	if !ok {
+		return
+	}
+	if c.quota != nil {
+		s.setGroupQuota(w, r, id, *c.quota)
+		return
+	}
+	name := strings.TrimSpace(*c.name)
+	if err := store.ValidateGroupName(name); err != nil {
+		s.fail(w, r, http.StatusBadRequest, err.Error(), nil)
 		return
 	}
 	err := s.store.RenameGroup(withAudit(r, s.targetedEntry(r, "group.rename")), id, name)
@@ -193,4 +268,43 @@ func (s *Server) changeUserGroup(w http.ResponseWriter, r *http.Request, u *stor
 			"grantsRevoked", len(c.GrantsRevoked), "by", currentSession(r).UserName)
 	}
 	s.writeJSON(w, http.StatusOK, map[string]int{"sharesEnded": len(c.Ended), "grantsRevoked": len(c.GrantsRevoked)})
+}
+
+// setGroupQuota is PATCH /api/groups/{id} with {"quotaBytes": n|null}: a
+// positive number of bytes, at most the instance quota and at most 1 EiB
+// (config.MaxByteSize, the CLI's bound), or null to remove it. Audited as
+// group.quota with the old and the new value. The gate reads the figures
+// again at once, so the new state shows right away.
+func (s *Server) setGroupQuota(w http.ResponseWriter, r *http.Request, id int64, raw json.RawMessage) {
+	var quotaBytes *int64
+	if err := json.Unmarshal(raw, &quotaBytes); err != nil || (quotaBytes != nil && *quotaBytes <= 0) {
+		s.fail(w, r, http.StatusBadRequest, "quotaBytes is a positive whole number of bytes, or null for no quota", nil)
+		return
+	}
+	if quotaBytes != nil && *quotaBytes > config.MaxByteSize {
+		s.fail(w, r, http.StatusBadRequest,
+			fmt.Sprintf("the quota is above the largest size of %d bytes (1 EiB)", int64(config.MaxByteSize)), nil)
+		return
+	}
+	if limit := s.storageLimits().InstanceQuota; quotaBytes != nil && limit > 0 && *quotaBytes > limit {
+		s.fail(w, r, http.StatusBadRequest,
+			fmt.Sprintf("the quota is above the instance quota of %d bytes; a group quota cannot be larger", limit), nil)
+		return
+	}
+	c, err := s.store.SetGroupQuota(withAudit(r, s.targetedEntry(r, "group.quota")), id, quotaBytes)
+	switch {
+	case errors.Is(err, store.ErrUnknownGroup):
+		s.fail(w, r, http.StatusNotFound, "no such group", nil)
+		return
+	case err != nil:
+		s.failStore(w, r, err)
+		return
+	}
+	if c.Changed {
+		s.log.Info("group quota set", "group", c.Name, "quota_bytes", quotaBytes, "by", currentSession(r).UserName)
+		if g := s.storageGate(); g != nil {
+			g.Refresh(r.Context())
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

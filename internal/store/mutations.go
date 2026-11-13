@@ -261,6 +261,14 @@ func (s *Store) SetAccountOwner(ctx context.Context, ref AccountRef, owner int64
 		if err != nil {
 			return err
 		}
+		// An account that changes group, or gets its first owner (from
+		// "Without group"), counts elsewhere from now on: a snapshot moves
+		// its bytes (requested last, after every row above).
+		if r.OwnerID == nil || otherGroup {
+			if err := requestUsageRefresh(ctx, q); err != nil {
+				return err
+			}
+		}
 		if otherGroup {
 			if e := auditFrom(ctx); e != nil {
 				from, err := q.GetGroupByID(ctx, groups[*r.OwnerID])

@@ -10,6 +10,7 @@ import (
 
 	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/mailbox"
+	"github.com/pklnx/mail-archive/internal/quota"
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
@@ -17,8 +18,10 @@ import (
 // an smtp account, with a fill's rules (#152): next to what arrives over
 // SMTP, numbered after it under the folder's row lock, without an envelope
 // and naming the import imp. A message the folder holds already counts as
-// Present; one whose Message-ID the account received over SMTP is left out
-// and counts as Journaled. The source folders are merged; their names only
+// Present; one the account received over SMTP is left out and counts as
+// Journaled: the same Message-ID, Date, From and Subject (journalKey), as
+// for a fill. Only such a message's file may be removed; any other is
+// stored. The source folders are merged; their names only
 // label the counts.
 //
 // Copies of the same bytes count one by one, in one batch as in two (#306):
@@ -33,9 +36,9 @@ import (
 // re-run adds only what is missing. Batches committed before an error stay.
 // No sync run is recorded: smtp accounts have none.
 //
-// The Message-ID check runs before the batch takes the folder's lock, like
-// a fill's: a delivery with the same Message-ID but other bytes that
-// arrives in between gives two copies, never a gap.
+// The journaled check runs before the batch takes the folder's lock, like
+// a fill's: a delivery of the same message with other bytes that arrives
+// in between gives two copies, never a gap.
 func (im *Importer) ImportJournal(ctx context.Context, acc *store.Account, imp *store.SMTPImport,
 	folders []mailbox.SourceFolder) (*ImportResult, error) {
 	if acc.Kind != store.KindSMTP {
@@ -62,6 +65,9 @@ func (im *Importer) ImportJournal(ctx context.Context, acc *store.Account, imp *
 	if fresh.Kind != store.KindSMTP {
 		return nil, errors.New("not an smtp account")
 	}
+	if err := im.Storage.Admit(fresh.GroupID); err != nil {
+		return nil, err
+	}
 	folderID, err := im.Store.JournalFolderID(ctx, fresh.ID)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, fmt.Errorf("the account has no folder %s", store.SMTPFolder)
@@ -77,7 +83,8 @@ func (im *Importer) ImportJournal(ctx context.Context, acc *store.Account, imp *
 	for _, sf := range folders {
 		res.Folders = append(res.Folders, ImportFolderResult{Folder: sf.Name})
 		fr := &res.Folders[len(res.Folders)-1]
-		j := &journalImport{im: im, accountID: fresh.ID, folderID: folderID, importID: imp.ID, fr: fr, log: log.With("folder", sf.Name)}
+		j := &journalImport{im: im, accountID: fresh.ID, group: fresh.GroupID, folderID: folderID, importID: imp.ID, fr: fr,
+			log: log.With("folder", sf.Name), pending: im.Storage.Pending(fresh.GroupID)}
 		if err := j.run(ctx, sf); err != nil {
 			runErr = fmt.Errorf("%s: %w", sf.Name, err)
 			break
@@ -85,6 +92,8 @@ func (im *Importer) ImportJournal(ctx context.Context, acc *store.Account, imp *
 	}
 	t := res.Total()
 	switch {
+	case errors.Is(runErr, quota.ErrStorageFull):
+		res.Status = "partial" // paused; what was read is saved
 	case runErr != nil:
 		res.Status = "failed"
 	case t.Skipped > 0:
@@ -101,17 +110,22 @@ func (im *Importer) ImportJournal(ctx context.Context, acc *store.Account, imp *
 type journalImport struct {
 	im                            *Importer
 	accountID, folderID, importID int64
-	fr                            *ImportFolderResult
-	log                           *slog.Logger
-	batch                         []journalPending
+	group                         *int64 // the account owner's, for the storage gate
+	// pending counts the files of the batch for the storage gate; every
+	// flush settles it.
+	pending *quota.Pending
+	fr      *ImportFolderResult
+	log     *slog.Logger
+	batch   []journalPending
 }
 
-// journalPending is a message waiting for the Message-ID check.
+// journalPending is a message waiting for the journaled check.
 type journalPending struct {
-	blob      blobstore.Blob
-	created   bool
-	messageID string
-	loc       store.Location
+	blob    blobstore.Blob
+	created bool
+	key     journalKey
+	keyOK   bool // the message can count as journaled (newJournalKey)
+	loc     store.Location
 }
 
 func (j *journalImport) run(ctx context.Context, sf mailbox.SourceFolder) error {
@@ -119,8 +133,19 @@ func (j *journalImport) run(ctx context.Context, sf mailbox.SourceFolder) error 
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if err := j.admit(ctx); err != nil {
+			return err
+		}
 		return j.add(ctx, body, m)
 	})
+	defer j.pending.Settle() // files of messages that were not saved
+	if errors.Is(err, quota.ErrStorageFull) {
+		// Paused: save what was read, so a rerun goes on from there.
+		if ferr := j.flush(ctx); ferr != nil {
+			return ferr
+		}
+		return err
+	}
 	if err != nil {
 		return err
 	}
@@ -132,6 +157,7 @@ func (j *journalImport) add(ctx context.Context, body io.Reader, m sourceMessage
 	if !ok || err != nil {
 		return err
 	}
+	j.pending.Add(blob.Size)
 	present, err := j.im.Store.LocationInFolder(ctx, j.folderID, blob.SHA256)
 	if err != nil {
 		return err
@@ -140,7 +166,7 @@ func (j *journalImport) add(ctx context.Context, body io.Reader, m sourceMessage
 		j.fr.Present++
 		return nil
 	}
-	// Always from the message itself: BuildMeta leaves the Message-ID
+	// Always from the message itself: BuildMeta leaves the header values
 	// empty for a message the archive already holds.
 	h, err := j.im.blobHeaders(blob)
 	if err != nil {
@@ -157,8 +183,9 @@ func (j *journalImport) add(ctx context.Context, body io.Reader, m sourceMessage
 			date = *h.Date
 		}
 	}
+	key, keyOK := headersKey(h)
 	j.batch = append(j.batch, journalPending{
-		blob: blob, created: created, messageID: h.MessageID,
+		blob: blob, created: created, key: key, keyOK: keyOK,
 		loc: store.Location{FolderID: j.folderID, Flags: flags, InternalDate: date},
 	})
 	if len(j.batch) >= j.im.batchSize() {
@@ -167,16 +194,33 @@ func (j *journalImport) add(ctx context.Context, body io.Reader, m sourceMessage
 	return nil
 }
 
+// admit is folderWriter.admit for the journal import: a refusal while
+// files of the batch are pending commits the batch first and asks again.
+func (j *journalImport) admit(ctx context.Context) error {
+	err := j.im.Storage.Admit(j.group)
+	if err == nil || j.pending.Bytes() == 0 {
+		return err
+	}
+	if ferr := j.flush(ctx); ferr != nil {
+		return ferr
+	}
+	return j.im.Storage.Admit(j.group)
+}
+
 // flush leaves out the journaled messages of the batch and stores the rest.
 func (j *journalImport) flush(ctx context.Context) error {
+	// Committed or failed: these files are no longer pending.
+	defer j.pending.Settle()
 	if len(j.batch) == 0 {
 		return nil
 	}
-	ids := make([]string, len(j.batch))
-	for i, p := range j.batch {
-		ids[i] = p.messageID
+	var keys []journalKey
+	for _, p := range j.batch {
+		if p.keyOK {
+			keys = append(keys, p.key)
+		}
 	}
-	journaled, err := j.im.Store.JournaledMessageIDs(ctx, j.accountID, ids)
+	journaled, err := journaledKeys(ctx, j.im.Store, j.accountID, keys, j.log)
 	if err != nil {
 		return err
 	}
@@ -185,7 +229,7 @@ func (j *journalImport) flush(ctx context.Context) error {
 		locs  []store.Location
 	)
 	for _, p := range j.batch {
-		if p.messageID != "" && journaled[p.messageID] {
+		if p.keyOK && journaled[p.key] {
 			j.fr.Journaled++
 			if p.created {
 				// A file only this import wrote: the sweep removes it
@@ -196,7 +240,7 @@ func (j *journalImport) flush(ctx context.Context) error {
 			}
 			continue
 		}
-		meta, err := BuildMeta(ctx, j.im.Store, j.im.Blobs, p.blob, p.created)
+		meta, err := BuildMeta(ctx, j.im.Store, j.im.Blobs, p.blob, p.created, true) // as Import: always the full work
 		if err != nil {
 			return err
 		}
@@ -208,7 +252,7 @@ func (j *journalImport) flush(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		j.fr.New += res.New
+		j.fr.New += res.Added
 		j.fr.Deleted += res.Skipped
 		j.fr.Present += present
 		j.fr.Added += len(metas) - res.Skipped - present

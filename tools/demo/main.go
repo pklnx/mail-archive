@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -40,8 +41,10 @@ import (
 	"github.com/pklnx/mail-archive/internal/attachtext/pdftest"
 	"github.com/pklnx/mail-archive/internal/auth"
 	"github.com/pklnx/mail-archive/internal/blobstore"
+	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/crypto"
 	"github.com/pklnx/mail-archive/internal/jobs"
+	"github.com/pklnx/mail-archive/internal/quota"
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/web"
 )
@@ -84,6 +87,7 @@ func main() {
 	listen := flag.String("listen", "127.0.0.1:18080", "address of the web UI")
 	imapListen := flag.String("imap-listen", "127.0.0.1:0", "address of the demo IMAP server (port 0: a free port)")
 	nowFlag := flag.String("now", "", "RFC 3339 instant the demo mail is dated from (empty: the current time); for reproducible screenshots")
+	setupListen := flag.String("setup-listen", "", "address of a second, new instance that waits for its first admin from the setup link (empty: none)")
 	flag.Parse()
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	now, err := parseNow(*nowFlag, time.Now)
@@ -91,7 +95,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "demo:", err)
 		os.Exit(2)
 	}
-	if err := run(*dbURL, *listen, *imapListen, now, log); err != nil {
+	if err := run(*dbURL, *listen, *imapListen, *setupListen, now, log); err != nil {
 		fmt.Fprintln(os.Stderr, "demo:", err)
 		os.Exit(1)
 	}
@@ -112,8 +116,9 @@ func parseNow(s string, wall func() time.Time) (time.Time, error) {
 
 // run starts the demo. now dates the made-up mail (the IMAP messages, the
 // journal copies and the import's cut-off); everything else, such as the
-// 2FA setup and the times the server records, uses the real clock.
-func run(dbURL, listen, imapListen string, now time.Time, log *slog.Logger) error {
+// 2FA setup and the times the server records, uses the real clock. With
+// setupListen it also serves a new instance there (setupDemo).
+func run(dbURL, listen, imapListen, setupListen string, now time.Time, log *slog.Logger) error {
 	if dbURL == "" {
 		return errors.New("set -db or MAIL_ARCHIVE_DATABASE_URL")
 	}
@@ -247,6 +252,17 @@ func run(dbURL, listen, imapListen string, now time.Time, log *slog.Logger) erro
 	if err := st.ConfirmTwoFactorSetup(ctx, admin.ID, code, time.Now(), sealer, nil, key); err != nil {
 		return err
 	}
+	// Alert mail (#397, part 5): the demo admin's address is confirmed,
+	// as after the code; the demo sends no mail (demoMailer).
+	codeAt := time.Now()
+	if err := st.SetNotifyEmail(ctx, admin.ID, store.NotifyCodeRequest{
+		Email: "demo@example.com", CodeHash: store.NotifyCodeHash(admin.ID, "DEMO42"), Language: "en", Now: codeAt,
+	}); err != nil {
+		return err
+	}
+	if err := st.ConfirmNotifyEmail(ctx, admin.ID, store.NotifyCodeHash(admin.ID, "DEMO42"), codeAt); err != nil {
+		return err
+	}
 	// A second user for the users page; it has no accounts.
 	if _, err := st.CreateUserWithGeneratedPassword(ctx, "sam", hash, false); err != nil {
 		return err
@@ -268,6 +284,13 @@ func run(dbURL, listen, imapListen string, now time.Time, log *slog.Logger) erro
 		return fmt.Errorf("attachment text: %w", err)
 	}
 
+	gate, err := demoStorage(ctx, st, log)
+	if err != nil {
+		return fmt.Errorf("storage: %w", err)
+	}
+	syncer.Storage, filler.Storage = gate, gate
+	go gate.Run(ctx)
+
 	runner := &archive.Runner{Syncer: syncer, Schedule: archive.Schedule{Sync: 6 * time.Hour, SyncMin: 5 * time.Minute}}
 	go runner.Run(ctx)
 	fills := &archive.FillRunner{Filler: filler}
@@ -279,16 +302,121 @@ func run(dbURL, listen, imapListen string, now time.Time, log *slog.Logger) erro
 	srv := web.New(st, blobs, log, web.Options{
 		Syncer: syncer, Runner: runner, Fills: fills, Sealer: sealer, SecretKey: key, PublicURL: publicURL,
 		// The demo stores its journal messages directly; the UI shows the
-		// SMTP server as on, as in a real journaling setup.
+		// SMTP server as on, in the default mode with a login (#395), as in
+		// a real journaling setup.
 		SMTPListen: ":2525",
+		SMTPAuth:   true,
 		Retention:  retention,
+		// Alert mail is on, so Profile → Notifications shows; no code is
+		// ever sent.
+		AlertMail: demoMailer{},
+		// The Storage page (#397): the quota, and the data disk.
+		StorageQuotaBytes: demoInstanceQuota,
+		DiskUsage:         demoDisk,
 	})
 	fmt.Printf("demo UI on %s, log in as %q with password %q and a TOTP code for secret %s (Ctrl-C to stop and delete the demo data)\n",
 		publicURL, loginName, loginPassword, loginTOTPSecret)
-	if err := srv.ListenAndServe(ctx, listen); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	setupDone := make(chan error, 1)
+	if setupListen != "" {
+		// Ready before the main UI answers: whoever waits for the demo's
+		// /healthz finds the new instance listening too.
+		serveSetup, closeSetup, err := setupDemo(ctx, dbURL, setupListen, sealer, key, log)
+		if err != nil {
+			return fmt.Errorf("the setup instance: %w", err)
+		}
+		defer closeSetup()
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		go func() { setupDone <- serveSetup(ctx) }()
+		defer func() {
+			cancel()
+			<-setupDone
+		}()
+	}
+	served := make(chan error, 1)
+	go func() { served <- srv.ListenAndServe(ctx, listen) }()
+	select {
+	case err = <-served:
+	case setupErr := <-setupDone:
+		setupDone <- setupErr // for the deferred wait
+		// It ends with an error, or without one when ctx ended (a
+		// signal): then the main UI stops as well.
+		stop()
+		err = <-served
+		if setupErr != nil {
+			return fmt.Errorf("the setup instance: %w", setupErr)
+		}
+	}
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil
+}
+
+// demoSetupToken is the setup token of the new instance (setupDemo); the
+// end-to-end tests and the screenshots open its link. Made up and not
+// secret: it only works on this demo's throwaway database.
+var demoSetupToken = strings.Repeat("demo-setup-", 4)
+
+// setupDemo prepares a second, new instance at listen, on a database of its
+// own: no user yet and a setup token stored, as `serve` stores it at
+// start (#396). Its link is http://localhost:<port>/#setup=<demoSetupToken>.
+// It listens at once; serve serves until its ctx ends, and closeAll drops
+// the database afterwards.
+func setupDemo(ctx context.Context, dbURL, listen string, sealer *crypto.Sealer, key []byte, log *slog.Logger) (serve func(context.Context) error, closeAll func(), err error) {
+	var closers []func()
+	closeAll = func() {
+		for i := len(closers) - 1; i >= 0; i-- {
+			closers[i]()
+		}
+	}
+	defer func() {
+		if err != nil {
+			closeAll()
+		}
+	}()
+	setupURL, dropDB, err := createDatabase(ctx, dbURL)
+	if err != nil {
+		return nil, nil, err
+	}
+	closers = append(closers, dropDB)
+	dataDir, err := os.MkdirTemp("", "mail-archive-demo-setup-")
+	if err != nil {
+		return nil, nil, err
+	}
+	closers = append(closers, func() { _ = os.RemoveAll(dataDir) })
+	st, err := store.Open(ctx, setupURL)
+	if err != nil {
+		return nil, nil, err
+	}
+	closers = append(closers, st.Close)
+	if _, err := st.Migrate(ctx); err != nil {
+		return nil, nil, err
+	}
+	if _, _, err := st.RecordSetupToken(ctx, store.HashSetupToken(demoSetupToken), time.Now()); err != nil {
+		return nil, nil, err
+	}
+	blobs, err := blobstore.New(dataDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	_, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return nil, nil, err
+	}
+	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", listen)
+	if err != nil {
+		return nil, nil, err
+	}
+	publicURL := "http://localhost:" + port
+	srv := web.New(st, blobs, log, web.Options{Sealer: sealer, SecretKey: key, PublicURL: publicURL})
+	fmt.Printf("new instance on %s, set it up with %s/#setup=%s\n", publicURL, publicURL, demoSetupToken)
+	return func(ctx context.Context) error {
+		if err := srv.Serve(ctx, ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
+	}, closeAll, nil
 }
 
 // indexAttachments extracts the text of the archived attachments once, in
@@ -394,6 +522,46 @@ func shareUsers(ctx context.Context, st *store.Store, sealer *crypto.Sealer, syn
 // groups the users page shows its group column, filter and section, and
 // web/e2e/accounts.spec.ts checks that pat cannot share with kim.
 const secondGroup = "Lindqvist Design"
+
+// The demo's storage limits (#397): an instance quota of 1 GiB, and a quota
+// of 512 MiB for the second group, so the Storage page shows both bars.
+const (
+	demoInstanceQuota int64 = 1 << 30
+	demoGroupQuota    int64 = 512 << 20
+)
+
+// demoDisk stands in for the data disk: made-up, fixed figures, so the
+// Storage page shows no figure of the machine the demo runs on and two
+// runs of the docs screenshots give the same image.
+func demoDisk() (free, total uint64, err error) {
+	return 180 << 30, 250 << 30, nil
+}
+
+// demoStorage counts the usage once, as the hourly job would, gives the
+// second group its quota and returns the storage gate the syncs, fills and
+// the web UI ask (#397). It has no disk reserve: the demo's temporary
+// directory shares its disk with everything else.
+func demoStorage(ctx context.Context, st *store.Store, log *slog.Logger) (*quota.Gate, error) {
+	g, err := st.GetGroupByName(ctx, secondGroup)
+	if err != nil {
+		return nil, err
+	}
+	q := demoGroupQuota
+	if _, err := st.SetGroupQuota(ctx, g.ID, &q); err != nil {
+		return nil, err
+	}
+	if _, err := st.RefreshUsage(ctx); err != nil {
+		return nil, err
+	}
+	gate := quota.New(quota.Config{
+		InstanceQuota: demoInstanceQuota,
+		Thresholds:    quota.Thresholds{WarnPercent: config.DefaultStorageWarnPercent, OverflowPercent: config.DefaultStorageSMTPOverflowPercent},
+		Persist:       true,
+	}, st, nil, nil, log)
+	st.SetWriteObserver(gate.Wrote)
+	gate.Refresh(ctx)
+	return gate, nil
+}
 
 // demoGroups creates the second group and moves kim, lee and sam into it.
 // They have no shares, so nothing ends.
@@ -510,11 +678,12 @@ func journal(ctx context.Context, st *store.Store, blobs *blobstore.Store, now t
 			"billing@printshop.example", []string{"alex@example.com"}, now.Add(-50 * time.Hour),
 		},
 	} {
-		blob, created, err := blobs.Put(strings.NewReader(m.raw))
+		// Always the full work of a new message, without a group lookup.
+		blob, created, err := blobs.Put(strings.NewReader(m.raw), blobstore.SyncTemp())
 		if err != nil {
 			return nil, err
 		}
-		meta, err := archive.BuildMeta(ctx, st, blobs, blob, created)
+		meta, err := archive.BuildMeta(ctx, st, blobs, blob, created, true)
 		if err != nil {
 			return nil, err
 		}
@@ -525,6 +694,16 @@ func journal(ctx context.Context, st *store.Store, blobs *blobstore.Store, now t
 		if _, err := st.ReceiveMessage(ctx, acc.ID, meta, env, func() bool { return blobs.Exists(blob.SHA256) }); err != nil {
 			return nil, err
 		}
+	}
+	// A secret the mail server logs in with (#395), three days old, as
+	// `account smtp-secret journal --new` creates it: the account page and
+	// the Users page list it. Only the hash of a fixed text is stored, which
+	// is no secret of the SMTP format, so it lets no one log in.
+	hash := sha256.Sum256([]byte("mail-archive demo: a listed SMTP secret"))
+	if _, _, err := st.CreateSMTPCredential(ctx, acc.Ref(), store.NewSMTPCredential{
+		Hash: hash[:], Hint: "x7qm", Now: now.Add(-72 * time.Hour),
+	}); err != nil {
+		return nil, err
 	}
 	return acc, nil
 }
@@ -838,6 +1017,210 @@ func neutralized(date time.Time, webURL string) message {
 		"Rendering check: boxes that stay empty", date, b.String())}
 }
 
+// The hosts and ports the request checks below point at (web/e2e/demo.ts):
+// the hint servers of web/e2e/hints.spec.ts on *.localhost, and the server
+// of web/e2e/referrer.spec.ts on 127.0.0.2, which is not a demo host, so
+// the server keeps its links.
+const (
+	hintHTTP    = "http://hint-prerender.localhost:18184"
+	hintConnect = "http://hint-preconnect.localhost:18185"
+	referrerURL = "http://127.0.0.2:18183"
+)
+
+// hintCheck is an HTML mail that asks the browser for requests on its own,
+// for web/e2e/hints.spec.ts: resource hints (prerender, prefetch,
+// preconnect, dns-prefetch, preload, modulepreload) in <head> and <body> and
+// in syntax variants, speculation rules, and frames whose src would make the
+// browser connect to the host. The server renames rel and src (and the
+// sandbox and script-src 'none' block the rules), so the browser sends none
+// of them. Its attribute variant is for web/e2e/referrer.spec.ts: a link and
+// an image that set their own referrer policy and cors mode, which the
+// server renames too. It has no SVG or MathML, so its remote images load. Only this mail has the word "periscope". It sits below the
+// kaleidoscope mail, below the rows of the list screenshots.
+func hintCheck(date time.Time) message {
+	var b strings.Builder
+	b.WriteString(`<!DOCTYPE html>` + "\n" + `<html><head>`)
+	b.WriteString(`<link rel="prerender" href="` + hintHTTP + `/head-prerender">`)
+	b.WriteString(`<link rel="prefetch" href="` + hintHTTP + `/head-prefetch">`)
+	b.WriteString(`<link rel="preconnect" href="` + hintConnect + `/">`)
+	b.WriteString(`<link rel="dns-prefetch" href="//hint-dns.localhost/">`)
+	b.WriteString(`<link rel="preload" as="image" href="` + hintHTTP + `/preload.png" imagesrcset="` + hintHTTP + `/preload-2x.png 2x">`)
+	b.WriteString(`<link rel="modulepreload" href="` + hintHTTP + `/module.js">`)
+	b.WriteString(`<script type="speculationrules">{"prerender":[{"source":"list","urls":["` + hintHTTP + `/speculation"]}]}</script>`)
+	b.WriteString(`</head><body style="font-family:Arial,sans-serif;color:#222">`)
+	b.WriteString(`<p>Hi Alex, this is the periscope check. A safe mail client sends no request for this mail until you click.</p>`)
+	b.WriteString(`<LINK REL=PRERENDER HREF=` + hintHTTP + `/body-prerender>`)
+	b.WriteString(`<link rel=preconnect href=` + hintConnect + `/body>`)
+	b.WriteString(`<link/rel=dns-prefetch href="//hint-dns-body.localhost/">`)
+	b.WriteString(`<link href="` + hintHTTP + `/after-quote"rel="prefetch">`)
+	// A frame's URL: the CSP blocks the navigation, but a full Chromium
+	// connects to the host first. The server renames src on <iframe> and
+	// <frame>. A <frame> outside a <frameset> is dropped by the parser; it is
+	// here for the bytes, the unit tests cover the frameset.
+	b.WriteString(`<iframe src="` + hintHTTP + `/iframe" width="16" height="16"></iframe>`)
+	b.WriteString(`<IFRAME SRC=` + hintConnect + `/iframe-upper width=16 height=16></IFRAME>`)
+	b.WriteString(`<frame src="` + hintHTTP + `/frame">`)
+	b.WriteString(`<p><a referrerpolicy="unsafe-url" href="` + referrerURL + `/attr-click">The attribute check</a></p>`)
+	// No SVG <image> here: a mail with inline SVG gets no remote images at
+	// all, so this mail would get none either. cssSVGCheck has one.
+	b.WriteString(`<p><img referrerpolicy="unsafe-url" crossorigin="anonymous" src="` + referrerURL + `/attr-img" width="16" height="16" alt=""></p>`)
+	b.WriteString(`</body></html>`)
+	return message{"work", "INBOX", htmlReply("periscope@layout.example", "Layout Lab <check@layout.example>", "alex.morgan@work.example",
+		"Request check: hints that stay silent", date, b.String())}
+}
+
+// referrerCheck is an HTML mail whose <meta> asks for the full referrer,
+// with a link and an image, for web/e2e/referrer.spec.ts. The server renames
+// the meta's content, so the server's Referrer-Policy: no-referrer holds.
+// Only this mail has the word "semaphore". It sits below the kaleidoscope
+// mail, below the rows of the list screenshots.
+func referrerCheck(date time.Time) message {
+	return message{"work", "INBOX", htmlReply("semaphore@layout.example", "Layout Lab <check@layout.example>", "alex.morgan@work.example",
+		"Referrer check: links that tell nothing", date,
+		`<html><head><meta name="referrer" content="unsafe-url"></head><body style="font-family:Arial,sans-serif;color:#222">`+
+			`<p>Hi Alex, this is the semaphore check. A safe mail client does not tell the sender where you read this mail.</p>`+
+			`<p><a href="`+referrerURL+`/meta-click">The meta check</a></p>`+
+			`<p><img src="`+referrerURL+`/meta-img" width="16" height="16" alt=""></p></body></html>`)}
+}
+
+// cssBox sizes a check's element, so its CSS images are in the layout.
+const cssBox = `display:block;width:24px;height:24px;margin:2px;`
+
+// cssCheck is an HTML mail whose CSS asks for images on
+// web/e2e/css-images.spec.ts's recorder (referrerURL), one path per
+// construct: every property that loads an image (as a style attribute,
+// /css-<name>-attr, and in <style>, /css-<name>-style), image-set() and
+// friends, var(), a custom function, escapes, character references,
+// preprocessing and comments. Chromium would send the archive's origin with
+// each of them; the server makes them inert, so after "Load remote images"
+// only the <img> control loads. It has no SVG or MathML (a mail with them
+// gets no remote images at all, cssSVGCheck), so it is also the positive
+// control that an ordinary HTML mail still loads remote images. Only this
+// mail has the word "zoetrope". It sits below the kaleidoscope mail, below
+// the rows of the list screenshots.
+func cssCheck(date time.Time) message {
+	u := func(path string) string { return referrerURL + "/css-" + path }
+	var rules, body strings.Builder
+	// attr adds an element whose style attribute is decl ({u}: the URL),
+	// with its double quotes as &quot;; raw adds one with decl as it is.
+	raw := func(name, decl string) {
+		body.WriteString(`<div style="` + cssBox + strings.ReplaceAll(decl, "{u}", u(name+"-attr")) + `"></div>`)
+	}
+	attr := func(name, decl string) { raw(name, strings.ReplaceAll(decl, `"`, "&quot;")) }
+	// style adds a rule with decl and an element it applies to.
+	style := func(name, decl string) {
+		rules.WriteString(".c-" + name + "{" + cssBox + strings.ReplaceAll(decl, "{u}", u(name+"-style")) + "}")
+		body.WriteString(`<div class="c-` + name + `"></div>`)
+	}
+	both := func(name, decl string) { attr(name, decl); style(name, decl) }
+
+	// Every property that loads an image.
+	both("background-image", `background-image:url({u})`)
+	both("background", `background:#036 url({u}) no-repeat`)
+	both("list-style-image", `display:list-item;list-style-position:inside;list-style-image:url({u})`)
+	both("list-style", `display:list-item;list-style:square inside url({u})`)
+	both("border-image", `border:4px solid #036;border-image:url({u}) 30 round`)
+	both("content", `content:url({u})`)
+	both("cursor", `cursor:url({u}),auto`)
+	both("mask-image", `mask-image:url({u})`)
+	both("mask", `mask:url({u})`)
+	both("webkit-mask-image", `-webkit-mask-image:url({u})`)
+	both("shape-outside", `float:left;shape-outside:url({u})`)
+	both("clip-path", `clip-path:url({u}#c)`)
+	// Functions that take a URL as a string, also through var() and a
+	// custom function (defined once in <style>).
+	both("image-set", `background-image:image-set("{u}" 1x)`)
+	both("webkit-image-set", `background-image:-webkit-image-set("{u}" 1x)`)
+	both("var-url", `--v:url({u});background-image:var(--v)`)
+	both("var-string", `--s:"{u}";background-image:image-set(var(--s) 1x)`)
+	both("function", `background-image:--f_("{u}")`)
+	// Spellings: a string, escapes, preprocessing, comments.
+	both("url-string", `background-image:url("{u}")`)
+	both("css-escape", `background-image:\75 rl({u})`)
+	both("esc-backslash-l", `background-image:ur\l({u})`)
+	both("esc-55-RL", `background-image:\55 RL({u})`)
+	both("esc-000072", `background-image:u\000072l({u})`)
+	both("esc-imageset", `background-image:imag\65-set("{u}" 1x)`)
+	both("upper-imageset", `background-image:IMAGE-SET("{u}" 1x)`)
+	both("url-tab-escape", `background-image:url(\9 {u})`)
+	both("comment-around", `/**/background-image:url({u})/**/`)
+	style("pre-ff", "background-image:\furl({u})")
+	// Character references, only in an attribute.
+	raw("pre-cr", `background-image:&#13;url({u})`)
+	raw("pre-ff", `background-image:&#12;url({u})`)
+	raw("ref-r", `background-image:u&#114;l({u})`)
+	raw("quot-bare", `background-image:url(&quot`+strings.TrimPrefix(u("quot-bare-attr"), "http:")+`&quot)`)
+	// <!-- and --> around a rule.
+	rules.WriteString("<!-- .c-cdo-cdc{" + cssBox + "background-image:url(" + u("cdo-cdc-style") + ")} -->")
+	body.WriteString(`<div class="c-cdo-cdc"></div>`)
+
+	return message{"work", "INBOX", htmlReply("zoetrope@layout.example", "Layout Lab <check@layout.example>", "alex.morgan@work.example",
+		"CSS image check: backgrounds that stay empty", date,
+		`<!DOCTYPE html>`+"\n"+`<html><head><style>@function --f_(--s){result:image-set(var(--s) 1x)}`+rules.String()+`</style></head>`+
+			`<body style="font-family:Arial,sans-serif;color:#222">`+
+			`<p>Hi Alex, this is the zoetrope check. A safe mail client loads no image a mail sets in its CSS, not even after you load remote images.</p>`+
+			`<p><img src="`+referrerURL+`/css-control-img" width="16" height="16" alt=""></p>`+
+			body.String()+`</body></html>`)}
+}
+
+// cssSVGCheck is an HTML mail with inline SVG and MathML whose CSS loads
+// images, for web/e2e/css-images.spec.ts: SVG presentation attributes and a
+// plain SVG <style>, which the server's rewrite makes inert, an SVG <image>
+// element (/css-svg-image, not CSS, but under the same refusal), and SVG
+// <style> that x/net/html, the server's HTML parser, does not see where the
+// browser does (found in review): a duplicate attribute with the
+// unquoted value "/" (x/net/html calls the tag self-closing, so the <style>
+// after it is HTML raw text there), and a <template> in an integration
+// point (x/net/html ends the document there). The browser joins the
+// <style>'s text children around a comment or CDATA section to url(, so the
+// rewrite, which reads raw text, sees no URL either. A mail with inline SVG
+// or MathML gets no remote images, so no path may get a request, and the
+// web UI says why after "Load remote images". Nothing in it is CSS that the
+// server's parse check finds: without the refusal by "<svg" and "<math",
+// the parser cases would load. Only this mail has the word "stereoscope".
+// It sits below the kaleidoscope mail, below the rows of the list
+// screenshots.
+func cssSVGCheck(date time.Time) message {
+	u := func(path string) string { return referrerURL + "/css-" + path }
+	var b strings.Builder
+	// SVG: presentation attributes, and a plain <style>.
+	svg := func(content string) {
+		b.WriteString(`<svg width="24" height="24" style="margin:2px">` + content + `</svg>`)
+	}
+	rect := `<rect width="24" height="24"`
+	svg(rect + ` fill="url(` + u("svg-fill-attr") + `#p)"/>`)
+	svg(rect + ` fill="none" stroke-width="4" stroke="url(` + u("svg-stroke-attr") + `#p)"/>`)
+	svg(rect + ` fill="#036" mask="url(` + u("svg-mask-attr") + `#m)"/>`)
+	svg(rect + ` fill="#036" clip-path="url(` + u("svg-clip-path-attr") + `#c)"/>`)
+	svg(`<path d="M4 4L20 20" stroke="#036" marker-start="url(` + u("svg-marker-start-attr") + `#k)"/>`)
+	svg(`<style>.sv{fill:url(` + u("svg-style") + `#p)}</style>` + rect + ` class="sv"/>`)
+	// An SVG image element, with its own referrer policy and cors mode
+	// (formerly in hintCheck): no CSS, but refused all the same.
+	svg(`<image crossorigin="anonymous" referrerpolicy="unsafe-url" href="` + u("svg-image") + `" width="24" height="24"/>`)
+	// The parser cases: each <style> gives the HTML <div> after it a
+	// background. The duplicate attribute cases first, the <template>
+	// cases last: x/net/html sees nothing after the first of those.
+	n := 0
+	parser := func(name, before, style, after string) {
+		n++
+		c := fmt.Sprintf("p%d", n)
+		b.WriteString(before + `<style>.` + c + `{background-image:` + strings.ReplaceAll(style, "{u}", u(name)) + `}</style>` +
+			after + `<div class="` + c + `" style="` + cssBox + `"></div>`)
+	}
+	parser("dup-attr-slash", `<svg width="24" height="24"><foreignObject width="24" height="24"><svg data-x=a data-x=/>`, `url<!--c-->({u})`, `</svg></foreignObject></svg>`)
+	parser("dup-attr-bare", `<svg width="24" height="24"><foreignObject width="24" height="24"><svg data-x data-x=/>`, `url<!--c-->({u})`, `</svg></foreignObject></svg>`)
+	parser("math-dup-attr", `<math><mi><svg data-x=a data-x=/>`, `url<!--c-->({u})`, `</svg></mi></math>`)
+	parser("template-foreignobject", `<svg width="24" height="24"><foreignObject width="24" height="24"><div><template></template></div></foreignObject></svg><svg width="0" height="0">`, `url<!--c-->({u})`, `</svg>`)
+	parser("template-mtext", `<math><mtext><template></template></mtext></math><svg width="0" height="0">`, `url<![CDATA[(]]>{u})`, `</svg>`)
+	parser("template-mi", `<math><mi><template></template></mi></math><svg width="0" height="0">`, `url<!--c-->({u})`, `</svg>`)
+	return message{"work", "INBOX", htmlReply("stereoscope@layout.example", "Layout Lab <check@layout.example>", "alex.morgan@work.example",
+		"CSS check, SVG style: images that stay off", date,
+		`<html><body style="font-family:Arial,sans-serif;color:#222">`+
+			`<p>Hi Alex, this is the stereoscope check. A safe mail client loads no image this mail's SVG styles ask for.</p>`+
+			`<p><img src="`+referrerURL+`/css-svg-control-img" width="16" height="16" alt=""></p>`+
+			b.String()+`</body></html>`)}
+}
+
 // leasePDF is the lease attached to Sam's mail: a PDF with a text layer.
 // Only it has the word "deposit", so a search for it matches the
 // attachment alone (web/e2e/mail.spec.ts, the search-attachment
@@ -956,7 +1339,8 @@ Content-Transfer-Encoding: base64
 			"Thanks for signing up. Your mailbox is ready.")},
 	}
 	msgs = append(msgs, offsite(ago)...)
-	msgs = append(msgs, neutralized(ago(19, 12), webURL))
+	msgs = append(msgs, neutralized(ago(19, 12), webURL), hintCheck(ago(19, 14)), referrerCheck(ago(19, 16)),
+		cssCheck(ago(19, 18)), cssSVGCheck(ago(19, 20)))
 	for i := range 25 {
 		msgs = append(msgs, message{"work", "INBOX", plain("Newsletter <news@shop.example>", "alex.morgan@work.example",
 			fmt.Sprintf("Deals of week %d", 40-i), ago(6+i, 0), fmt.Sprintf("The best deals of week %d.", 40-i))})
@@ -997,3 +1381,8 @@ func datedMessages(now time.Time) []datedMessage {
 	}
 	return out
 }
+
+// demoMailer stands in for the mail relay: the demo sends no mail.
+type demoMailer struct{}
+
+func (demoMailer) SendCode(context.Context, int64, string, string, string) error { return nil }

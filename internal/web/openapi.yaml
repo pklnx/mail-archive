@@ -16,7 +16,8 @@ info:
     Requests authenticate with the session cookie of the web UI or with an
     API key: `Authorization: Bearer ma_…`. A key is created in the profile
     and has the scope `read` (messages, search, accounts, status), `sync`
-    (starting syncs) or both; every other route is for sessions only. A key
+    (starting syncs) or both, or, for admins, `metrics` alone (only
+    `GET /api/metrics`); every other route is for sessions only. A key
     request never reads cookies. An invalid, revoked or expired key, or one
     whose owner is locked, answers `401`; a route outside the key's scopes
     `403`; more than 600 requests per key and minute `429`.
@@ -76,7 +77,7 @@ security:
 
 tags:
   - name: health
-    description: Health checks; no login needed.
+    description: Health checks, which need no login, and the admins' instance metrics.
   - name: session
     description: Login and logout.
   - name: profile
@@ -334,7 +335,11 @@ paths:
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
-          description: Wrong code, or the challenge expired.
+          description: >-
+            Wrong code, or the challenge expired. A challenge accepts at most
+            3 codes; the wrong code that uses the last one, and every request
+            after it, answer `too many wrong codes; the login has expired, log
+            in again`.
           content:
             application/json:
               schema:
@@ -348,6 +353,11 @@ paths:
       operationId: beginPasskeyLogin
       x-auditor: true
       summary: Start a passkey login
+      description: |
+        Needs no session. Limited to 30 starts per minute per address (IPv6:
+        per `/64`), to 50 starts within 5 minutes per address (IPv6: per
+        `/64`) and 200 per IPv6 `/48`, and to 50,000 starts within 5 minutes
+        in total.
       security: []
       responses:
         "200":
@@ -357,7 +367,22 @@ paths:
               schema:
                 $ref: "#/components/schemas/Ceremony"
         "429":
-          $ref: "#/components/responses/TooManyRequests"
+          description: |
+            A limit is reached: 30 starts per minute from the address, 50
+            starts within 5 minutes from the address, 200 from the IPv6
+            `/48`, or 50,000 in total; or the address is blocked after
+            failed logins. For the limits within 5 minutes, `Retry-After` is
+            the exact time until the oldest start that blocks this one is 5
+            minutes old.
+          headers:
+            Retry-After:
+              description: Seconds to wait.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Retry"
         "503":
           $ref: "#/components/responses/PasskeysOff"
 
@@ -402,6 +427,69 @@ paths:
           $ref: "#/components/responses/TooManyRequests"
         "503":
           $ref: "#/components/responses/PasskeysOff"
+
+  /api/setup:
+    post:
+      tags: [session]
+      operationId: setup
+      x-auditor: true
+      summary: Create the first admin with the setup token
+      description: |
+        Creates the first admin of a new instance with the setup token the
+        operator configured (`MAIL_ARCHIVE_SETUP_TOKEN_FILE`), once. The
+        link `<public URL>/#setup=<token>` carries the token in its
+        fragment, which never reaches the server; the web UI sends it here.
+        It works only while no user exists, setup was never completed, and
+        the token matches and is under 7 days old from the first start with
+        it. In one transaction it creates the admin, records the setup as
+        complete and consumes the token; after that, and after `user add`,
+        it answers 404.
+
+        The answer is a login: it sets the session cookie, and the admin
+        sets up 2FA next. Like the other login routes it takes no session,
+        so an auditor's session makes no difference (`x-auditor`). Recorded as `user.setup` and `auth.login`, both
+        with method `setup_token`. Wrong or expired tokens count as failed
+        logins of the client address.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, username, password]
+              additionalProperties: false
+              properties:
+                token:
+                  type: string
+                username:
+                  type: string
+                password:
+                  type: string
+                  description: At least 12 characters.
+      responses:
+        "201":
+          description: The admin is created and logged in.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: Wrong or expired setup token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Setup not available, because it is complete or no setup token is set (the two look the same).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
 
   /api/profile:
     patch:
@@ -856,6 +944,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "403":
+          description: The scope `metrics` asked for by a user who is not an admin.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "409":
           description: The name is in use, or the user has the maximum number of keys.
           content:
@@ -880,6 +974,139 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+
+  /api/profile/notifications:
+    get:
+      tags: [profile]
+      operationId: getNotifications
+      summary: The own address for alert mail (admins)
+      description: |
+        Admins only: anyone else gets `403` before any lookup. Without
+        `MAIL_ARCHIVE_MAIL_URL` on the server, `available` is false and
+        nothing else is set; the UI then hides Profile → Notifications.
+      responses:
+        "200":
+          description: The address and its state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Notifications"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+    put:
+      tags: [profile]
+      operationId: setNotifications
+      summary: Set the own address for alert mail and mail a code to it
+      description: |
+        Admins only. The address is unconfirmed, and gets no alert mail,
+        until the 6-character code mailed to it is entered
+        (`POST /api/profile/notifications/confirm`) within 30 minutes. At
+        most 3 codes per hour; sending the same address again sends a new
+        code. Audited as `profile.notify_email_set`, without the address.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              additionalProperties: false
+              properties:
+                email:
+                  type: string
+                  maxLength: 254
+                  description: One mail address, without a display name.
+                language:
+                  type: string
+                  enum: [de, en, auto, ""]
+                  description: |
+                    The UI's language, for the code mail and for alert mail
+                    while the user's language setting is `auto`.
+      responses:
+        "200":
+          description: The code was sent.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Notifications"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+        "409":
+          description: "`mail_off`: alert mail is off on the server."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "502":
+          description: "`mail_failed`: the relay did not take the code mail; the address stays set and unconfirmed."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [profile]
+      operationId: removeNotifications
+      summary: Remove the own address for alert mail
+      description: Admins only. Audited as `profile.notify_email_remove`.
+      responses:
+        "204":
+          description: Removed, or there was none.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+
+  /api/profile/notifications/confirm:
+    post:
+      tags: [profile]
+      operationId: confirmNotifications
+      summary: Confirm the own address for alert mail with the mailed code
+      description: |
+        Admins only. 5 tries per code, case and spaces do not matter.
+        Audited as `profile.notify_email_confirm`, without the address.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              additionalProperties: false
+              properties:
+                code:
+                  type: string
+                  maxLength: 32
+      responses:
+        "200":
+          description: Confirmed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Notifications"
+        "400":
+          description: "`wrong_code`: the code does not match."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+        "409":
+          description: "`no_code`: no code waits or it expired; `code_spent`: 5 wrong tries; `mail_off`: alert mail is off."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /api/users:
     get:
@@ -970,6 +1197,10 @@ paths:
         shared with the user. The answer says how many ended; the audit
         entry `user.group_change` lists them. Admins change their own group
         only on the command line or through another admin.
+
+        `locked` answers with the number of usable SMTP secrets of the smtp
+        accounts the user owns: locking does not stop them, so the admin
+        can revoke them (`/api/admin/smtp-credentials`).
       requestBody:
         required: true
         content:
@@ -991,21 +1222,35 @@ paths:
                   description: The id of the customer group to move the user into; an unknown id is `400 unknown group`.
       responses:
         "200":
-          description: Moved into the group (`group`), or already in it.
+          description: |
+            Moved into the group (`group`), or already in it; or locked or
+            unlocked (`locked`).
           content:
             application/json:
               schema:
-                type: object
-                required: [sharesEnded, grantsRevoked]
-                properties:
-                  sharesEnded:
-                    type: integer
-                    description: How many shares the move ended.
-                  grantsRevoked:
-                    type: integer
-                    description: How many auditor grants the move revoked, of the user as auditor or as owner.
+                oneOf:
+                  - type: object
+                    description: The answer to `group`.
+                    required: [sharesEnded, grantsRevoked]
+                    properties:
+                      sharesEnded:
+                        type: integer
+                        description: How many shares the move ended.
+                      grantsRevoked:
+                        type: integer
+                        description: How many auditor grants the move revoked, of the user as auditor or as owner.
+                  - type: object
+                    description: The answer to `locked`.
+                    required: [smtpCredentialsActive]
+                    properties:
+                      smtpCredentialsActive:
+                        type: integer
+                        description: |
+                          How many SMTP secrets of the smtp accounts the
+                          locked user owns are usable; they keep working
+                          while the user is locked. 0 for an unlock.
         "204":
-          description: Changed (`admin`, `locked`).
+          description: Changed (`admin`).
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -1193,6 +1438,64 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /api/admin/smtp-credentials:
+    get:
+      tags: [users]
+      operationId: listAllSMTPCredentials
+      summary: Every smtp account's SMTP secrets
+      description: |
+        Hints and metadata, never the secrets, of every smtp account, also
+        of removed ones, by account name. Any admin may revoke them, for
+        example after locking their owner, whose secrets keep working.
+      responses:
+        "200":
+          description: The secrets, by account.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [credentials]
+                properties:
+                  credentials:
+                    type: array
+                    items:
+                      allOf:
+                        - $ref: "#/components/schemas/SMTPCredential"
+                        - type: object
+                          required: [account, username, owner, accountRemoved]
+                          properties:
+                            account:
+                              type: string
+                            username:
+                              type: string
+                            owner:
+                              type: string
+                              description: The owner's name; empty for an account without owner.
+                            accountRemoved:
+                              type: boolean
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+
+  /api/admin/smtp-credentials/{id}:
+    parameters:
+      - $ref: "#/components/parameters/numericID"
+    delete:
+      tags: [users]
+      operationId: revokeAnySMTPCredential
+      summary: Revoke any smtp account's SMTP secret
+      description: Audited as `smtp_credential.revoke` with `by_admin`.
+      responses:
+        "204":
+          description: Revoked.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /api/groups:
     get:
       tags: [users]
@@ -1254,17 +1557,28 @@ paths:
       - $ref: "#/components/parameters/numericID"
     patch:
       tags: [users]
-      operationId: renameGroup
-      summary: Rename a customer group
+      operationId: updateGroup
+      summary: Rename a customer group or set its storage quota
+      description: |
+        The body has exactly one field: `name` renames the group,
+        `quotaBytes` sets its storage quota in message bytes (deduplicated
+        within the group), or removes it with `null`. A quota above the
+        instance quota or above 1 EiB is refused with `400`. A quota change
+        is recorded in the audit log as `group.quota`, with the old and the
+        new value; the storage gate applies it at once in this process and
+        within 10 seconds in every other one. Users who are not admins get
+        `403` before the group is looked up.
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/GroupInput"
+              oneOf:
+                - $ref: "#/components/schemas/GroupInput"
+                - $ref: "#/components/schemas/GroupQuotaInput"
       responses:
         "204":
-          description: Renamed.
+          description: Renamed, or the quota set.
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -1449,10 +1763,18 @@ paths:
       summary: Add a legal hold
       description: |
         Every condition that is set must match. A filter is matched at once
-        by search, as the owner of the mail sees it; until then the hold
-        covers its whole scope. Without any condition the hold covers the
+        by search, as the owner of the mail sees it, over headers and text:
+        `to` matches the To and Cc headers only, never envelope (BCC)
+        recipients. Until then the hold covers its whole scope. Without any condition the hold covers the
         whole archive, which needs `all`. With `group`, a `user` or
         `accountId` must be in that customer group (`400` otherwise).
+        A `filter` is taken only over the caller's own mail: the hold names
+        the caller as `user`, or names no user and one of the caller's own
+        accounts; such a hold on an account is stored with the caller as
+        its user too. A filter over other users' mail, an account without
+        owner, a customer group or the whole archive is `403` with code
+        `filter_hold_cli`: the operator adds it with `./ma hold add`.
+        Nothing is stored or recorded then.
       requestBody:
         required: true
         content:
@@ -1509,13 +1831,22 @@ paths:
                   matched:
                     type: integer
                     format: int64
-                    description: Messages the filter matched; only with a filter.
+                    description: >-
+                      Messages the new hold's filter matched; only with a
+                      filter, and absent if matching failed. Only the new
+                      hold is matched.
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
-          $ref: "#/components/responses/AdminOnly"
+          description: >-
+            The user is not an admin, or (code `filter_hold_cli`) the hold
+            has a filter over mail that is not the caller's.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /api/legal-holds/{id}/release:
     parameters:
@@ -2123,6 +2454,101 @@ paths:
         "429":
           $ref: "#/components/responses/TooManyRequests"
 
+  /api/metrics:
+    get:
+      tags: [health]
+      operationId: getMetrics
+      security:
+        - session: []
+        - apiKey: [metrics]
+      summary: Instance metrics for Prometheus (admins)
+      description: |
+        The instance's figures in the Prometheus text format 0.0.4, for an
+        admin's session or an API key with the scope `metrics` (which only
+        an admin can create, alone in its key). A `metrics` key opens no
+        other route, and `read` and `sync` keys get `403` here, as do users
+        who are not admins and keys of an owner who is no longer an admin.
+
+        Only IDs, counts, times and fixed values: storage of the instance,
+        of each customer group and of the accounts without a group (messages,
+        bytes, quota, quota state and since when), per account by ID (group
+        ID, kind, enabled, health, messages, bytes, last successful sync),
+        the data disk, the database by table, jobs per kind and state, users
+        per role and lock state, encryption at rest, the last backup, the
+        version, pending migrations and SMTP deferrals for storage. Never
+        names, hosts, IMAP user names, addresses, folders, subjects or error
+        texts. The answer is cached for 15 seconds.
+      responses:
+        "200":
+          description: The metrics.
+          content:
+            text/plain:
+              schema:
+                type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/APIKeyScope"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/usage:
+    get:
+      tags: [health]
+      operationId: getUsage
+      summary: Storage usage, by role
+      description: |
+        With a session only. Admins get `UsageAdmin`: the instance (usage,
+        quota, quota state, disk, database, last snapshot, last backup,
+        encryption at rest), every customer group with its quota and state,
+        the accounts without a group, and every account with its owner,
+        group and exclusive bytes (bytes no other account holds, computed
+        across groups).
+
+        Everyone else gets `UsageMember`: the size of each of their own
+        accounts at the last snapshot, and `state`, whether new mail of
+        their group is archived (`ok`), paused (`full`) or also deferred at
+        the SMTP server (`overflow`). The answer is the same whichever limit
+        was reached, the group's, the instance's or the disk's, so it shows
+        no other group's usage, quota or state. Auditors get `403`.
+
+        Group figures are an upper bound between snapshots; account figures
+        are those of the last snapshot (`computedAt`).
+      responses:
+        "200":
+          description: The usage the user may see.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/UsageAdmin"
+                  - $ref: "#/components/schemas/UsageMember"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: An auditor, or an API key.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/usage/refresh:
+    post:
+      tags: [health]
+      operationId: refreshUsage
+      summary: Count the usage per account and group again (admins)
+      description: |
+        Queues the usage snapshot, which also runs every hour. It runs in
+        the background, usually within a minute; `computedAt` of
+        `GET /api/usage` shows when it ran.
+      responses:
+        "202":
+          description: Queued.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+
   /api/accounts:
     get:
       tags: [accounts]
@@ -2218,6 +2644,8 @@ paths:
                 $ref: "#/components/schemas/FolderConfirmation"
         "422":
           $ref: "#/components/responses/LoginFailed"
+        "429":
+          $ref: "#/components/responses/TooManyChecks"
         "503":
           $ref: "#/components/responses/SecretKeyMissing"
 
@@ -2270,6 +2698,8 @@ paths:
                 $ref: "#/components/schemas/Error"
         "422":
           $ref: "#/components/responses/LoginFailed"
+        "429":
+          $ref: "#/components/responses/TooManyChecks"
         "503":
           $ref: "#/components/responses/SecretKeyMissing"
     delete:
@@ -2511,8 +2941,12 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/NoServer"
+        "429":
+          $ref: "#/components/responses/TooManyChecks"
         "502":
-          description: The server could not be reached or refused the login.
+          description: |
+            The server could not be reached or refused the login; `code` names
+            the category, as for a failed login check (`LoginFailed`).
           content:
             application/json:
               schema:
@@ -2582,8 +3016,10 @@ paths:
         envelope, and their location names the fill (`fill`). A message
         filed in several IMAP folders is stored once. A message is copied when
         its INTERNALDATE is before the cut-off (`before`) plus one hour,
-        unless the account received a message with the same Message-ID over
-        SMTP. Such a fill runs once.
+        unless the account received the same message over SMTP: the same
+        Message-ID, Date (as an instant, to the second), From addresses
+        (ignoring case and display name) and decoded Subject. Such a fill
+        runs once.
 
         With `"keepRunning": true` the fill is recurring: it has no cut-off
         and copies a message once its INTERNALDATE is two hours old, unless
@@ -2632,6 +3068,8 @@ paths:
                 $ref: "#/components/schemas/FolderConfirmation"
         "422":
           $ref: "#/components/responses/LoginFailed"
+        "429":
+          $ref: "#/components/responses/TooManyChecks"
         "503":
           $ref: "#/components/responses/SecretKeyMissing"
 
@@ -2690,6 +3128,8 @@ paths:
                 $ref: "#/components/schemas/FolderConfirmation"
         "422":
           $ref: "#/components/responses/LoginFailed"
+        "429":
+          $ref: "#/components/responses/TooManyChecks"
         "503":
           $ref: "#/components/responses/SecretKeyMissing"
 
@@ -2747,6 +3187,8 @@ paths:
           $ref: "#/components/responses/Conflict"
         "422":
           $ref: "#/components/responses/LoginFailed"
+        "429":
+          $ref: "#/components/responses/TooManyChecks"
         "503":
           $ref: "#/components/responses/SecretKeyMissing"
 
@@ -2796,6 +3238,8 @@ paths:
                 $ref: "#/components/schemas/Error"
         "422":
           $ref: "#/components/responses/LoginFailed"
+        "429":
+          $ref: "#/components/responses/TooManyChecks"
         "503":
           $ref: "#/components/responses/SecretKeyMissing"
 
@@ -2826,6 +3270,149 @@ paths:
                 $ref: "#/components/schemas/Error"
         "503":
           $ref: "#/components/responses/SecretKeyMissing"
+
+  /api/accounts/{name}/smtp-credentials:
+    parameters:
+      - $ref: "#/components/parameters/accountName"
+    get:
+      tags: [accounts]
+      operationId: listSMTPCredentials
+      summary: The SMTP user name and secrets of an smtp account
+      description: |
+        For the account's owner, who must be an admin. Also revoked and
+        expired secrets, for 30 days; never the secrets themselves.
+      responses:
+        "200":
+          description: The user name and the secrets, newest first.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SMTPCredentials"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Not an smtp account, or the account was removed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      tags: [accounts]
+      operationId: createSMTPCredential
+      summary: Create a new SMTP secret
+      description: |
+        For the account's owner, who must be an admin. Needs the password
+        and, with 2FA on, a TOTP or recovery code. The secret is in the
+        answer and shown only there; only its SHA-256 is stored. The
+        current secret stays usable for `graceDays` (with 0 it is revoked
+        at once), and a secret that was already expiring is revoked, so at
+        most two are usable. Audited as `smtp_credential.create`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [currentPassword]
+              additionalProperties: false
+              properties:
+                currentPassword:
+                  type: string
+                code:
+                  type: string
+                  description: A TOTP code or a recovery code; only with 2FA on.
+                graceDays:
+                  type: [integer, "null"]
+                  minimum: 0
+                  maximum: 30
+                  default: 7
+                  description: Days the current secret stays usable; 0 revokes it at once.
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [username, secret, credential, previous]
+                properties:
+                  username:
+                    type: string
+                    pattern: "^smtp-[1-9][0-9]{0,18}$"
+                  secret:
+                    type: string
+                    pattern: "^mas_[a-z2-7]{52}$"
+                    description: The secret, shown only here.
+                  credential:
+                    $ref: "#/components/schemas/SMTPCredential"
+                  previous:
+                    type: array
+                    description: The older secrets this one changed, with their new end or revocation.
+                    items:
+                      type: object
+                      required: [id]
+                      properties:
+                        id:
+                          type: integer
+                          format: int64
+                        expiresAt:
+                          type: string
+                          format: date-time
+                        revokedAt:
+                          type: string
+                          format: date-time
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: Wrong password or code (counts like a failed login), or no session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Not an smtp account, the account was removed, or it changed meanwhile.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/accounts/{name}/smtp-credentials/{id}:
+    parameters:
+      - $ref: "#/components/parameters/accountName"
+      - $ref: "#/components/parameters/numericID"
+    delete:
+      tags: [accounts]
+      operationId: revokeSMTPCredential
+      summary: Revoke a secret of an smtp account
+      description: |
+        For the account's owner, who must be an admin. Needs no password.
+        A secret of another account, or one already revoked, answers `404`.
+        Audited as `smtp_credential.revoke`.
+      responses:
+        "204":
+          description: Revoked.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Not an smtp account, or the account was removed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /api/sync:
     post:
@@ -3063,7 +3650,13 @@ paths:
         shadow roots and `srcdoc` frames are neutralized in the bytes as
         served: attribute names starting with `shadowroot` on `<template>`
         and `srcdoc` on `<iframe>` get the prefix `data-`; the rename changes
-        no other byte. The
+        no other byte. URLs in the mail's CSS are made inert in the served
+        HTML (`data:,` in front of every `url()`, `_` before every CSS
+        function not known to load nothing). With `images=1`, a mail with
+        inline SVG or MathML (the bytes `<svg` or `<math`, in any case), or
+        whose CSS could still load an image, gets no remote images
+        (`img-src data:`); the message's `remoteImagesRefused` tells the
+        first case in advance. The
         frame needs no request to the parts endpoint; requests it makes to
         `/api` (images, links) are refused with `403` by their Fetch
         Metadata (see the API description).
@@ -3273,11 +3866,36 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
     LoginFailed:
-      description: The IMAP server refused the login.
+      description: |
+        The login check against the IMAP server failed. `code` names the
+        category: `imap_connect` (the server cannot be reached),
+        `imap_tls` (TLS handshake or certificate), `imap_login` (the server
+        refused the login), `imap_timeout` (no answer in time, or the
+        check's minute ran out), `imap_server` (the server refused another
+        command), `imap_protocol` (an answer that cannot be read) or
+        `imap_limit` (the server sent more than the archive accepts, such as
+        too many folders). `error` is a fixed English sentence; the server's
+        own text is only in the server log.
       content:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
+    TooManyChecks:
+      description: |
+        A limit of IMAP login checks refused the check before it connected
+        (`code: too_many_checks`): 20 checks per user and 60 per client
+        address in 10 minutes, 10 failed logins per IMAP server and user name
+        in 10 minutes, or no turn within 15 seconds (2 checks run at a time,
+        one per user).
+      headers:
+        Retry-After:
+          description: Seconds to wait.
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Retry"
     TooManyRequests:
       description: Too many attempts.
       headers:
@@ -3320,13 +3938,18 @@ components:
           type: string
         code:
           type: string
-          enum: [on_hold, conflict, released]
+          enum: [on_hold, conflict, released, filter_hold_cli, imap_connect, imap_tls, imap_login, imap_timeout, imap_server, imap_protocol, imap_limit, mail_off, mail_failed, wrong_code, no_code, code_spent]
           description: |
             A stable, machine-readable reason, for clients that explain the
             error in their own words; `error` is English text that may
             change. `on_hold`: a legal hold names what the request would
             remove. `conflict`: the thing already exists. `released`: the
-            legal hold is released already.
+            legal hold is released already. `filter_hold_cli`: a legal
+            hold with a search filter over other users' mail is added by
+            the operator on the command line. `imap_*`: the category of a
+            failed IMAP login check (`LoginFailed`). `mail_off`, `mail_failed`,
+            `wrong_code`, `no_code`, `code_spent`: Profile → Notifications
+            (`/api/profile/notifications`).
         holdIds:
           type: array
           items:
@@ -3406,12 +4029,42 @@ components:
             removed:
               type: boolean
 
+    Notifications:
+      type: object
+      required: [available, email, confirmed, confirmedAt, bounced, codeExpiresAt]
+      additionalProperties: false
+      properties:
+        available:
+          type: boolean
+          description: False without `MAIL_ARCHIVE_MAIL_URL`; the other fields are then empty.
+        email:
+          type: [string, "null"]
+        confirmed:
+          type: boolean
+          description: Only a confirmed address gets alert mail.
+        confirmedAt:
+          type: [string, "null"]
+          format: date-time
+        bounced:
+          type: boolean
+          description: A relay refused the address (5.1.x); confirm it again.
+        codeExpiresAt:
+          type: [string, "null"]
+          format: date-time
+          description: Set while a code waits to be entered.
     Retry:
       type: object
       required: [error, retryAfter]
       properties:
         error:
           type: string
+        code:
+          type: string
+          enum: [too_many_checks, code_limit]
+          description: |
+            `too_many_checks`: a limit of IMAP login checks refused the
+            request. `code_limit`: three confirmation codes of a
+            notification address were sent in the last hour.
         retryAfter:
           type: integer
           description: Seconds.
@@ -3586,13 +4239,21 @@ components:
           const: false
     NoSession:
       type: object
-      required: [error, setupRequired]
+      required: [error, setupRequired, setup]
       properties:
         error:
           type: string
         setupRequired:
           type: boolean
           description: No user exists yet.
+        setup:
+          type: string
+          enum: [cli, token, expired, complete]
+          description: |
+            How the first admin is created: `cli` (`user add` on the
+            command line), `token` (the operator's setup link works,
+            `POST /api/setup`), `expired` (its token is older than 7 days)
+            or `complete` (a first user exists or existed).
         passkeyOrigin:
           type: string
           description: Where passkey logins work; missing when they are off.
@@ -3691,10 +4352,13 @@ components:
 
     APIKeyScope:
       type: string
-      enum: [read, sync]
+      enum: [read, sync, metrics]
       description: |
         `read`: messages, search, conversations, downloads, accounts and
         status. `sync`: starting syncs. Neither implies the other.
+        `metrics`: only `GET /api/metrics`; only admins create it, and it
+        is the key's only scope (`400` with another, `403` for a user who
+        is not an admin).
     APIKey:
       type: object
       required: [id, name, hint, scopes, createdAt, expiresAt, lastUsedAt, revokedAt, state]
@@ -3726,6 +4390,46 @@ components:
         state:
           type: string
           enum: [active, expired, revoked]
+
+    SMTPCredential:
+      type: object
+      required: [id, hint, createdAt, expiresAt, lastUsedAt, revokedAt, state]
+      properties:
+        id:
+          type: integer
+          format: int64
+        hint:
+          type: string
+          description: The last 4 characters of the secret.
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: [string, "null"]
+          format: date-time
+          description: Set when a newer secret superseded this one with a grace period.
+        lastUsedAt:
+          type: [string, "null"]
+          format: date-time
+        revokedAt:
+          type: [string, "null"]
+          format: date-time
+        state:
+          type: string
+          enum: [active, expiring, expired, revoked]
+          description: "`active`: the current secret; `expiring`: superseded, usable until `expiresAt`."
+
+    SMTPCredentials:
+      type: object
+      required: [username, credentials]
+      properties:
+        username:
+          type: string
+          description: The SMTP user name, `smtp-` and the account's id.
+        credentials:
+          type: array
+          items:
+            $ref: "#/components/schemas/SMTPCredential"
 
     AdminUser:
       type: object
@@ -3776,8 +4480,18 @@ components:
           type: string
     Group:
       type: object
-      required: [id, name, users, accounts, createdAt]
+      required: [id, name, users, accounts, createdAt, quotaBytes, bytes, state]
       properties:
+        quotaBytes:
+          type: [integer, "null"]
+          format: int64
+          description: The group's storage quota in message bytes; null without one.
+        bytes:
+          type: integer
+          format: int64
+          description: The group's usage, deduplicated within the group; an upper bound between snapshots.
+        state:
+          $ref: "#/components/schemas/StorageState"
         id:
           type: integer
           format: int64
@@ -3801,6 +4515,207 @@ components:
           minLength: 1
           maxLength: 100
           description: Without control characters; spaces at either end are removed.
+    GroupQuotaInput:
+      type: object
+      required: [quotaBytes]
+      additionalProperties: false
+      properties:
+        quotaBytes:
+          type: [integer, "null"]
+          format: int64
+          minimum: 1
+          maximum: 1152921504606846976
+          description: The quota in message bytes, at most the instance quota and at most 1 EiB; null removes it.
+    StorageState:
+      type: string
+      enum: [ok, warn, full, overflow, disk_low]
+      description: >-
+        A quota state: `warn` from the warning share of the quota, `full`
+        from 100 % (syncs, fills and imports pause), `overflow` from 100 %
+        plus the SMTP overflow share (the SMTP server defers new mail with
+        452). `disk_low` (the instance only): the data disk has less free
+        space than the reserve, which acts as `overflow`.
+    UsageFigure:
+      type: object
+      required: [messages, bytes]
+      properties:
+        messages:
+          type: integer
+          format: int64
+        bytes:
+          type: integer
+          format: int64
+    UsageDisk:
+      type: object
+      required: [freeBytes, totalBytes]
+      properties:
+        freeBytes:
+          type: integer
+          format: int64
+        totalBytes:
+          type: integer
+          format: int64
+    UsageInstance:
+      type: object
+      required: [messages, bytes, quotaBytes, warnPercent, overflowPercent, minFreeDiskBytes, state, stateSince, disk,
+        databaseBytes, relations, lastBackupAt, encryption]
+      properties:
+        messages:
+          type: integer
+          format: int64
+          description: Unique messages in the archive (exact).
+        bytes:
+          type: integer
+          format: int64
+          description: Their bytes, deduplicated across the instance (exact).
+        quotaBytes:
+          type: [integer, "null"]
+          format: int64
+          description: The instance quota (`MAIL_ARCHIVE_STORAGE_QUOTA`); null without one.
+        warnPercent:
+          type: integer
+        overflowPercent:
+          type: integer
+        minFreeDiskBytes:
+          type: integer
+          format: int64
+          description: The disk reserve; 0 when it is off.
+        state:
+          $ref: "#/components/schemas/StorageState"
+        stateSince:
+          type: string
+          format: date-time
+        disk:
+          oneOf:
+            - $ref: "#/components/schemas/UsageDisk"
+            - type: "null"
+          description: The data directory's file system; null when it could not be measured.
+        databaseBytes:
+          type: integer
+          format: int64
+          description: The database's size at the last snapshot.
+        relations:
+          type: object
+          additionalProperties:
+            type: integer
+            format: int64
+          description: The largest tables with their indexes, at the last snapshot.
+        lastBackupAt:
+          type: [string, "null"]
+          format: date-time
+          description: The last backup within 30 days, from the audit log.
+        encryption:
+          type: string
+          description: Encryption at rest, `off`, `on`, or a conversion in progress.
+    UsageGroup:
+      type: object
+      required: [id, name, messages, bytes, quotaBytes, state, stateSince]
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        messages:
+          type: integer
+          format: int64
+        bytes:
+          type: integer
+          format: int64
+          description: Deduplicated within the group; an upper bound between snapshots.
+        quotaBytes:
+          type: [integer, "null"]
+          format: int64
+        state:
+          $ref: "#/components/schemas/StorageState"
+        stateSince:
+          type: [string, "null"]
+          format: date-time
+          description: Null before the group's first change of state.
+    UsageAccount:
+      type: object
+      required: [id, name, kind, removed, owner, groupId, own, messages, bytes, exclusiveBytes, counted]
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        kind:
+          $ref: "#/components/schemas/AccountKind"
+        removed:
+          type: boolean
+        owner:
+          type: string
+          description: Empty for an account without an owner.
+        groupId:
+          type: [integer, "null"]
+          format: int64
+        own:
+          type: boolean
+          description: The caller owns the account.
+        messages:
+          type: integer
+          format: int64
+        bytes:
+          type: integer
+          format: int64
+          description: The account's unique messages; shared with other accounts where they hold them too.
+        exclusiveBytes:
+          type: integer
+          format: int64
+          description: Bytes no other account holds, in any group; what a purge would free.
+        counted:
+          type: boolean
+          description: False before the first snapshot that saw the account; the figures are then 0.
+    UsageAdmin:
+      type: object
+      required: [instance, groups, ungrouped, accounts, computedAt]
+      properties:
+        instance:
+          $ref: "#/components/schemas/UsageInstance"
+        groups:
+          type: array
+          items:
+            $ref: "#/components/schemas/UsageGroup"
+        ungrouped:
+          $ref: "#/components/schemas/UsageFigure"
+        accounts:
+          type: array
+          items:
+            $ref: "#/components/schemas/UsageAccount"
+        computedAt:
+          type: [string, "null"]
+          format: date-time
+          description: When the last snapshot ran; null before the first.
+    UsageMember:
+      type: object
+      required: [state, accounts]
+      properties:
+        state:
+          type: string
+          enum: [ok, full, overflow]
+          description: >-
+            Whether new mail of the user's group is archived: `full`, syncs,
+            fills and imports pause; `overflow`, the SMTP server also defers
+            it. The same whichever limit was reached.
+        accounts:
+          type: array
+          items:
+            $ref: "#/components/schemas/UsageOwnAccount"
+    UsageOwnAccount:
+      type: object
+      required: [name, messages, bytes]
+      properties:
+        name:
+          type: string
+        messages:
+          type: [integer, "null"]
+          format: int64
+        bytes:
+          type: [integer, "null"]
+          format: int64
+          description: Null before the first snapshot that saw the account.
     GeneratedPassword:
       type: object
       required: [name, password]
@@ -3908,13 +4823,27 @@ components:
         otherFailing:
           type: integer
           description: For admins only, the number of failing accounts of other users.
+        notifyEmailBounced:
+          type: boolean
+          description: |
+            For admins only, and only when true: a mail relay refused the
+            admin's own notification address, which gets no alert mail until
+            it is confirmed again in Profile → Notifications.
         smtp:
           type: [object, "null"]
           additionalProperties: false
+          required: [auth]
           description: >-
             Null when the SMTP server is off (`MAIL_ARCHIVE_SMTP_LISTEN`
-            empty): smtp accounts then receive nothing. An empty object when
-            it is on.
+            empty): smtp accounts then receive nothing.
+          properties:
+            auth:
+              type: string
+              enum: [required, "off"]
+              description: >-
+                `MAIL_ARCHIVE_SMTP_AUTH`: `required` (mail servers log in with
+                an SMTP secret after STARTTLS) or `off` (the allowlist alone).
+                The mail server setup shows the Postfix lines of this mode.
     Account:
       type: object
       required: [name, kind, enabled, removed, purging, purge, host, port, tls, username, includedFolders, excludedFolders, syncInterval, folders, sync, goneMessages, lastReconciledAt, addresses, lastReceivedAt, fill, fills, firstReceived, sharedWith]
@@ -4058,7 +4987,7 @@ components:
           description: Messages kept so far, because they are also in other accounts.
     PurgePreview:
       type: object
-      required: [account, kind, locations, messages, deleted, deletedBytes, kept, keptIn, grace, blockers, purge]
+      required: [account, kind, locations, messages, deleted, deletedBytes, kept, keptIn, keptByOthers, grace, blockers, purge]
       properties:
         account:
           type: string
@@ -4085,7 +5014,9 @@ components:
           description: Messages also in other accounts; they stay there.
         keptIn:
           type: array
-          description: Where the kept messages also are (counts only).
+          description: >-
+            The caller's own other accounts that keep copies (counts only).
+            Accounts the caller does not own are never named.
           items:
             type: object
             required: [owner, account, messages]
@@ -4098,6 +5029,12 @@ components:
               messages:
                 type: integer
                 format: int64
+        keptByOthers:
+          type: integer
+          format: int64
+          description: >-
+            Kept messages in none of the caller's other accounts, only in
+            accounts the caller does not own.
         grace:
           type: string
           description: >-
@@ -4243,6 +5180,10 @@ components:
           type: integer
         new:
           type: integer
+          description: >-
+            Messages new to the account: not held before in any of its
+            folders, even if the archive held the same bytes from another
+            account. Runs before 1.5.3 keep the figure they recorded.
         error:
           type: string
         reconciledFolders:
@@ -4548,13 +5489,18 @@ components:
           description: Messages copied.
         new:
           type: integer
-          description: Of those, messages new to the archive.
+          description: >-
+            Of those, messages new to the account: not held before in any of
+            its folders, even if the archive held the same bytes from another
+            account.
         afterCutoff:
           type: integer
           description: Left to journaling (from an hour after the cut-off on).
         journaled:
           type: integer
-          description: Skipped; the account received the same Message-ID over SMTP.
+          description: >-
+            Skipped; the account received the same message over SMTP (the
+            same Message-ID, Date, From and Subject).
         present:
           type: integer
           description: >-
@@ -4696,7 +5642,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/MessageSummary"
         - type: object
-          required: [messageId, to, cc, dateHeader, text, hasHtml, truncated, parts, locations]
+          required: [messageId, to, cc, dateHeader, text, hasHtml, truncated, parts, locations, remoteImagesRefused]
           properties:
             messageId:
               type: string
@@ -4713,6 +5659,11 @@ components:
               type: string
             hasHtml:
               type: boolean
+            remoteImagesRefused:
+              type: boolean
+              description: |
+                The HTML body has inline SVG or MathML, so its HTML with
+                `images=1` loads no remote images.
             truncated:
               type: boolean
             parts:
@@ -4999,8 +5950,12 @@ components:
           format: date-time
           description: When the filter's matches were last stored; until then the hold covers its whole scope.
         matched:
-          type: integer
+          type: [integer, "null"]
           format: int64
+          description: >-
+            Messages the filter matched so far; only for a hold on the
+            caller or on one of their own accounts, null for every other
+            hold (other users, their accounts, groups, the instance).
         createdAt:
           type: string
           format: date-time

@@ -99,7 +99,7 @@ installed Chromium, or run `pnpm exec playwright install chromium` once in
 Playwright brings (`pnpm exec playwright --version` names the Playwright
 release; its release notes name the Chromium). Older builds word console
 messages differently, and the guards match some of them by their text. CI
-uses Playwright's own headless shell (`--only-shell`). A single test: `cd web && pnpm e2e -g "phone"`. A failed test keeps a
+runs the suite in Playwright's own headless shell. A single test: `cd web && pnpm e2e -g "phone"`. A failed test keeps a
 trace in `web/test-results/` (`pnpm exec playwright show-trace <file>`); the
 trace has no DOM snapshots and no network log, because Playwright's DOM
 snapshotter makes the browser log blocked script in sandboxed frames, which
@@ -110,13 +110,15 @@ to any other host (`web/e2e/fixtures.ts`). They use role and label queries,
 wait for elements and responses, never for time, and run without retries.
 Names a test creates are unique per run, and no test depends on another.
 CI runs the suite in the `web-e2e` job. The suite itself (`pnpm e2e`, about
-170 tests on one worker) takes about six minutes there; the device checks of
-[#367](https://github.com/pklnx/mail-archive/issues/367) added about 40
-seconds of it, measured locally. The job installs only Playwright's headless
-Chromium, without apt, and checks its libraries (`scripts/ci-playwright-chromium.sh`): the runner image
-has them. If one is missing, the run shows a warning and installs them with
-apt, which can take 8 to 13 minutes when the runner's apt mirror is slow. The
-job's timeout is 20 minutes so that this fallback fits.
+260 tests on one worker, with the UI and demo builds) took 8.6 to 12.2
+minutes there, median about 11.4, over the ten newest green `main` runs
+(2026-11-05 to 2026-11-12); the whole job a median of about 12.4. The job
+installs Playwright's headless shell and its full Chromium (for the resource
+hint test below), without apt, and checks their libraries
+(`scripts/ci-playwright-chromium.sh`): the runner image has them. If one is
+missing, the run shows a warning and installs them with apt, which can take
+8 to 13 minutes when the runner's apt mirror is slow. The job's timeout is 20
+minutes so that this fallback fits.
 
 The job is skipped on docs-only pull requests, where only `docs/**`,
 `.claude/**` or `*.md` files change (`*.md` also matches in code
@@ -127,21 +129,146 @@ starts would leave it pending for ever. The filter fails closed: a failed
 detection, an empty diff or any other changed file runs the suite, and so does
 every push to `main`. `web-e2e` is a required check.
 
-One spec also runs in Playwright's WebKit until
-[#398](https://github.com/pklnx/mail-archive/issues/398) runs the suite there:
-`web/e2e/frame-links.spec.ts`, which checks that no link in an HTML mail leads
-into the app and that a link redirecting back to the archive is refused
-(#459; its server listens on 127.0.0.2:18182, so it needs Linux's loopback
-range). `E2E_BROWSER` picks the engine (`chromium` by default, or
-`webkit`; anything else is an error), and `pnpm e2e:webkit` in `web/` runs the
-`webkit` project, which runs only that spec and records traces without
-screenshots. WebKit has to be installed first (`pnpm exec playwright install
-webkit`, plus its system libraries: `--with-deps`). CI runs it in the
-`web-e2e-webkit` job, with the same skip rule as `web-e2e`. That job always
-installs WebKit's libraries with apt, which took 8 to 13 minutes in this
-repository when the mirror was slow (`scripts/ci-playwright-chromium.sh`), so
-its timeout is 30 minutes. It is not a required check, but a red result
-blocks merging.
+`web/e2e/hints.spec.ts` checks that resource hints in an HTML mail
+(`<link rel=prerender>`, `preconnect`, `dns-prefetch`) and frame sources
+(`<iframe src>`, which Chromium connects to before the CSP blocks it) send
+nothing. It
+launches its own browser: Playwright's **full** Chromium
+(`channel: "chromium"`), because the headless shell never sends a hint,
+with a persistent profile, because the full Chromium sends a preconnect or
+DNS prefetch only there, and with background networking on. So it needs
+the full Chromium: run `pnpm exec playwright install chromium` in `web/`
+(it installs the headless shell too), or point `CHROMIUM_PATH` to a full
+Chromium. It keeps that browser off the network with
+`--host-resolver-rules` (every name outside `localhost` and `*.localhost`,
+IP addresses included, fails to resolve) and checks Chromium's net log for
+it at the end; the only other address it accepts is the UDP `connect()` of
+Chromium's IPv6 reachability check (2001:4860:4860::8888, which sends no
+packet and which no flag turns off), identified by its socket. Its
+listeners use ports 18184 to 18187 on 127.0.0.1 and
+`[::1]`; `web/e2e/referrer.spec.ts` uses 127.0.0.2:18183. A positive control
+(hints the test adds to the mail's document) shows that hints fire in that
+browser; a hint of the mail fails the test at once, and no control fails it
+at the timeout. The rest of the suite keeps Playwright's default launch, in
+which this cannot be seen.
+
+`web/e2e/css-images.spec.ts` checks that images an HTML mail sets through
+CSS are never requested, also after **Load remote images**: the demo's CSS
+checks give every construct its own path on the recorder of
+`referrer.spec.ts` (`referrerOrigin`, 127.0.0.2:18183, `recorder.ts`). Its
+positive controls are a CSS background and a CSS mask that the test adds to
+the mail's document; they must arrive with the archive's origin, so an
+absence means something, and a last control is the signal for the negative
+check. It runs in the fixture's page (the project's browser) and in a context
+of the full Chromium with default launch arguments (no persistent profile).
+The CSS check mail holds no SVG or MathML, so it is also the positive
+control that an ordinary HTML mail still loads remote images. A second
+mail, with SVG and MathML (presentation attributes, an SVG `<image>`, SVG `<style>` the
+server's rewrite cannot read as the browser does, and the x/net/html parser
+divergences found in review), must get a CSP without remote images,
+issue no request, and show the web UI's hint that remote images stay
+blocked.
+
+#### WebKit
+
+The suite also runs in Playwright's WebKit
+([#398](https://github.com/pklnx/mail-archive/issues/398)). That is WebKit's
+Linux port, not Safari: it covers WebKit's layout and CSS engine, its
+JavaScript and DOM event order, CSP and sandbox enforcement, flatpickr, and
+the phone viewports with touch taps. It does not cover macOS platform
+behaviour (a click that does not focus, overlay scrollbars, the trackpad,
+native select popups), iOS (safe areas, the home-screen mode, gestures, text
+autosizing), real passkeys, VoiceOver, or text widths, which differ by a few
+pixels between Linux and macOS font rendering. Those stay in the manual device
+checks.
+
+`E2E_BROWSER` picks the engine for a run: `chromium` (the default) or
+`webkit`; anything else is an error. A run has exactly one project, because
+the tests change the demo's data (`retention.spec.ts` empties a folder) and
+a second project against the same demo would fail. `pnpm e2e:webkit` in
+`web/` runs the `webkit` project, and so does
+`E2E_BROWSER=webkit make web-e2e`. WebKit has to be installed first:
+`pnpm exec playwright install --with-deps webkit` (its system libraries come
+from apt), or `pnpm exec playwright install webkit` where they are already
+there. Some tests listen on 127.0.0.2, so they need Linux's loopback range.
+
+Tests that WebKit cannot run carry a tag, and the `webkit` project leaves them
+out (`grepInvert`); they run in every Chromium run. No test is skipped per
+browser.
+
+- `@cdp`: the test uses the DevTools protocol (`newCDPSession`): Chromium's
+  accessibility tree, touch swipes, the safe-area insets.
+- `@chromium-layer`: the test checks the web UI's own blocker for links in
+  the mail frame. WebKit does not run the listeners the web UI adds to the
+  sandboxed frame
+  ([#459](https://github.com/pklnx/mail-archive/issues/459)), so there the
+  server's link rewrite is the protection. `web/e2e/frame-links.spec.ts`
+  checks it in both engines: no link in an HTML mail leads into the app, and
+  a link redirecting back to the archive is refused (its server listens on
+  127.0.0.2:18182).
+- `@chromium-launch`: the test launches its own Chromium (`hints.spec.ts`,
+  the full-Chromium case of `css-images.spec.ts`).
+
+Where an expected value is a fact of the engine, not of the app, the test
+names that fact, and reads it from the browser where it can
+(`web/e2e/engine.ts`). In Playwright's WebKit:
+
+- there is no WebAuthn (it stubs `PublicKeyCredential` as an object), so the
+  login page offers no passkey;
+- there is no `clipboard-write` permission;
+- `-webkit-user-select` is inherited but the unprefixed `user-select` is not,
+  so the tests read the prefixed one first;
+- CSS images honour `Referrer-Policy: no-referrer` and send no Referer, while
+  Chromium sends the origin;
+- the mouse wheel does not work in a mobile context;
+- some lengths and positions come out with sub-pixel differences, so a few
+  checks allow them (a frame's height under 1 px at the Pixel 7's 2.625
+  pixel ratio, a table row's alignment 2 px instead of 1.5).
+
+A WebKit failure of an assertion about the app is an app bug.
+
+Playwright's trace screenshots add an inline style to the page in WebKit,
+which the app's CSP refuses
+([#343](https://github.com/pklnx/mail-archive/issues/343)), so the `webkit`
+project records traces without screenshots. In WebKit the guards'
+`securitypolicyviolation` listener is the guard of record, with a few narrow
+exceptions (`web/e2e/fixtures.ts`), each with a test in `guards.spec.ts` that
+it still fails what it must:
+
+- WebKit gives every `<select>` a style attribute in its own user-agent
+  shadow tree (`text-overflow:inherit`) and checks it against the page's CSP,
+  so each select reports one `style-src-attr` violation. Chromium reports
+  none. The listener skips exactly that report: no sample, its target a
+  select without a style attribute of its own, or the document right after
+  the page's script created a select; at most one per select. A style
+  attribute the page sets, on a select or elsewhere, still fails.
+- WebKit's own console lines for a refused style ("Refused to apply a
+  stylesheet …") and for a remote image the mail frame refuses carry no
+  useful location, so the guards accept them by their words; on an app page
+  the listener still reports each refusal.
+- The page error "ResizeObserver loop completed with undelivered
+  notifications.", which Playwright's WebKit reports when the frame fit
+  resizes what its observer watches within one frame; accepted by its exact
+  text until the frame fit defers that work.
+- WebKit refuses a fetch that a document starts while its frame has a
+  navigation to a new document in flight, and logs "Fetch API cannot load
+  … due to access control checks.", which Playwright's WebKit reports
+  as a page error ([#552](https://github.com/pklnx/mail-archive/issues/552)).
+  The guards hold that page error, by the first line of its stack and for a
+  same-origin `/api/` URL only, while a main-frame document navigation of the
+  page is in flight (its request seen, not yet committed), and accept it once
+  that navigation commits a new document; otherwise, or if the navigation
+  fails or the test ends first, it is reported. An uncaught exception of the
+  page's own code that carries the text is reported as a console error.
+
+CI runs it in the `web-e2e-webkit` job, next to `web-e2e` and with the same
+skip rule. It is a job of its own, not a matrix: a matrix would rename the
+required check `web-e2e`. The job always installs WebKit's libraries with
+apt, which took 30 seconds to 8 minutes over the ten newest green `main`
+runs while the job ran one spec (median about 40 seconds); `web-e2e`'s apt
+fallback took 8 to 13 minutes when the mirror was slow
+(`scripts/ci-playwright-chromium.sh`), so its timeout is 30 minutes. It is
+not a required check, but a red result blocks merging.
 
 ## Documentation
 
@@ -211,7 +338,11 @@ ALTER TABLE messages DROP COLUMN thread_id;
 ```
 
 Name new files with the next number. Never edit a migration that has been
-released; add a new one. The store tests roll every migration down and up
+released; add a new one. Every migration runs in a transaction of its own:
+`-- +goose NO TRANSACTION` is refused by `TestMigrationsAreTransactional`,
+because `serve` and `worker` apply migrations at start and rely on a failed
+one rolling back completely (see
+[Start-up of serve and worker](./architecture#start-up-of-serve-and-worker)). The store tests roll every migration down and up
 again, so a broken `Down` section fails CI. The [review gate](./review-gate)
 lints the `Up` section of new migrations with squawk and reports an edited
 or deleted migration.
@@ -360,4 +491,7 @@ branches and tags.
 fixture's exact path and a regex for the fake value, and a comment saying why
 it is safe. Global regexes and path globs are not allowed. Better still,
 build fake credentials at runtime in tests, so nothing in the repository
-matches a rule (see `scripts/secret-scan-test.sh`).
+matches a rule (see `scripts/secret-scan-test.sh`). A fake value that is only
+in the history and not on `main` (for example on the branch of a closed pull
+request, which `make secrets` scans in a full clone) gets its fingerprint in
+`.gitleaksignore` with a comment instead.

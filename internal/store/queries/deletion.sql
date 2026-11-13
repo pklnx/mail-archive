@@ -85,6 +85,26 @@ FROM messages m
 WHERE m.sha256 = ANY (@shas::bpchar[])
 ORDER BY m.seq;
 
+-- name: InsertRetentionMarks :execrows
+-- The deletion marks of a run's batch (#539), after its tombstones and
+-- before its locations go: every account and customer group (0: without
+-- an owner) that holds the message, with the tombstone.
+INSERT INTO deletion_marks (sha256, archived_at, account_ids, group_ids, run_id, tombstone_id)
+SELECT d.sha256, d.archived_at,
+       ARRAY(SELECT DISTINCT f.account_id
+             FROM message_locations l JOIN folders f ON f.id = l.folder_id
+             WHERE l.message_sha256 = d.sha256 ORDER BY 1),
+       ARRAY(SELECT DISTINCT coalesce(o.group_id, 0)
+             FROM message_locations l
+             JOIN folders f ON f.id = l.folder_id
+             JOIN accounts a ON a.id = f.account_id
+             LEFT JOIN users o ON o.id = a.owner_id
+             WHERE l.message_sha256 = d.sha256 ORDER BY 1),
+       d.run_id, d.id
+FROM deleted_messages d
+WHERE d.run_id = @run_id::bigint AND d.sha256 = ANY (@shas::bpchar[])
+ORDER BY d.id;
+
 -- name: InsertRetentionDeletions :execrows
 -- The deletion records of the attestation chain (#66), in the same
 -- transaction as the tombstones.
@@ -156,13 +176,58 @@ LIMIT @row_limit;
 -- name: DeleteBlobRemovals :execrows
 DELETE FROM blob_removals WHERE sha256 = ANY (@shas::bpchar[]) AND due_at <= now();
 
--- name: TombstonedOf :many
--- Hashes of a batch that were deleted and are not in the archive now.
-SELECT d.sha256::text AS sha256, min(d.archived_at)::timestamptz AS archived_at
-FROM deleted_messages d
-WHERE d.sha256 = ANY (@shas::bpchar[])
-  AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.sha256 = d.sha256)
-GROUP BY d.sha256;
+-- name: DeletionMarksOf :many
+-- The hashes of a batch deleted from the account or its customer group
+-- (group_id 0: accounts without an owner): a deletion mark names the
+-- account or the group, or a tombstone has no mark (written before 1.6.0,
+-- or by a process of an older version since; it counts for every group).
+-- With the earliest matching archived_at, and whether the message row
+-- exists now (then the file belongs to another copy). Marks of other
+-- accounts and groups do not count, so the answer never depends on what
+-- other groups deleted (#539).
+WITH hit AS (
+    SELECT k.sha256, k.archived_at
+    FROM deletion_marks k
+    WHERE k.sha256 = ANY (@shas::bpchar[])
+      AND (@account_id::bigint = ANY (k.account_ids) OR @group_id::bigint = ANY (k.group_ids))
+    UNION ALL
+    SELECT d.sha256, d.archived_at
+    FROM deleted_messages d
+    WHERE d.sha256 = ANY (@shas::bpchar[])
+      AND NOT EXISTS (SELECT 1 FROM deletion_marks k WHERE k.tombstone_id = d.id)
+)
+SELECT h.sha256::text AS sha256, min(h.archived_at)::timestamptz AS archived_at,
+       EXISTS (SELECT 1 FROM messages m WHERE m.sha256 = h.sha256) AS archived
+FROM hit h
+GROUP BY h.sha256;
+
+-- name: GroupHasLocations :many
+-- The hashes of a batch that an account of the customer group holds, the
+-- saving account included (gone locations too); group 0 is the accounts
+-- without an owner. Driven from the group's own folders: one probe of
+-- message_locations_folder_sha_idx per folder and hash, so the cost
+-- depends only on the group's folders and the batch, never on how many
+-- accounts of other groups hold the same bytes (#539). The LATERAL
+-- subquery's LIMIT 1 is the fence: without it the planner flattens the
+-- probes into a lookup of each hash in message_locations_sha_idx, in the
+-- custom and in the generic plan (TestGroupHasLocationsPlan). OFFSET 0 on
+-- the group's folders is the second fence of the shape GroupHeldMessages
+-- uses. Unlike GroupHeldMessages (storage usage), it counts the saving
+-- account and group 0 (TestDeletionMarksGroupZero, TestDeletionMarksRetention).
+SELECT DISTINCT s.sha::text AS sha256
+FROM unnest(@shas::bpchar[]) AS s (sha)
+CROSS JOIN (
+    SELECT f.id FROM folders f
+    JOIN accounts a ON a.id = f.account_id
+    LEFT JOIN users o ON o.id = a.owner_id
+    WHERE coalesce(o.group_id, 0) = @group_id::bigint
+    OFFSET 0
+) gf
+JOIN LATERAL (
+    SELECT 1 FROM message_locations ml
+    WHERE ml.folder_id = gf.id AND ml.message_sha256 = s.sha
+    LIMIT 1
+) held ON true;
 
 -- name: SkipRearchive :one
 -- Whether a deleted message would already be expired at a new location:

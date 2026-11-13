@@ -8,6 +8,10 @@ import { chromium } from "playwright-core";
 import { bucket, describeUnpinned, minute, pinTimes } from "./pin-times.mjs";
 
 const base = process.env.DEMO_URL ?? "http://localhost:18080";
+// The demo's second, new instance (tools/demo -setup-listen, #396) and its
+// made-up setup token (demoSetupToken in tools/demo).
+const setupBase = process.env.DEMO_SETUP_URL ?? "http://localhost:18088";
+const setupToken = "demo-setup-".repeat(4);
 // DOCS_SCREENSHOTS_DIR sets the output folder; by default it is the docs' own.
 const out = process.env.DOCS_SCREENSHOTS_DIR || new URL("../public/screenshots/", import.meta.url).pathname;
 await mkdir(out, { recursive: true });
@@ -179,6 +183,20 @@ async function openMessage(p, subject, path = "/") {
   await p.context().close();
 }
 
+// The page of the setup link (#396), on the new instance: the form, with
+// the user name typed in. Nothing is sent.
+{
+  const ctx = await browser.newContext({ ...contextOptions, colorScheme: "light", viewport: { width: 1280, height: 720 }, deviceScaleFactor: 2 });
+  await ctx.clock.setFixedTime(browserNow);
+  const p = await ctx.newPage();
+  p.on("pageerror", (e) => errors.push(String(e)));
+  await p.goto(`${setupBase}/#setup=${setupToken}`);
+  await p.getByLabel("User name").fill("patrick");
+  await p.getByRole("button", { name: "Create admin" }).waitFor();
+  await shot(p, "setup");
+  await ctx.close();
+}
+
 for (const scheme of ["light", "dark"]) {
   const p = await page(scheme);
   await openMessage(p, "Photos from the weekend");
@@ -346,6 +364,20 @@ for (const scheme of ["light", "dark"]) {
 }
 
 {
+  // The page of the smtp account "journal" (#395): Connection, its SMTP
+  // secrets with the demo's one secret, and the Mail server setup with the
+  // login lines. A taller window shows the setup's lines.
+  const p = await page("light", { width: 1280, height: 1500 });
+  await p.goto(base + "/?view=accounts&id=journal");
+  const main = p.getByRole("main");
+  await main.getByRole("heading", { name: "journal", level: 1 }).waitFor();
+  await main.getByRole("region", { name: "SMTP secrets" }).getByRole("cell", { name: "mas_…x7qm", exact: true }).waitFor();
+  await main.getByRole("region", { name: "Mail server setup" }).getByText(/smtp-\d+:mas_…/).waitFor();
+  await shot(p, "account-smtp");
+  await p.context().close();
+}
+
+{
   // pat's Accounts page: the own account team, and under it the account the
   // demo admin shared with pat (#389).
   const p = await page("light", desktop, { as: shareOwner });
@@ -401,12 +433,26 @@ for (const scheme of ["light", "dark"]) {
   await main.getByRole("region", { name: "API keys" }).waitFor();
   await shot(p, "user-detail");
 
+  // The SMTP secrets of every smtp account under the users table (#395).
+  await p.goto(base + "/?view=users");
+  const secrets = main.getByRole("region", { name: "SMTP secrets" });
+  await secrets.getByRole("rowheader", { name: "journal" }).waitFor();
+  await secrets.scrollIntoViewIfNeeded();
+  await shot(p, "user-smtp-secrets");
+
   // The customer groups under the users table (#470): the demo has two.
   await p.goto(base + "/?view=users");
   const groups = main.getByRole("region", { name: "Groups" });
   await groups.getByRole("rowheader", { name: "Lindqvist Design" }).waitFor();
   await groups.scrollIntoViewIfNeeded();
   await shot(p, "user-groups");
+
+  // The Storage page (#397, part 4): the instance quota of 1 GiB and the
+  // second group's 512 MiB from the demo.
+  await p.goto(base + "/?view=storage");
+  await main.getByRole("heading", { name: "Storage", level: 1 }).waitFor();
+  await main.getByRole("table", { name: "Customer groups" }).getByRole("rowheader", { name: "Lindqvist Design" }).waitFor();
+  await shot(p, "storage");
 
   // The rules: the table with Add rule above it.
   await p.goto(base + "/?view=retention");
@@ -428,6 +474,12 @@ for (const scheme of ["light", "dark"]) {
   await main.getByRole("tab", { name: "API keys" }).click();
   await main.getByRole("tabpanel", { name: "API keys" }).getByRole("button", { name: "Create API key" }).waitFor();
   await shot(p, "profile-api-keys");
+  // The notifications tab of an admin (#397, part 5): the demo admin's
+  // confirmed address for alert mail.
+  await main.getByRole("tab", { name: "Notifications" }).click();
+  const notifications = main.getByRole("tabpanel", { name: "Notifications" });
+  await notifications.getByText("Alert mail goes to demo@example.com.").waitFor();
+  await shot(p, "profile-notifications");
   await p.context().close();
 }
 

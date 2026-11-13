@@ -11,15 +11,31 @@ and shares stay inside it. A tax advisor or tax auditor gets an
 
 ## The first admin
 
-The operator creates the first user, an admin, on the command line when the
-instance is set up:
+The first user of an instance is an admin. It comes from one of two ways:
 
-```sh
-./ma user add patrick --admin
-```
+- **The setup link.** A new instance started from configuration waits for
+  its first admin: the operator sends the link
+  `https://archive.example.com/#setup=…` once (see
+  [Start from configuration](./getting-started#start-from-configuration)).
+  Whoever opens it chooses the admin's user name and password and is logged
+  in. The link works once, only while no user exists, and for 7 days; after
+  that, or once it was used, it shows that the instance is set up, or that
+  the link has expired, and offers the login page. The audit log records the
+  setup as `user.setup`.
+
+  ![The setup link's page: user name, password and its repetition](/screenshots/setup.png)
+
+- **The command line.** The operator creates the admin when the instance is
+  set up:
+
+  ```sh
+  ./ma user add patrick --admin
+  ```
+
+  This also completes the setup: a setup link set afterwards never works.
 
 Administrators must set up two-factor authentication (TOTP) at their first
-web login, after choosing their own password. Admins cannot turn it off.
+web login, right after the setup link or after choosing their own password. Admins cannot turn it off.
 Another admin, or `./ma user reset-2fa NAME` on the command line, can reset
 it; the admin then sets it up again at the next login.
 
@@ -92,10 +108,36 @@ operator creates the second group on the command line:
 With two or more groups, the users page has a **Group** column, a group
 filter above the table and **Change group** in each user's menu, and a
 user's page shows the group. Under the table, **Groups** lists every group
-with its users and accounts; **Add group** adds one, and each group's menu
-has **Rename** and **Remove**, which stays off while the group has users.
+with its users, accounts and storage quota; **Add group** adds one, and each
+group's menu has **Rename** and **Remove**, which stays off while the group
+has users.
 
 ![The customer groups under the users table](/screenshots/user-groups.png)
+
+### Storage quota of a group
+
+The operator can limit how much a group stores, in message bytes counted
+once within the group: on the [Storage page](./web-ui#storage) with
+**Edit quota**, which shows each group's usage and state, or on the command
+line:
+
+```sh
+./ma group set-quota "Steuerbüro Meier" 50GiB
+./ma group set-quota "Steuerbüro Meier" none
+./ma group list
+```
+
+`group list` shows each group's quota, the storage it uses and its state
+(`ok`, `warn`, `full`, `overflow`); the **Groups** section of the users page
+shows each group's quota too. A group quota is never above the instance's
+(`MAIL_ARCHIVE_STORAGE_QUOTA`); the change is recorded in the audit log as
+`group.quota`. When a group is full, its syncs, fills and imports pause, and
+from the overflow on its journal mail is deferred; its users can still read
+and search everything, and see a banner that new mail is not archived, but
+not the group's usage or quota. While the instance has only one group, the
+Storage page offers no quota editing; a quota that group has from the command
+line shows on the instance's bar. See
+[Storage and quotas](./operations#storage-and-quotas).
 
 Groups separate customers logically, inside one database and one archive
 directory (see [Security](../reference/security#login)). A customer who needs
@@ -134,7 +176,10 @@ first. Admins can:
 - **API keys:** the user's page lists their keys; **Revoke** stops one at
   once, after asking. This also works for your own keys, on your own page.
 - **Lock / Unlock:** a locked user is logged out at once and cannot log in;
-  their API keys stop working until they are unlocked.
+  their API keys stop working until they are unlocked. The SMTP secrets of
+  smtp accounts the user owns keep working, so that journaling goes on: if
+  any are usable, the page says how many, with a link to **SMTP secrets**
+  below the users table, where you can revoke them.
 - **Make admin / Remove admin:** not for auditors, whose role never changes.
 - **Change group:** with two or more [customer groups](#customer-groups);
   ends the shares and [auditor grants](#auditor-access) that would cross
@@ -146,6 +191,16 @@ first. Admins can:
   with the removed user end; a new user with the same name gets none of them.
   Removing an auditor ends its grants first, as the dialog says; the page
   then names them, and they stay in their owners' lists as history.
+
+**SMTP secrets** below the users table lists the secrets mail servers log
+in with, of every smtp account (only while there are any): account, owner,
+user name, the last four characters, state, until when it is valid and last
+use, with **Revoke** for each that still works. Only the account's owner
+creates new ones, on the account's page
+([SMTP secrets](./accounts#the-account-s-page)); here an admin can end any of
+them, for example after locking their owner.
+
+![SMTP secrets on the Users page](/screenshots/user-smtp-secrets.png)
 
 A user whose accounts keep failing to sync is marked with the number of
 those accounts, so you can tell them.
@@ -172,13 +227,15 @@ runs the server and the database and can technically read the stored mail
 
 The profile icon in the header (on phones and touch screens: the person
 icon, then **Profile**), or **Profile** in the navigation opens your
-profile. It has three tabs:
+profile. It has three tabs, and for admins a fourth:
 
 - **Display:** the [language and formats](./web-ui#appearance-and-language)
   of the web UI.
 - **Sign-in & security:** your password, [2FA](#two-factor-authentication)
   and [passkeys](#passkeys).
 - **API keys:** [keys for scripts](#api-keys).
+- **Notifications** (admins, when the operator set up a mail relay): your
+  address for [alert mail](./email-alerts).
 
 To change your password you need the current one. Other devices are logged
 out; the one you use stays logged in.
@@ -211,7 +268,8 @@ code from the app (**Generate new recovery codes**), and download them the
 same way. The old codes stop working, so throw away the old sheet.
 
 From then on, the login asks for a code after the password. A code works
-only once and only for about 30 seconds before or after its time.
+only once and only for about 30 seconds before or after its time. After 3
+wrong codes, the login starts again with the password.
 
 Users who are not admins can turn 2FA off in their profile with their
 password and a code, unless the operator requires it for everyone
@@ -398,6 +456,11 @@ one if it is lost.
   shared with you, download messages and attachments, and see your
   accounts and their status.
 - **sync** lets it start syncs of your accounts.
+- **metrics** (admins only) lets a monitoring system read the instance
+  metrics, `GET /api/metrics`: IDs and counts, no names and no mail. It
+  is a key's only scope; choosing it clears read and sync. It stops working
+  when its owner is no longer an admin. See
+  [Metrics](./operations#metrics).
 
 A key can do nothing else: no logins, no profile or account changes, no
 user management, also for an admin. How to use a key is described in the

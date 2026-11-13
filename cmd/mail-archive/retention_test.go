@@ -132,6 +132,59 @@ func TestRetentionCommands(t *testing.T) {
 	}
 }
 
+// hold list says who added each hold (#538): the operator reviews the
+// filter holds admins added in the web UI, and the unknown ones like them.
+// The web sets created_by, the command line never does; without it the
+// hold.add audit entry tells, and without that the creator is unknown.
+func TestHoldListCreatedBy(t *testing.T) {
+	s := newArchiveSetup(t)
+	ctx := context.Background()
+	anna := *s.accs["anna"].OwnerID
+	if out, err := runOut(t, newHoldCmd(), "add", "operator hold", "--reason", "r", "--user", "anna", "--query", "anna"); err != nil ||
+		!strings.Contains(out, "legal hold 1 added") {
+		t.Fatalf("hold add: %v\n%s", err, out)
+	}
+	web := func(name string, by *store.User) {
+		t.Helper()
+		e := store.TargetedEntry(store.ActorSession, "hold.add")
+		e.UserID, e.UserName = &by.ID, by.Name
+		if _, err := s.st.AddLegalHold(store.WithAudit(ctx, e), store.NewLegalHold{
+			Name: name, Reason: "r", OwnerID: &anna, Filter: &store.HoldFilter{Query: "anna"}, CreatedBy: &by.ID,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"admin", "eve"} {
+		u, err := s.st.CreateUser(ctx, name, "h", true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		web(name+"'s hold", u)
+		if name == "eve" {
+			if err := s.st.DeleteUser(ctx, u.ID); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if _, err := connectDB(t, s.url).Exec(ctx, `INSERT INTO legal_holds (name, reason, owner_id) VALUES ('by hand', 'r', $1)`, anna); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runOut(t, newHoldCmd(), "list")
+	if err != nil {
+		t.Fatalf("hold list: %v\n%s", err, out)
+	}
+	if !regexpMatch(`(?m)^ID\s+NAME\s+SCOPE\s+CREATED\s+CREATED BY\s+STATE\s+REASON$`, out) {
+		t.Errorf("header:\n%s", out)
+	}
+	for name, by := range map[string]string{
+		"operator hold": "cli", "admin's hold": "admin", "eve's hold": `eve \(removed\)`, "by hand": "unknown",
+	} {
+		if !regexpMatch(`(?m)^\d+\s+`+name+`\s.*\d{4}-\d\d-\d\d  +`+by+`  +active  +r$`, out) {
+			t.Errorf("%s not created by %s:\n%s", name, by, out)
+		}
+	}
+}
+
 func TestDeletionCommands(t *testing.T) {
 	s := newArchiveSetup(t)
 	ctx := context.Background()

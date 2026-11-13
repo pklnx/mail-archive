@@ -1,8 +1,8 @@
 // The requests of the Users page that change users and customer groups.
-// Only UsersPage imports this module, so it is part of the lazy Users chunk
-// and not of the initial bundle (#470 part 2); api.ts keeps usersApi.list,
-// which the Log and Retention pages use too.
-import { getJSON, send, type GeneratedPassword } from "./api";
+// Only UsersPage and StoragePage (group quotas, #397 part 4) import this
+// module, so it stays out of the initial bundle (#470 part 2); api.ts keeps
+// usersApi.list, which the Log and Retention pages use too.
+import { getJSON, send, type GeneratedPassword, type StorageState } from "./api";
 
 /** A customer group (#470), with its users and their accounts (removed ones too). */
 export interface CustomerGroup {
@@ -11,6 +11,10 @@ export interface CustomerGroup {
   users: number;
   accounts: number;
   createdAt: string;
+  /** The storage quota in message bytes, null without one; the usage and the quota state (#397). */
+  quotaBytes: number | null;
+  bytes: number;
+  state: StorageState;
 }
 
 /** A grant that ended with its auditor's removal (#393): it stays in its owner's list as history. */
@@ -34,7 +38,12 @@ export const userAdminApi = {
   resetPassword: async (name: string, removePasskeys: boolean, revokeApiKeys: boolean) =>
     (await send<GeneratedPassword>("POST", `${userPath(name)}/password`, { removePasskeys, revokeApiKeys }))!,
   setAdmin: (name: string, admin: boolean) => send("PATCH", userPath(name), { admin }),
-  setLocked: (name: string, locked: boolean) => send("PATCH", userPath(name), { locked }),
+  /**
+   * Locks or unlocks the user; resolves to how many SMTP secrets of the smtp
+   * accounts they own stay usable (#395): a lock does not stop them. 0 for an unlock.
+   */
+  setLocked: async (name: string, locked: boolean) =>
+    (await send<{ smtpCredentialsActive: number }>("PATCH", userPath(name), { locked }))?.smtpCredentialsActive ?? 0,
   /** Moves the user into the group; resolves to how many shares and auditor grants (#393) ended. */
   setGroup: async (name: string, group: number) =>
     (await send<{ sharesEnded: number; grantsRevoked?: number }>("PATCH", userPath(name), { group }))!,
@@ -48,5 +57,7 @@ export const groupsApi = {
   list: async (signal?: AbortSignal) => (await getJSON<{ groups: CustomerGroup[] }>("/api/groups", signal)).groups,
   create: async (name: string) => (await send<CustomerGroup>("POST", "/api/groups", { name }))!,
   rename: (id: number, name: string) => send("PATCH", groupPath(id), { name }),
+  /** Sets the group's storage quota in bytes; null removes it (#397). */
+  setQuota: (id: number, quotaBytes: number | null) => send("PATCH", groupPath(id), { quotaBytes }),
   remove: (id: number) => send("DELETE", groupPath(id)),
 };
