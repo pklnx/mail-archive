@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -133,4 +135,98 @@ func TestServeStarting(t *testing.T) {
 		}
 	}
 	noSecrets(t, "serve's log", out, dbURL, k)
+}
+
+// TestServeStartFailureEnds (#550): a start that fails after the sync and
+// fill runners have started ends serve with its error instead of hanging
+// in the deferred waits for those runners. runServe returns only after
+// its deferred waits for the runners, so its return is the signal that
+// they ended. Its context comes from the hang guard: without the fix the
+// guard cancels the runners, so serve still returns, and the test fails
+// cleanly instead of leaking a serve that holds the store.
+func TestServeStartFailureEnds(t *testing.T) {
+	cases := []struct {
+		name string
+		env  func(t *testing.T)
+		want string
+	}{{
+		// The SMTP listen port is busy: net.Listen fails in startSMTP.
+		name: "busy SMTP port",
+		env: func(t *testing.T) {
+			busy, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = busy.Close() })
+			t.Setenv(config.EnvSMTPListen, busy.Addr().String())
+			t.Setenv(config.EnvSMTPAuth, config.SMTPAuthOff)
+			t.Setenv(config.EnvSMTPAllowedNetworks, "127.0.0.1/32")
+		},
+		want: config.EnvSMTPListen,
+	}, {
+		// Certificate files that exist but do not parse: the certificate
+		// load fails in startSMTP, before it listens.
+		name: "broken SMTP certificate",
+		env: func(t *testing.T) {
+			dir := t.TempDir()
+			cert, key := filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
+			for _, p := range []string{cert, key} {
+				if err := os.WriteFile(p, []byte("not a PEM file\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Setenv(config.EnvSMTPListen, "127.0.0.1:0")
+			t.Setenv(config.EnvSMTPAuth, config.SMTPAuthRequired)
+			t.Setenv(config.EnvSMTPAllowedNetworks, "")
+			t.Setenv(config.EnvSMTPTLSCert, cert)
+			t.Setenv(config.EnvSMTPTLSKey, key)
+		},
+		want: config.EnvSMTPTLSCert,
+	}}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, dbURL := storetest.NewWithURL(t)
+			startEnv(t, dbURL, false)
+			t.Setenv(config.EnvAllowedHosts, "archive.lan")
+			t.Setenv(config.EnvEncryptionAtSetup, "off")
+			useKeyFile(t, newTestKey(t))
+			tc.env(t)
+			cfg, err := config.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), testwait.Limit(t))
+			defer cancel()
+			logs := &lockedBuffer{}
+			done := make(chan error, 1)
+			go func() { done <- runServe(ctx, cfg, slog.New(slog.NewTextHandler(logs, nil)), ln) }()
+			var serveErr error
+			select {
+			case serveErr = <-done:
+			case <-ctx.Done():
+				// The guard cancelled serve's context: let it return so
+				// that nothing of it outlives the test.
+				<-done
+				t.Fatalf("serve did not end after its start failed:\n%s", logs)
+			}
+			// Both can be ready at once: serve that ended only because the
+			// guard cancelled it hung as well.
+			if ctx.Err() != nil {
+				t.Fatalf("serve ended only when the hang guard cancelled it: %v\n%s", serveErr, logs)
+			}
+			if serveErr == nil || !strings.Contains(serveErr.Error(), tc.want) {
+				t.Fatalf("serve: %v, want an error naming %s\n%s", serveErr, tc.want, logs)
+			}
+			if code, msg := exitStatus(context.Background(), serveErr); code != 1 || !strings.Contains(msg, tc.want) {
+				t.Errorf("exit status: %d %q, want 1 and a message naming %s", code, msg, tc.want)
+			}
+			if strings.Contains(logs.String(), "msg=ready") {
+				t.Errorf("serve got ready although its start failed:\n%s", logs)
+			}
+		})
+	}
 }
