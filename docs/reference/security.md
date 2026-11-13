@@ -208,6 +208,13 @@ Accepted:
   behaves as before 1.6.0: its search shows attachment text, and its syncs,
   fills and deliveries skip and store messages as before 1.6.0. Stop web and
   worker before upgrading.
+- When an admin moves an account to another group while a sync, fill or
+  SMTP delivery of that account runs, at most one message whose group lookup
+  ran just before the move can still be parsed or skipped for the old group.
+  The save then finds the changed group, stores nothing of that batch and
+  does it again for the new group, so nothing the old group's holdings
+  decided is stored for the new group; only the time the discarded work took
+  falls into a run that the new owner could watch.
 
 Not covered: a message stays in an account after its retention period while
 another account keeps it (see Retention and deletion above). A location's
