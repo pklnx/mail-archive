@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/imaptest"
 	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/pklnx/mail-archive/internal/testwait"
 )
 
 // The same work for a message new to the customer group (#539, part 3):
@@ -584,4 +586,76 @@ func TestNewToGroupAdoptionDuringSync(t *testing.T) {
 		t.Errorf("temporary files synchronized %d times, want 2 (group 0, then the new group)", n)
 	}
 	probe.expect("adopted", true)
+}
+
+// TestNewToGroupRedoBound: the account moves at every temporary-file sync,
+// between alice (group A) and carol (group B), so that every save of the
+// batch (M and N) finds a lookup made for the other group and is refused.
+// The sync saves once and redoes the batch archive.MaxRedos times, then
+// stops the folder run with the refusal and stores nothing; the next run,
+// without moves, stores the batch. The first run has a deadline
+// (testwait.Limit), so that a broken bound, which redoes the batch for as
+// long as the account keeps moving, fails the test instead of hanging it.
+func TestNewToGroupRedoBound(t *testing.T) {
+	mf := newMoveFixture(t)
+	f := mf.fixture
+	a := &store.Account{Name: "work", Host: f.host, Port: f.port, TLSMode: store.TLSModeNone, Username: "alice@example.com", Enabled: true, OwnerID: &mf.alice.ID}
+	seal := func(id int64) ([]byte, error) { return archive.SealPassword(f.sealer, id, "secret") }
+	if err := f.store.CreateAccountSealed(f.ctx, a, seal); err != nil {
+		t.Fatal(err)
+	}
+	// Each attempt starts in group A: M's lookup (new to A) synchronizes
+	// its temporary file and moves the account to B, N's lookup (new to B)
+	// synchronizes its own and moves it back to A. Two temporary files
+	// per attempt, and the save finds N looked up for B.
+	attempts := 1 + archive.MaxRedos
+	want := 2 * attempts
+	var (
+		mu    sync.Mutex
+		syncs int
+		moves []error
+	)
+	f.blobs.OnTempSync(func(string) {
+		mu.Lock()
+		syncs++
+		n := syncs
+		mu.Unlock()
+		owner := mf.carol
+		if n%2 == 0 {
+			owner = mf.alice
+		}
+		if err := mf.moveTo(a.ID, owner); err != nil {
+			mu.Lock()
+			moves = append(moves, err)
+			mu.Unlock()
+		}
+	})
+	t.Cleanup(func() { f.blobs.OnTempSync(nil) })
+
+	ctx, cancel := context.WithTimeout(f.ctx, testwait.Limit(t))
+	r := f.syncer.SyncAccount(ctx, a)
+	cancel()
+	f.blobs.OnTempSync(nil)
+	mu.Lock()
+	n, moveErrs := syncs, moves
+	mu.Unlock()
+	if len(moveErrs) > 0 {
+		t.Fatalf("moves: %v", moveErrs)
+	}
+	if !errors.Is(r.Err, store.ErrGroupChanged) || !strings.Contains(r.Err.Error(), "the batch is stored by the next run") || r.New != 0 {
+		t.Errorf("first run: new=%d err=%v; want 0 and the refusal after %d attempts", r.New, r.Err, attempts)
+	}
+	if n != want {
+		t.Errorf("first run: temporary files synchronized %d times, want %d (%d attempts)", n, want, attempts)
+	}
+	if got := mf.probe.take(); len(got) != 0 {
+		t.Errorf("first run: inserts %+v, want none", got)
+	}
+
+	if r := f.syncer.SyncAccount(f.ctx, a); r.Err != nil || r.New != 2 {
+		t.Fatalf("second run: %+v", r)
+	}
+	if got := mf.probe.take(); len(got) != 2 {
+		t.Errorf("second run: inserts %+v, want M and N", got)
+	}
 }
