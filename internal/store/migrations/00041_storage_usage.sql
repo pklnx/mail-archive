@@ -155,8 +155,9 @@ CREATE TRIGGER messages_storage_guard BEFORE UPDATE OF size, sha256 ON messages
     EXECUTE FUNCTION storage_refuse_size_change();
 
 -- The snapshot reads hashes and sizes from this index (index-only), not
--- from the message heap. It goes first, and the base is filled from it:
--- measured faster than two passes over the heap (operations.md).
+-- from the message heap. The base is filled after it, so that the fill
+-- can read the index instead of the heap a second time (the order is to
+-- be confirmed by the cold measurement in operations.md).
 CREATE INDEX messages_sha_size_idx ON messages (sha256) INCLUDE (size);
 INSERT INTO storage_counter_base (messages, bytes)
 SELECT count(*), coalesce(sum(size), 0) FROM messages;
