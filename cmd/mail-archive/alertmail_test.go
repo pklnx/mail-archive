@@ -61,8 +61,8 @@ func runMailTest(t *testing.T, args ...string) (int, string) {
 // through the configured relay and prints the reply code; a refusal
 // prints its code without the relay's text or the password.
 func TestNotifyMailTestCommand(t *testing.T) {
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", "postgres://unused")
-	t.Setenv("MAIL_ARCHIVE_DATA_DIR", t.TempDir())
+	t.Setenv(config.EnvDatabaseURL, "postgres://unused")
+	t.Setenv(config.EnvDataDir, t.TempDir())
 	t.Setenv(config.EnvMailURL, "")
 	if code, out := runMailTest(t, "--to", "admin@example.com"); code == 0 || !strings.Contains(out, "is not set") {
 		t.Fatalf("without a URL: %d %s", code, out)
@@ -93,14 +93,14 @@ func TestSyncSendsAlertMail(t *testing.T) {
 	}
 	host, port := imaptest.Start(t, user)
 	st, url := storetest.NewWithURL(t)
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
-	t.Setenv("MAIL_ARCHIVE_DATA_DIR", t.TempDir())
-	t.Setenv("MAIL_ARCHIVE_LOG_LEVEL", "error")
-	t.Setenv("MAIL_ARCHIVE_STORAGE_QUOTA", "1")
-	t.Setenv("MAIL_ARCHIVE_MIN_FREE_DISK", "0")
-	t.Setenv("MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL", "")
+	t.Setenv(config.EnvDatabaseURL, url)
+	t.Setenv(config.EnvDataDir, t.TempDir())
+	t.Setenv(config.EnvLogLevel, "error")
+	t.Setenv(config.EnvStorageQuota, "1")
+	t.Setenv(config.EnvMinFreeDisk, "0")
+	t.Setenv(config.EnvNotifyWebhookURL, "")
 	keyStr, _ := crypto.GenerateKey()
-	t.Setenv("MAIL_ARCHIVE_SECRET_KEY", keyStr)
+	t.Setenv(config.EnvSecretKey, keyStr)
 	key, _ := crypto.ParseKey(keyStr)
 	sealer, _ := crypto.NewSealer(key)
 	ctx := context.Background()

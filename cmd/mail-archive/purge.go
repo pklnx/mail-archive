@@ -31,7 +31,7 @@ itself; its name is free again. A message that is also in another account
 this account is deleted like a retention deletion: it leaves a record
 (hash, size, dates, no subject or sender) and a signed deletion entry in
 the next attestation, and its file is removed after
-MAIL_ARCHIVE_RETENTION_FILE_GRACE.
+KEEPIA_ARCHIVE_RETENTION_FILE_GRACE.
 
 Only for removed accounts ("account remove" first) that no retention rule
 covers and no legal hold names or covers, released holds included. It is

@@ -1,5 +1,5 @@
 // Package alertmail sends alert mail to admins (#397, part 5) through the
-// relay the operator configured (MAIL_ARCHIVE_MAIL_URL): the notify_mail
+// relay the operator configured (KEEPIA_ARCHIVE_MAIL_URL): the notify_mail
 // job that the notifier enqueues per admin and transition, the
 // confirmation code of a notification address, and `./ma notify
 // mail-test`. TLS is required: smtps, or smtp with STARTTLS, with the

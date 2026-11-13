@@ -38,7 +38,7 @@ func cliInstance(action string) *store.AuditEntry {
 }
 
 // cliEntry fills in who ran a command. Commands have no user, IP or user
-// agent; the operating system user and MAIL_ARCHIVE_OPERATOR (set by ./ma
+// agent; the operating system user and KEEPIA_ARCHIVE_OPERATOR (set by ./ma
 // to the host user) say who ran it. Neither is verified: whoever runs the
 // command holds the database password.
 func cliEntry(e *store.AuditEntry) *store.AuditEntry {
@@ -47,7 +47,7 @@ func cliEntry(e *store.AuditEntry) *store.AuditEntry {
 	} else {
 		e.Detail("os_user", strconv.Itoa(os.Getuid()))
 	}
-	if op := strings.TrimSpace(os.Getenv(config.EnvOperator)); op != "" {
+	if op := strings.TrimSpace(config.Getenv(config.EnvOperator)); op != "" {
 		e.Detail("operator", op)
 	}
 	return e

@@ -12,16 +12,16 @@ import (
 const (
 	// EnvStorageQuota is the instance's quota in message bytes after
 	// deduplication, like 500GiB; empty or 0 means no quota.
-	EnvStorageQuota = "MAIL_ARCHIVE_STORAGE_QUOTA"
+	EnvStorageQuota = "KEEPIA_ARCHIVE_STORAGE_QUOTA"
 	// EnvStorageWarnPercent is the share of a quota at which its scope is
 	// in warn.
-	EnvStorageWarnPercent = "MAIL_ARCHIVE_STORAGE_WARN_PERCENT"
+	EnvStorageWarnPercent = "KEEPIA_ARCHIVE_STORAGE_WARN_PERCENT"
 	// EnvStorageSMTPOverflowPercent is how far above 100 % of a quota the
 	// SMTP server still accepts journal copies.
-	EnvStorageSMTPOverflowPercent = "MAIL_ARCHIVE_STORAGE_SMTP_OVERFLOW_PERCENT"
+	EnvStorageSMTPOverflowPercent = "KEEPIA_ARCHIVE_STORAGE_SMTP_OVERFLOW_PERCENT"
 	// EnvMinFreeDisk is the free space of the data directory's file system
 	// below which nothing new is stored (disk_low); 0 turns it off.
-	EnvMinFreeDisk = "MAIL_ARCHIVE_MIN_FREE_DISK"
+	EnvMinFreeDisk = "KEEPIA_ARCHIVE_MIN_FREE_DISK"
 )
 
 // Defaults and ranges of the storage settings.

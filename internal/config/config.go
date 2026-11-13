@@ -19,99 +19,99 @@ import (
 
 // Environment variable names.
 const (
-	EnvDatabaseURL = "MAIL_ARCHIVE_DATABASE_URL"
-	EnvDataDir     = "MAIL_ARCHIVE_DATA_DIR"
-	EnvSecretKey   = "MAIL_ARCHIVE_SECRET_KEY" //nolint:gosec // variable name, not a credential
-	EnvLogLevel    = "MAIL_ARCHIVE_LOG_LEVEL"
+	EnvDatabaseURL = "KEEPIA_ARCHIVE_DATABASE_URL"
+	EnvDataDir     = "KEEPIA_ARCHIVE_DATA_DIR"
+	EnvSecretKey   = "KEEPIA_ARCHIVE_SECRET_KEY" //nolint:gosec // variable name, not a credential
+	EnvLogLevel    = "KEEPIA_ARCHIVE_LOG_LEVEL"
 	// EnvAllowedHosts is a comma-separated list of host names the web server
 	// accepts in the Host header (protection against DNS rebinding).
-	EnvAllowedHosts = "MAIL_ARCHIVE_ALLOWED_HOSTS"
+	EnvAllowedHosts = "KEEPIA_ARCHIVE_ALLOWED_HOSTS"
 	// EnvSyncInterval is how often the web server syncs each enabled account
 	// (Go duration like "6h"; "0" turns the schedule off).
-	EnvSyncInterval = "MAIL_ARCHIVE_SYNC_INTERVAL"
+	EnvSyncInterval = "KEEPIA_ARCHIVE_SYNC_INTERVAL"
 	// EnvSyncIntervalMin is the shortest interval the schedule syncs an
 	// account at, also for accounts with a shorter own interval.
-	EnvSyncIntervalMin = "MAIL_ARCHIVE_SYNC_INTERVAL_MIN"
-	EnvRequire2FA      = "MAIL_ARCHIVE_REQUIRE_2FA"
+	EnvSyncIntervalMin = "KEEPIA_ARCHIVE_SYNC_INTERVAL_MIN"
+	EnvRequire2FA      = "KEEPIA_ARCHIVE_REQUIRE_2FA"
 	// EnvReconcileInterval is how often each folder is compared with the
 	// server to find deleted messages and changed flags ("0" turns it off).
-	EnvReconcileInterval = "MAIL_ARCHIVE_RECONCILE_INTERVAL"
+	EnvReconcileInterval = "KEEPIA_ARCHIVE_RECONCILE_INTERVAL"
 	// EnvPublicURL is the address users open in the browser, like
 	// https://archive.example.ts.net. Passkeys need it: they are bound to
 	// its host name.
-	EnvPublicURL = "MAIL_ARCHIVE_PUBLIC_URL"
+	EnvPublicURL = "KEEPIA_ARCHIVE_PUBLIC_URL"
 	// EnvAlertAfterFailures is how many syncs of an account in a row must
 	// fail before it counts as failing (alert, banner, /healthz/sync).
-	EnvAlertAfterFailures = "MAIL_ARCHIVE_ALERT_AFTER_FAILURES"
+	EnvAlertAfterFailures = "KEEPIA_ARCHIVE_ALERT_AFTER_FAILURES"
 	// EnvNotifyWebhookURL is where alerts are posted; empty turns them off.
-	EnvNotifyWebhookURL = "MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL"
+	EnvNotifyWebhookURL = "KEEPIA_ARCHIVE_NOTIFY_WEBHOOK_URL"
 	// EnvNotifyWebhookFormat is "json" (default) or "ntfy".
-	EnvNotifyWebhookFormat = "MAIL_ARCHIVE_NOTIFY_WEBHOOK_FORMAT"
+	EnvNotifyWebhookFormat = "KEEPIA_ARCHIVE_NOTIFY_WEBHOOK_FORMAT"
 	// EnvNotifyWebhookAuthorization is sent as the Authorization header.
-	EnvNotifyWebhookAuthorization = "MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION"
+	EnvNotifyWebhookAuthorization = "KEEPIA_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION"
 	// EnvNotifyWebhookDetail is "ids" (default: IDs and counts only) or
 	// "full" (names, mailboxes, errors and folders too).
-	EnvNotifyWebhookDetail = "MAIL_ARCHIVE_NOTIFY_WEBHOOK_DETAIL"
+	EnvNotifyWebhookDetail = "KEEPIA_ARCHIVE_NOTIFY_WEBHOOK_DETAIL"
 	// EnvSMTPListen is the address the SMTP server for smtp accounts
 	// listens on, like ":2525"; empty turns it off.
-	EnvSMTPListen = "MAIL_ARCHIVE_SMTP_LISTEN"
+	EnvSMTPListen = "KEEPIA_ARCHIVE_SMTP_LISTEN"
 	// EnvSMTPAllowedNetworks lists the networks (CIDR or single addresses,
 	// comma-separated) the SMTP server accepts clients from.
-	EnvSMTPAllowedNetworks = "MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS"
+	EnvSMTPAllowedNetworks = "KEEPIA_ARCHIVE_SMTP_ALLOWED_NETWORKS"
 	// EnvSMTPMaxSize is the largest message the SMTP server accepts, in
 	// bytes or with a K, M or G suffix.
-	EnvSMTPMaxSize = "MAIL_ARCHIVE_SMTP_MAX_SIZE"
+	EnvSMTPMaxSize = "KEEPIA_ARCHIVE_SMTP_MAX_SIZE"
 	// EnvSMTPTLSCert and EnvSMTPTLSKey are PEM files that turn STARTTLS on.
-	EnvSMTPTLSCert = "MAIL_ARCHIVE_SMTP_TLS_CERT"
-	EnvSMTPTLSKey  = "MAIL_ARCHIVE_SMTP_TLS_KEY"
+	EnvSMTPTLSCert = "KEEPIA_ARCHIVE_SMTP_TLS_CERT"
+	EnvSMTPTLSKey  = "KEEPIA_ARCHIVE_SMTP_TLS_KEY"
 	// EnvSMTPHostname is the name in the SMTP greeting; default: the
 	// machine's host name.
-	EnvSMTPHostname = "MAIL_ARCHIVE_SMTP_HOSTNAME"
+	EnvSMTPHostname = "KEEPIA_ARCHIVE_SMTP_HOSTNAME"
 	// EnvSMTPAuth is "required" (default: clients log in with an SMTP
 	// secret over STARTTLS) or "off" (the allowlist is the only gate).
-	EnvSMTPAuth = "MAIL_ARCHIVE_SMTP_AUTH"
+	EnvSMTPAuth = "KEEPIA_ARCHIVE_SMTP_AUTH"
 	// EnvSMTPMaxConnsPerAddr caps the connections of one client address
 	// (IPv6: one /64) with EnvSMTPAuth=required.
-	EnvSMTPMaxConnsPerAddr = "MAIL_ARCHIVE_SMTP_MAX_CONNS_PER_ADDR"
+	EnvSMTPMaxConnsPerAddr = "KEEPIA_ARCHIVE_SMTP_MAX_CONNS_PER_ADDR"
 	// EnvTrustedProxies lists the reverse proxies (CIDR or single addresses)
 	// whose X-Forwarded-For names the client; empty trusts none.
-	EnvTrustedProxies = "MAIL_ARCHIVE_TRUSTED_PROXIES"
+	EnvTrustedProxies = "KEEPIA_ARCHIVE_TRUSTED_PROXIES"
 	// EnvOperator names who runs a command, for the audit log. The ./ma
 	// wrapper sets it to the host user; it is not verified.
-	EnvOperator = "MAIL_ARCHIVE_OPERATOR"
+	EnvOperator = "KEEPIA_ARCHIVE_OPERATOR"
 	// EnvAttestKeyFile is the Ed25519 key that signs attestations; default
 	// <data dir>/attest/signing.key.
-	EnvAttestKeyFile = "MAIL_ARCHIVE_ATTEST_KEY_FILE"
+	EnvAttestKeyFile = "KEEPIA_ARCHIVE_ATTEST_KEY_FILE"
 	// EnvAttestInterval is how often the web server writes an attestation
 	// ("0" turns the schedule off).
-	EnvAttestInterval = "MAIL_ARCHIVE_ATTEST_INTERVAL"
+	EnvAttestInterval = "KEEPIA_ARCHIVE_ATTEST_INTERVAL"
 	// EnvRetentionFileGrace is how long the files of messages deleted by
 	// retention outlive their rows ("0" removes them at the next sweep).
-	EnvRetentionFileGrace = "MAIL_ARCHIVE_RETENTION_FILE_GRACE"
+	EnvRetentionFileGrace = "KEEPIA_ARCHIVE_RETENTION_FILE_GRACE"
 	// EnvJobWorkers is how many background jobs (attachment text) a
 	// process runs at a time: `serve` (0 = none, they run in a separate
 	// `worker`) or `worker`.
-	EnvJobWorkers = "MAIL_ARCHIVE_JOB_WORKERS"
+	EnvJobWorkers = "KEEPIA_ARCHIVE_JOB_WORKERS"
 	// EnvArchiveKeyFile is the file holding the archive key (KEK) that
 	// opens the keyring of encryption at rest; preferred over
 	// EnvArchiveKey. Both set is refused.
-	EnvArchiveKeyFile = "MAIL_ARCHIVE_ARCHIVE_KEY_FILE"
+	EnvArchiveKeyFile = "KEEPIA_ARCHIVE_ARCHIVE_KEY_FILE"
 	// EnvArchiveKey is the archive key itself, base64.
-	EnvArchiveKey = "MAIL_ARCHIVE_ARCHIVE_KEY"
+	EnvArchiveKey = "KEEPIA_ARCHIVE_ARCHIVE_KEY"
 	// EnvFillMaxFolderMessages caps the messages a fill lists of one IMAP
 	// folder per pass.
-	EnvFillMaxFolderMessages = "MAIL_ARCHIVE_FILL_MAX_FOLDER_MESSAGES"
+	EnvFillMaxFolderMessages = "KEEPIA_ARCHIVE_FILL_MAX_FOLDER_MESSAGES"
 	// EnvReconcileMaxMessages caps the messages of a folder a reconcile
 	// compares with the server; larger folders are not reconciled.
-	EnvReconcileMaxMessages = "MAIL_ARCHIVE_RECONCILE_MAX_MESSAGES"
+	EnvReconcileMaxMessages = "KEEPIA_ARCHIVE_RECONCILE_MAX_MESSAGES"
 	// EnvIMAPMaxFolders caps the folders one IMAP account may list.
-	EnvIMAPMaxFolders = "MAIL_ARCHIVE_IMAP_MAX_FOLDERS"
+	EnvIMAPMaxFolders = "KEEPIA_ARCHIVE_IMAP_MAX_FOLDERS"
 	// EnvIMAPIdleTimeout is how long an IMAP server may send nothing while
 	// a command is in flight.
-	EnvIMAPIdleTimeout = "MAIL_ARCHIVE_IMAP_IDLE_TIMEOUT"
+	EnvIMAPIdleTimeout = "KEEPIA_ARCHIVE_IMAP_IDLE_TIMEOUT"
 	// EnvMigrateOnStart ("on" or "off", default off) makes serve and
 	// worker apply pending migrations at start, as `migrate` does (#396).
-	EnvMigrateOnStart = "MAIL_ARCHIVE_MIGRATE_ON_START"
+	EnvMigrateOnStart = "KEEPIA_ARCHIVE_MIGRATE_ON_START"
 )
 
 // IMAP limits an honest large mailbox can reach (EnvFillMaxFolderMessages,
@@ -312,9 +312,9 @@ type SMTPEnv struct {
 
 func smtpEnv() SMTPEnv {
 	return SMTPEnv{
-		Listen: os.Getenv(EnvSMTPListen), AllowedNetworks: os.Getenv(EnvSMTPAllowedNetworks),
-		MaxSize: os.Getenv(EnvSMTPMaxSize), TLSCert: os.Getenv(EnvSMTPTLSCert), TLSKey: os.Getenv(EnvSMTPTLSKey),
-		Hostname: os.Getenv(EnvSMTPHostname), Auth: os.Getenv(EnvSMTPAuth), MaxConnsPerAddr: os.Getenv(EnvSMTPMaxConnsPerAddr),
+		Listen: Getenv(EnvSMTPListen), AllowedNetworks: Getenv(EnvSMTPAllowedNetworks),
+		MaxSize: Getenv(EnvSMTPMaxSize), TLSCert: Getenv(EnvSMTPTLSCert), TLSKey: Getenv(EnvSMTPTLSKey),
+		Hostname: Getenv(EnvSMTPHostname), Auth: Getenv(EnvSMTPAuth), MaxConnsPerAddr: Getenv(EnvSMTPMaxConnsPerAddr),
 	}
 }
 
@@ -331,25 +331,44 @@ type Webhook struct {
 // Full reports whether alerts carry names, mailboxes, errors and folders.
 func (w *Webhook) Full() bool { return w.Detail == WebhookDetailFull }
 
-// DataDirFromEnv returns the data directory, ./data unless set.
-func DataDirFromEnv() string {
-	if d := os.Getenv(EnvDataDir); d != "" {
-		return d
+// defaultDataDir is the data directory when EnvDataDir is not set.
+var defaultDataDir = "./data"
+
+// SetDefaultDataDir sets the data directory used when EnvDataDir is not
+// set; an empty dir keeps ./data. main calls it at start, before anything
+// reads the configuration, with the value the build set: /data in the
+// image (-X main.defaultDataDir=/data in the Dockerfile).
+func SetDefaultDataDir(dir string) {
+	if dir != "" {
+		defaultDataDir = dir
 	}
-	return "./data"
 }
 
-// Load reads the configuration from the environment.
+// DataDirFromEnv returns the data directory: EnvDataDir, or the default
+// (./data; /data in the image).
+func DataDirFromEnv() string {
+	if d := Getenv(EnvDataDir); d != "" {
+		return d
+	}
+	return defaultDataDir
+}
+
+// Load reads the configuration from the environment. A variable set under
+// its new and its old name to different values is refused
+// (*EnvConflictError).
 func Load() (*Config, error) {
+	if _, err := ScanEnv(os.Environ()); err != nil {
+		return nil, err
+	}
 	cfg := &Config{
-		DatabaseURL: os.Getenv(EnvDatabaseURL),
+		DatabaseURL: Getenv(EnvDatabaseURL),
 		DataDir:     DataDirFromEnv(),
-		LogLevel:    os.Getenv(EnvLogLevel),
+		LogLevel:    Getenv(EnvLogLevel),
 	}
 	if cfg.DatabaseURL == "" {
 		return nil, errors.New(EnvDatabaseURL + " is not set")
 	}
-	for _, h := range strings.Split(os.Getenv(EnvAllowedHosts), ",") {
+	for _, h := range strings.Split(Getenv(EnvAllowedHosts), ",") {
 		if h = strings.TrimSpace(h); h != "" {
 			cfg.AllowedHosts = append(cfg.AllowedHosts, h)
 		}
@@ -357,91 +376,91 @@ func Load() (*Config, error) {
 	if cfg.LogLevel == "" {
 		cfg.LogLevel = "info"
 	}
-	interval, err := parseSyncInterval(os.Getenv(EnvSyncInterval))
+	interval, err := parseSyncInterval(Getenv(EnvSyncInterval))
 	if err != nil {
 		return nil, err
 	}
 	cfg.SyncInterval = interval
-	if cfg.SyncIntervalMin, err = parseSyncIntervalMin(os.Getenv(EnvSyncIntervalMin)); err != nil {
+	if cfg.SyncIntervalMin, err = parseSyncIntervalMin(Getenv(EnvSyncIntervalMin)); err != nil {
 		return nil, err
 	}
 	if cfg.SyncInterval > 0 && cfg.SyncInterval < cfg.SyncIntervalMin {
 		return nil, fmt.Errorf("%s: %s is below %s (%s)", EnvSyncInterval,
 			FormatDuration(cfg.SyncInterval), EnvSyncIntervalMin, FormatDuration(cfg.SyncIntervalMin))
 	}
-	cfg.ReconcileInterval, err = parseInterval(EnvReconcileInterval, os.Getenv(EnvReconcileInterval),
+	cfg.ReconcileInterval, err = parseInterval(EnvReconcileInterval, Getenv(EnvReconcileInterval),
 		DefaultReconcileInterval, MinReconcileInterval, "24h")
 	if err != nil {
 		return nil, err
 	}
-	cfg.Require2FA = strings.EqualFold(strings.TrimSpace(os.Getenv(EnvRequire2FA)), "true")
-	if v := strings.TrimSpace(os.Getenv(EnvPublicURL)); v != "" {
+	cfg.Require2FA = strings.EqualFold(strings.TrimSpace(Getenv(EnvRequire2FA)), "true")
+	if v := strings.TrimSpace(Getenv(EnvPublicURL)); v != "" {
 		origin, _, err := ParsePublicURL(v)
 		if err != nil {
 			return nil, err
 		}
 		cfg.PublicURL = origin
 	}
-	cfg.AlertAfterFailures, err = parseAlertAfter(os.Getenv(EnvAlertAfterFailures))
+	cfg.AlertAfterFailures, err = parseAlertAfter(Getenv(EnvAlertAfterFailures))
 	if err != nil {
 		return nil, err
 	}
-	cfg.Webhook, err = ParseWebhook(os.Getenv(EnvNotifyWebhookURL), os.Getenv(EnvNotifyWebhookFormat),
-		os.Getenv(EnvNotifyWebhookAuthorization))
+	cfg.Webhook, err = ParseWebhook(Getenv(EnvNotifyWebhookURL), Getenv(EnvNotifyWebhookFormat),
+		Getenv(EnvNotifyWebhookAuthorization))
 	if err != nil {
 		return nil, err
 	}
-	detail, err := ParseWebhookDetail(os.Getenv(EnvNotifyWebhookDetail))
+	detail, err := ParseWebhookDetail(Getenv(EnvNotifyWebhookDetail))
 	if err != nil {
 		return nil, err
 	}
 	if cfg.Webhook != nil {
 		cfg.Webhook.Detail = detail
 	}
-	if cfg.Mail, err = ParseMail(os.Getenv(EnvMailURL), os.Getenv(EnvMailPasswordFile), os.Getenv(EnvMailFrom), cfg.DataDir); err != nil {
+	if cfg.Mail, err = ParseMail(Getenv(EnvMailURL), Getenv(EnvMailPasswordFile), Getenv(EnvMailFrom), cfg.DataDir); err != nil {
 		return nil, err
 	}
 	cfg.SMTP, err = ParseSMTP(smtpEnv())
 	if err != nil {
 		return nil, err
 	}
-	cfg.TrustedProxies, err = ParseNetworks(EnvTrustedProxies, os.Getenv(EnvTrustedProxies))
+	cfg.TrustedProxies, err = ParseNetworks(EnvTrustedProxies, Getenv(EnvTrustedProxies))
 	if err != nil {
 		return nil, err
 	}
-	cfg.AttestKeyFile = strings.TrimSpace(os.Getenv(EnvAttestKeyFile))
+	cfg.AttestKeyFile = strings.TrimSpace(Getenv(EnvAttestKeyFile))
 	if cfg.AttestKeyFile == "" {
 		cfg.AttestKeyFile = filepath.Join(cfg.AttestDir(), attest.DefaultKeyFile)
 	}
-	cfg.AttestInterval, err = parseInterval(EnvAttestInterval, strings.TrimSpace(os.Getenv(EnvAttestInterval)),
+	cfg.AttestInterval, err = parseInterval(EnvAttestInterval, strings.TrimSpace(Getenv(EnvAttestInterval)),
 		DefaultAttestInterval, MinAttestInterval, "24h")
 	if err != nil {
 		return nil, err
 	}
-	cfg.RetentionFileGrace, err = parseInterval(EnvRetentionFileGrace, strings.TrimSpace(os.Getenv(EnvRetentionFileGrace)),
+	cfg.RetentionFileGrace, err = parseInterval(EnvRetentionFileGrace, strings.TrimSpace(Getenv(EnvRetentionFileGrace)),
 		DefaultRetentionFileGrace, time.Hour, "168h")
 	if err != nil {
 		return nil, err
 	}
-	if cfg.JobWorkers, err = parseJobWorkers(os.Getenv(EnvJobWorkers)); err != nil {
+	if cfg.JobWorkers, err = parseJobWorkers(Getenv(EnvJobWorkers)); err != nil {
 		return nil, err
 	}
-	if cfg.IMAP, err = ParseIMAPLimits(os.Getenv); err != nil {
+	if cfg.IMAP, err = ParseIMAPLimits(Getenv); err != nil {
 		return nil, err
 	}
-	if cfg.Storage, err = ParseStorage(os.Getenv); err != nil {
+	if cfg.Storage, err = ParseStorage(Getenv); err != nil {
 		return nil, err
 	}
-	if cfg.MigrateOnStart, err = parseOnOff(EnvMigrateOnStart, os.Getenv(EnvMigrateOnStart)); err != nil {
+	if cfg.MigrateOnStart, err = parseOnOff(EnvMigrateOnStart, Getenv(EnvMigrateOnStart)); err != nil {
 		return nil, err
 	}
-	if cfg.EncryptionAtSetup, err = ParseEncryptionAtSetup(os.Getenv(EnvEncryptionAtSetup)); err != nil {
+	if cfg.EncryptionAtSetup, err = ParseEncryptionAtSetup(Getenv(EnvEncryptionAtSetup)); err != nil {
 		return nil, err
 	}
-	if cfg.SecretKey, cfg.SecretKeySource, err = LoadSecretKey(os.Getenv(EnvSecretKeyFile), os.Getenv(EnvSecretKey), cfg.DataDir); err != nil {
+	if cfg.SecretKey, cfg.SecretKeySource, err = LoadSecretKey(Getenv(EnvSecretKeyFile), Getenv(EnvSecretKey), cfg.DataDir); err != nil {
 		return nil, err
 	}
-	cfg.ArchiveKey, cfg.ArchiveKeySource, err = LoadArchiveKey(os.Getenv(EnvArchiveKeyFile), os.Getenv(EnvArchiveKey),
+	cfg.ArchiveKey, cfg.ArchiveKeySource, err = LoadArchiveKey(Getenv(EnvArchiveKeyFile), Getenv(EnvArchiveKey),
 		cfg.DataDir, cfg.SecretKey)
 	if err != nil {
 		return nil, err

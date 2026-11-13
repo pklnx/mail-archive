@@ -72,7 +72,7 @@ type purgePreviewJSON struct {
 	// KeptByOthers of Kept are in none of the caller's other accounts,
 	// only in accounts the caller does not own.
 	KeptByOthers int64 `json:"keptByOthers"`
-	// Grace is MAIL_ARCHIVE_RETENTION_FILE_GRACE ("168h0m0s"): how long
+	// Grace is KEEPIA_ARCHIVE_RETENTION_FILE_GRACE ("168h0m0s"): how long
 	// the files of deleted messages are kept.
 	Grace    string            `json:"grace"`
 	Blockers purgeBlockersJSON `json:"blockers"`

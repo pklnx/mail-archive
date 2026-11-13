@@ -7,16 +7,17 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/crypto"
 	"github.com/pklnx/mail-archive/internal/store/storetest"
 )
 
 func TestIndexRebuildRefusal(t *testing.T) {
 	_, url := storetest.NewWithURL(t)
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
+	t.Setenv(config.EnvDatabaseURL, url)
 	key, _ := crypto.GenerateKey()
-	t.Setenv("MAIL_ARCHIVE_SECRET_KEY", key)
-	t.Setenv("MAIL_ARCHIVE_COMMAND", "./ma")
+	t.Setenv(config.EnvSecretKey, key)
+	t.Setenv(config.EnvCommand, "./ma")
 	ctx := context.Background()
 
 	open := func() error {
@@ -67,7 +68,7 @@ func TestIndexRebuildRefusal(t *testing.T) {
 
 func TestIndexRebuildRefusalAfterCollationChange(t *testing.T) {
 	st, url := storetest.NewWithURL(t)
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
+	t.Setenv(config.EnvDatabaseURL, url)
 	ctx := context.Background()
 	storetest.SimulateAlpineDatabase(t, url)
 	if _, err := st.Migrate(ctx); err != nil {
@@ -99,7 +100,7 @@ func TestIndexRebuildRefusalAfterCollationChange(t *testing.T) {
 // is still their oid), while those of an older partition are.
 func TestMigrateRebuildsBeforeAuditPartitions(t *testing.T) {
 	_, url := storetest.NewWithURL(t)
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
+	t.Setenv(config.EnvDatabaseURL, url)
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, url)
 	if err != nil {

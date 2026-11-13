@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/pressly/goose/v3/lock"
 
+	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/crypto"
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/store/storetest"
@@ -23,9 +24,9 @@ import (
 // migrateEnv points the commands at the database url.
 func migrateEnv(t *testing.T, url string) {
 	t.Helper()
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
+	t.Setenv(config.EnvDatabaseURL, url)
 	key, _ := crypto.GenerateKey()
-	t.Setenv("MAIL_ARCHIVE_SECRET_KEY", key)
+	t.Setenv(config.EnvSecretKey, key)
 }
 
 // connectObserver opens a connection of the test's own on url.
@@ -466,8 +467,8 @@ func TestMigrateConnectionsNoticeKilledClient(t *testing.T) {
 	}
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestMigrateConnectionsNoticeKilledClient$") //nolint:gosec // the test binary itself
 	cmd.Env = append(os.Environ(), migrateChildEnv+"=1",
-		"MAIL_ARCHIVE_DATABASE_URL="+storetest.WithApplicationName(t, url, migrateChildApp),
-		"MAIL_ARCHIVE_SECRET_KEY="+key)
+		config.EnvDatabaseURL+"="+storetest.WithApplicationName(t, url, migrateChildApp),
+		config.EnvSecretKey+"="+key)
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	if err := cmd.Start(); err != nil {

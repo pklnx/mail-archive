@@ -226,7 +226,7 @@ any grant.
 
 Command line entries are the operator's: they have no user, IP or user
 agent. Their details hold `os_user`, the operating system user (`65532` in
-the Docker image), and `operator` from `MAIL_ARCHIVE_OPERATOR`, which `./ma`
+the Docker image), and `operator` from `KEEPIA_ARCHIVE_OPERATOR`, which `./ma`
 sets to the user on the host. Neither is verified: whoever runs a command
 holds the database password.
 
@@ -391,7 +391,7 @@ unchanged.
 For the operator. The server records the address it is connected from. Behind a
 reverse proxy (Caddy, nginx, `tailscale serve`) that is the proxy, and with
 Docker's port publishing on `127.0.0.1` it is the gateway of the Compose
-network. List the proxy in `MAIL_ARCHIVE_TRUSTED_PROXIES`: then the client's
+network. List the proxy in `KEEPIA_ARCHIVE_TRUSTED_PROXIES`: then the client's
 address is taken from the proxy's `X-Forwarded-For` header, and the login
 limits count per client again (IPv6 per `/64`). The same setting decides
 whether the proxy's `X-Forwarded-Proto: https` counts, which makes the session
@@ -408,7 +408,7 @@ of the Compose network. `docker network ls` lists it, usually as
 docker network inspect mail-archive_default --format '{{(index .IPAM.Config 0).Gateway}}'
 ```
 
-Then set, for example, `MAIL_ARCHIVE_TRUSTED_PROXIES=172.18.0.1` in `.env`.
+Then set, for example, `KEEPIA_ARCHIVE_TRUSTED_PROXIES=172.18.0.1` in `.env`.
 If the proxy serves HTTPS and a login before that did not count as HTTPS (in
 Docker Compose, for example), log in once more after setting the variable,
 because the cookie of that login is the wrong one. List only the proxy:

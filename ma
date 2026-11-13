@@ -19,9 +19,10 @@ cd "$(dirname "$0")"
 build=
 if [ -f Dockerfile ]; then
 	build=--build
-	# The version shown by `mail-archive --version`, baked into the image.
-	MAIL_ARCHIVE_VERSION=${MAIL_ARCHIVE_VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}
-	export MAIL_ARCHIVE_VERSION
+	# The version shown by `mail-archive --version`, baked into the image;
+	# MAIL_ARCHIVE_VERSION is its old name (until 1.6).
+	KEEPIA_ARCHIVE_VERSION=${KEEPIA_ARCHIVE_VERSION:-${MAIL_ARCHIVE_VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}}
+	export KEEPIA_ARCHIVE_VERSION
 fi
 
 compose() {
@@ -77,7 +78,7 @@ fi
 # container user as for the data directory. Only warns; the export then
 # reports what it cannot write.
 if [ "${1:-}" = export ] && [ "${2:-}" != verify ]; then
-	compose run --rm --no-deps $build -T --user 0:0 -e MAIL_ARCHIVE_DATA_DIR=/export mail-archive prepare-data >/dev/null 2>&1 ||
+	compose run --rm --no-deps $build -T --user 0:0 -e KEEPIA_ARCHIVE_DATA_DIR=/export mail-archive prepare-data >/dev/null 2>&1 ||
 		echo "warning: could not prepare the export directory (EXPORT_DIR in .env, default ./export)" >&2
 fi
 
@@ -100,7 +101,7 @@ if [ "${1:-}" = backup ]; then
 	base=mailarchive-$(date -u +%Y%m%dT%H%M%SZ)
 	name=$base.dump
 	# The note first: it also writes an attestation, which the dump then holds.
-	if ! compose run --rm $build -T -e MAIL_ARCHIVE_COMMAND=./ma -e MAIL_ARCHIVE_OPERATOR="$operator" mail-archive \
+	if ! compose run --rm $build -T -e KEEPIA_ARCHIVE_COMMAND=./ma -e KEEPIA_ARCHIVE_OPERATOR="$operator" mail-archive \
 		backup --note-only "$name" >"$dir/BACKUP-NOTE.txt.partial"; then
 		rm -f "$dir/BACKUP-NOTE.txt.partial"
 		echo "error: could not write BACKUP-NOTE.txt; no dump was written" >&2
@@ -118,21 +119,21 @@ if [ "${1:-}" = backup ]; then
 		# cannot tell the end of a failed dump from the end of a good one.
 		failed=$dir/$name.failed
 		rm -f "$failed"
-		MAIL_ARCHIVE_KEYRING_COPY=$(base64 <"$ring.partial" | tr -d '\n')
-		export MAIL_ARCHIVE_KEYRING_COPY
+		KEEPIA_ARCHIVE_KEYRING_COPY=$(base64 <"$ring.partial" | tr -d '\n')
+		export KEEPIA_ARCHIVE_KEYRING_COPY
 		if ! { compose exec -T postgres pg_dump --format=custom -U mailarchive -d mailarchive || echo pg_dump >"$failed"; } |
-			compose run --rm -T -e MAIL_ARCHIVE_KEYRING_COPY mail-archive seal-stream >"$dir/$name.enc.partial" ||
+			compose run --rm -T -e KEEPIA_ARCHIVE_KEYRING_COPY mail-archive seal-stream >"$dir/$name.enc.partial" ||
 			[ -e "$failed" ]; then
 			rm -f "$failed" "$dir/$name.enc.partial" "$ring.partial" "$dir/BACKUP-NOTE.txt.partial"
 			echo "error: pg_dump or its encryption failed; no dump was written" >&2
 			exit 1
 		fi
-		unset MAIL_ARCHIVE_KEYRING_COPY
+		unset KEEPIA_ARCHIVE_KEYRING_COPY
 		mv "$ring.partial" "$ring"
 		mv "$dir/$name.enc.partial" "$dir/$name.enc"
 		mv "$dir/BACKUP-NOTE.txt.partial" "$dir/BACKUP-NOTE.txt"
 		echo "wrote $dir/$name.enc (encrypted), $ring and $dir/BACKUP-NOTE.txt"
-		echo "now copy the data directory (ARCHIVE_DIR in .env, default ./data), and keep MAIL_ARCHIVE_SECRET_KEY and the archive key separately"
+		echo "now copy the data directory (ARCHIVE_DIR in .env, default ./data), and keep KEEPIA_ARCHIVE_SECRET_KEY and the archive key separately"
 		exit 0
 	fi
 	if ! compose exec -T postgres pg_dump --format=custom -U mailarchive -d mailarchive >"$dir/$name.partial"; then
@@ -143,7 +144,7 @@ if [ "${1:-}" = backup ]; then
 	mv "$dir/$name.partial" "$dir/$name"
 	mv "$dir/BACKUP-NOTE.txt.partial" "$dir/BACKUP-NOTE.txt"
 	echo "wrote $dir/$name and $dir/BACKUP-NOTE.txt"
-	echo "now copy the data directory (ARCHIVE_DIR in .env, default ./data), and keep MAIL_ARCHIVE_SECRET_KEY separately"
+	echo "now copy the data directory (ARCHIVE_DIR in .env, default ./data), and keep KEEPIA_ARCHIVE_SECRET_KEY separately"
 	exit 0
 fi
 
@@ -202,16 +203,16 @@ if [ -n "$restore_dump" ]; then
 	# The keyring copy next to the dump, for a dump without encryption
 	# too: the holder counts it as a sign of encryption at rest and refuses
 	# one of another archive.
-	MAIL_ARCHIVE_KEYRING_COPY=
+	KEEPIA_ARCHIVE_KEYRING_COPY=
 	ring=${file%.enc}
 	ring=${ring%.dump}.keyring
 	if [ -f "$ring" ]; then
-		MAIL_ARCHIVE_KEYRING_COPY=$(base64 <"$ring" | tr -d '\n')
+		KEEPIA_ARCHIVE_KEYRING_COPY=$(base64 <"$ring" | tr -d '\n')
 	fi
-	export MAIL_ARCHIVE_KEYRING_COPY
+	export KEEPIA_ARCHIVE_KEYRING_COPY
 	fifos=$(mktemp -d)
 	mkfifo "$fifos/to-holder" "$fifos/from-holder"
-	compose run --rm $build -T -e MAIL_ARCHIVE_COMMAND=./ma -e MAIL_ARCHIVE_KEYRING_COPY mail-archive \
+	compose run --rm $build -T -e KEEPIA_ARCHIVE_COMMAND=./ma -e KEEPIA_ARCHIVE_KEYRING_COPY mail-archive \
 		restore-dump --hold --dump-name="${file##*/}" --dump-header="$header" $plaintext <"$fifos/to-holder" >"$fifos/from-holder" &
 	holder=$!
 	# Any line but "restored", or the end of fd 3 (also when this script
@@ -248,7 +249,7 @@ if [ -n "$restore_dump" ]; then
 		# unseal-stream stops before the end of its output on a damaged
 		# dump, so pg_restore fails and its transaction rolls back.
 		failed=$(mktemp)
-		if ! { compose run --rm -T -e MAIL_ARCHIVE_KEYRING_COPY mail-archive unseal-stream <"$file" || echo unseal >"$failed"; } | restore ||
+		if ! { compose run --rm -T -e KEEPIA_ARCHIVE_KEYRING_COPY mail-archive unseal-stream <"$file" || echo unseal >"$failed"; } | restore ||
 			[ -s "$failed" ]; then
 			rm -f "$failed"
 			echo "error: the restore failed; the database is unchanged (pg_restore ran in one transaction)" >&2
@@ -281,7 +282,7 @@ if [ "${1:-}" = encryption ] && [ "${2:-}" = keygen ]; then
 	compose run --rm --no-deps $build -T --user 0:0 mail-archive prepare-data ||
 		echo "warning: could not prepare the data directory (ARCHIVE_DIR in .env, default ./data)" >&2
 	exec docker compose --progress quiet run --rm --no-deps $build -T --user 0:0 \
-		-e MAIL_ARCHIVE_COMMAND=./ma mail-archive-keygen encryption keygen --chown 65532:65532 "$@"
+		-e KEEPIA_ARCHIVE_COMMAND=./ma mail-archive-keygen encryption keygen --chown 65532:65532 "$@"
 fi
 
 # encryption rotate-key writes the new archive key into the keys directory,
@@ -289,7 +290,7 @@ fi
 # (mail-archive-keys), as the container user, who owns it since keygen.
 if [ "${1:-}" = encryption ] && [ "${2:-}" = rotate-key ]; then
 	exec docker compose --progress quiet run --rm $build -T \
-		-e MAIL_ARCHIVE_COMMAND=./ma -e MAIL_ARCHIVE_OPERATOR="$operator" mail-archive-keys "$@"
+		-e KEEPIA_ARCHIVE_COMMAND=./ma -e KEEPIA_ARCHIVE_OPERATOR="$operator" mail-archive-keys "$@"
 fi
 
 # Allocate a TTY only when attached to a terminal (not in cron or pipes),
@@ -300,4 +301,4 @@ if [ -t 0 ] && [ -t 1 ]; then
 fi
 
 exec docker compose --progress quiet run --rm $build $tty_flag \
-	-e MAIL_ARCHIVE_COMMAND=./ma -e MAIL_ARCHIVE_OPERATOR="$operator" mail-archive "$@"
+	-e KEEPIA_ARCHIVE_COMMAND=./ma -e KEEPIA_ARCHIVE_OPERATOR="$operator" mail-archive "$@"

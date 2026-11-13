@@ -58,7 +58,7 @@ without the host (step 3).
    ./ma attest public-key
    ```
    The web server writes an attestation every
-   `MAIL_ARCHIVE_ATTEST_INTERVAL` (default 24h), the first one at its next
+   `KEEPIA_ARCHIVE_ATTEST_INTERVAL` (default 24h), the first one at its next
    start. `./ma status` shows the newest one.
 
 2. **Copy the attestation file off the host, regularly**, to a place the
@@ -116,7 +116,7 @@ recorded), `unattested` (a row inserted into an attested range afterwards),
 `attestation` (an attestation no longer matches the database), `attest-file`
 (the file or a leaves file differs from the database or does not parse),
 `chain` (a broken chain, bad signature or untrusted key) and `attest-stale`
-(the newest attestation is older than twice `MAIL_ARCHIVE_ATTEST_INTERVAL`).
+(the newest attestation is older than twice `KEEPIA_ARCHIVE_ATTEST_INTERVAL`).
 The [command reference](../reference/cli#verify) describes each finding.
 
 Notes, which are no findings: the file lags behind the database (the next
@@ -181,5 +181,5 @@ error and writes none until you run `attest keygen --rotate`; it still
 starts and archives.
 
 To keep the key out of the data directory and its backups, point
-`MAIL_ARCHIVE_ATTEST_KEY_FILE` at a separate mount. The attestation file,
+`KEEPIA_ARCHIVE_ATTEST_KEY_FILE` at a separate mount. The attestation file,
 the leaves and the public keys always stay in `data/attest/`.

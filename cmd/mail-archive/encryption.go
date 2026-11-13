@@ -65,12 +65,12 @@ directory (ARCHIVE_KEY_DIR, default ./keys) mounted read-write.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if keyFile == "" {
-				keyFile = strings.TrimSpace(os.Getenv(config.EnvArchiveKeyFile))
+				keyFile = strings.TrimSpace(config.Getenv(config.EnvArchiveKeyFile))
 			}
 			if keyFile == "" {
 				return fmt.Errorf("where to write the key: pass --key-file or set %s", config.EnvArchiveKeyFile)
 			}
-			if strings.TrimSpace(os.Getenv(config.EnvArchiveKey)) != "" {
+			if strings.TrimSpace(config.Getenv(config.EnvArchiveKey)) != "" {
 				return fmt.Errorf("%s is set; keygen writes a key file, so unset it first", config.EnvArchiveKey)
 			}
 			uid, gid, err := parseOwner(owner)

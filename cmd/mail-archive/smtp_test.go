@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/pklnx/mail-archive/internal/auth"
+	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/crypto"
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/store/storetest"
@@ -18,10 +19,10 @@ import (
 
 func TestSMTPAccountCommands(t *testing.T) {
 	st, url := storetest.NewWithURL(t)
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
+	t.Setenv(config.EnvDatabaseURL, url)
 	key, _ := crypto.GenerateKey()
-	t.Setenv("MAIL_ARCHIVE_SECRET_KEY", key)
-	t.Setenv("MAIL_ARCHIVE_DATA_DIR", t.TempDir())
+	t.Setenv(config.EnvSecretKey, key)
+	t.Setenv(config.EnvDataDir, t.TempDir())
 	ctx := context.Background()
 	account := func(args ...string) error { return runCmd(t, newAccountCmd(), "", args...) }
 
@@ -30,7 +31,7 @@ func TestSMTPAccountCommands(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	if !strings.Contains(out, `smtp account "journal" added`) || !strings.Contains(out, "MAIL_ARCHIVE_SMTP_LISTEN") {
+	if !strings.Contains(out, `smtp account "journal" added`) || !strings.Contains(out, config.EnvSMTPListen) {
 		t.Errorf("add-smtp output:\n%s", out)
 	}
 	accs, err := st.ListAccountsByName(ctx, "journal")
@@ -100,8 +101,8 @@ var printedSecret = regexp.MustCompile(`(?m)^secret:\s+(mas_[a-z2-7]{52})$`)
 // say which secrets keep working (#395).
 func TestSMTPSecretCommand(t *testing.T) {
 	st, url := storetest.NewWithURL(t)
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
-	t.Setenv("MAIL_ARCHIVE_DATA_DIR", t.TempDir())
+	t.Setenv(config.EnvDatabaseURL, url)
+	t.Setenv(config.EnvDataDir, t.TempDir())
 	ctx := context.Background()
 	alice, err := st.CreateUser(ctx, "alice", "h", true)
 	if err != nil {

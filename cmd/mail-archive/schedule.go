@@ -22,10 +22,10 @@ func newAccountSetScheduleCmd() *cobra.Command {
 		Use:   "set-schedule NAME --sync-interval V",
 		Short: "Set how often the web server syncs an account",
 		Long: `Set the account's own sync interval for the web server's schedule:
-"default" (MAIL_ARCHIVE_SYNC_INTERVAL), "manual" (not on the schedule) or a
+"default" (KEEPIA_ARCHIVE_SYNC_INTERVAL), "manual" (not on the schedule) or a
 duration of whole minutes from 5m to 720h, such as 30m or 1h30m.
 
-The server's floor, MAIL_ARCHIVE_SYNC_INTERVAL_MIN, also applies: a
+The server's floor, KEEPIA_ARCHIVE_SYNC_INTERVAL_MIN, also applies: a
 shorter value is refused, and a value stored before the floor was raised
 is synced at the floor.
 

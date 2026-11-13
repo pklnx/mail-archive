@@ -21,7 +21,7 @@ const (
 	// Also `migrate` exits with it.
 	exitMigrationFailed = 3
 	// exitStartRefused: a start-up check refused, such as migrations
-	// pending without MAIL_ARCHIVE_MIGRATE_ON_START=on, or a database newer
+	// pending without KEEPIA_ARCHIVE_MIGRATE_ON_START=on, or a database newer
 	// than the binary. A command that uses the database refuses with it
 	// too.
 	exitStartRefused = 4
@@ -52,7 +52,7 @@ const (
 //
 //   - step 2: open a short-lived store for migrations and take the
 //     migration lock, saying so if it has to wait;
-//   - step 3: with MAIL_ARCHIVE_MIGRATE_ON_START=on, refuse a migration
+//   - step 3: with KEEPIA_ARCHIVE_MIGRATE_ON_START=on, refuse a migration
 //     that failed before with the same file (the failure record), else run
 //     the sequence of `migrate` (applyMigrations);
 //   - step 4: check the schema: refuse when migrations are pending or the
@@ -210,7 +210,7 @@ func (s instanceStart) backupNote(ctx context.Context, st *store.Store) {
 }
 
 // applyMigrations is the sequence of `migrate`, which serve and worker
-// also run at start with MAIL_ARCHIVE_MIGRATE_ON_START=on: the one-time
+// also run at start with KEEPIA_ARCHIVE_MIGRATE_ON_START=on: the one-time
 // index rebuild, the audit log partitions, the migrations, then the
 // password upgrade. The caller holds the migration lock. report gets the
 // lines to show, among them one per migration applied.

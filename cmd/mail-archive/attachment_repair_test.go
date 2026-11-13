@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/pklnx/mail-archive/internal/blobstore"
+	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/testwait"
 )
@@ -102,7 +103,7 @@ func TestReindexRepairsAttachmentText(t *testing.T) {
 			t.Fatalf("%s: %v", sql, err)
 		}
 	}
-	blobs, err := blobstore.New(os.Getenv("MAIL_ARCHIVE_DATA_DIR"))
+	blobs, err := blobstore.New(os.Getenv(config.EnvDataDir))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -74,7 +74,7 @@ func newInstanceEnv(t *testing.T, url string) (kek []byte, dataDir string) {
 	t.Setenv(config.EnvEncryptionAtSetup, "")
 	t.Setenv(config.EnvSetupTokenFile, "")
 	t.Setenv(config.EnvSetupToken, "")
-	return kek, os.Getenv("MAIL_ARCHIVE_DATA_DIR")
+	return kek, os.Getenv(config.EnvDataDir)
 }
 
 // prepare runs the start of role with the configuration of the
@@ -223,7 +223,7 @@ func TestEncryptionAtSetupKeyring(t *testing.T) {
 
 // TestEncryptionAtSetupRefusals (#396, revision 1): without an archive key a
 // new instance does not start (exit 4), neither serve nor worker; with
-// MAIL_ARCHIVE_ENCRYPTION_AT_SETUP=off both start with encryption off and
+// KEEPIA_ARCHIVE_ENCRYPTION_AT_SETUP=off both start with encryption off and
 // say so. A command-line writer that holds the writers lock (an import
 // before the first user) makes the start refuse with exit 4 and name it,
 // changing nothing (plan approval, note 1). An instance with a message is

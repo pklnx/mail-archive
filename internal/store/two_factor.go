@@ -15,7 +15,7 @@ import (
 )
 
 // Two-factor authentication (TOTP, RFC 6238). The secret is stored encrypted
-// with MAIL_ARCHIVE_SECRET_KEY and bound to the user ID; recovery codes are
+// with KEEPIA_ARCHIVE_SECRET_KEY and bound to the user ID; recovery codes are
 // stored as keyed hashes. Every change to a user's 2FA state increments
 // users.two_factor_version, which ends pending login challenges: a reset
 // always wins against a login that is in progress.

@@ -23,7 +23,7 @@ import (
 
 // Passkeys (WebAuthn). A passkey login replaces password and TOTP; it needs
 // user verification (Face ID, Touch ID, a PIN). Passkeys are bound to the
-// host of MAIL_ARCHIVE_PUBLIC_URL and are off without it. Registering one
+// host of KEEPIA_ARCHIVE_PUBLIC_URL and are off without it. Registering one
 // needs the same as a login: the password, and a second factor if the user
 // has 2FA on.
 
@@ -103,7 +103,7 @@ func (u *passkeyUser) WebAuthnCredentials() []webauthn.Credential { return u.cre
 
 func (s *Server) passkeysReady(w http.ResponseWriter, r *http.Request) bool {
 	if s.webauthn == nil {
-		s.fail(w, r, http.StatusServiceUnavailable, "passkeys need MAIL_ARCHIVE_PUBLIC_URL on the server", nil)
+		s.fail(w, r, http.StatusServiceUnavailable, "passkeys need KEEPIA_ARCHIVE_PUBLIC_URL on the server", nil)
 		return false
 	}
 	return true
@@ -286,7 +286,7 @@ type passkeyJSON struct {
 }
 
 type passkeysJSON struct {
-	// Available is false without MAIL_ARCHIVE_PUBLIC_URL; Origin is where
+	// Available is false without KEEPIA_ARCHIVE_PUBLIC_URL; Origin is where
 	// passkeys work.
 	Available bool          `json:"available"`
 	Origin    string        `json:"origin,omitempty"`

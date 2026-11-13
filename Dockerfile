@@ -34,15 +34,17 @@ RUN sh scripts/check-go-toolchain.sh go.mod \
  && go mod download && go mod verify
 COPY . .
 COPY --from=web /src/internal/web/ui/dist ./internal/web/ui/dist
+# main.defaultDataDir makes /data (the volume below) the data directory
+# when no variable sets one; an ENV with the variable would conflict with
+# `docker run -e` of its other name (old or new, #585).
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
-    go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" \
+    go build -trimpath -ldflags="-s -w -X main.version=${VERSION} -X main.defaultDataDir=/data" \
     -o /out/mail-archive ./cmd/mail-archive \
  && mkdir -p /out/data
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/mail-archive /usr/local/bin/mail-archive
 COPY --from=build --chown=65532:65532 /out/data /data
-ENV MAIL_ARCHIVE_DATA_DIR=/data
 VOLUME ["/data"]
 USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/mail-archive"]

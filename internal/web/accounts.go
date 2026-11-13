@@ -131,7 +131,7 @@ type folderJSON struct {
 // Postfix reaches it (host and published port) only the admin knows, so it
 // carries no address.
 type smtpServerJSON struct {
-	// Auth is "required" (MAIL_ARCHIVE_SMTP_AUTH=required, the default:
+	// Auth is "required" (KEEPIA_ARCHIVE_SMTP_AUTH=required, the default:
 	// STARTTLS and an SMTP secret) or "off" (the allowlist alone).
 	Auth string `json:"auth"`
 }
@@ -144,7 +144,7 @@ type accountsResponse struct {
 	// Manage is false when the server has no secret key: accounts can then
 	// be browsed but not added, changed or synced.
 	Manage bool `json:"manage"`
-	// SyncInterval is the server's MAIL_ARCHIVE_SYNC_INTERVAL ("6h0m0s"),
+	// SyncInterval is the server's KEEPIA_ARCHIVE_SYNC_INTERVAL ("6h0m0s"),
 	// the default for accounts without their own; empty when the schedule
 	// is off. Not the same as an account's syncInterval.
 	SyncInterval string `json:"syncInterval"`
@@ -156,7 +156,7 @@ type accountsResponse struct {
 	ReconcileInterval string `json:"reconcileInterval"`
 	// AlertAfter failed syncs in a row make an account failing.
 	AlertAfter int `json:"alertAfter"`
-	// SMTP is null when the SMTP server is off (MAIL_ARCHIVE_SMTP_LISTEN
+	// SMTP is null when the SMTP server is off (KEEPIA_ARCHIVE_SMTP_LISTEN
 	// empty): smtp accounts then receive nothing.
 	SMTP *smtpServerJSON `json:"smtp"`
 	// OtherFailing, for admins only, counts the failing accounts of other
@@ -581,7 +581,7 @@ func (s *Server) decode(w http.ResponseWriter, r *http.Request, v any) bool {
 // encrypt passwords.
 func (s *Server) requireManage(w http.ResponseWriter, r *http.Request) bool {
 	if s.syncer == nil || s.runner == nil {
-		s.fail(w, r, http.StatusServiceUnavailable, "account management needs MAIL_ARCHIVE_SECRET_KEY on the server", nil)
+		s.fail(w, r, http.StatusServiceUnavailable, "account management needs KEEPIA_ARCHIVE_SECRET_KEY on the server", nil)
 		return false
 	}
 	return true

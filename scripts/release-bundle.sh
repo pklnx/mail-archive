@@ -44,10 +44,13 @@ mkdir "$dir"
 		{ skip = 0 }
 		{ print }
 	' "$repo/docker-compose.yml" |
-		sed -e "s|\${MAIL_ARCHIVE_IMAGE:-mail-archive:local}|\${MAIL_ARCHIVE_IMAGE:-$image:$version}|" \
+		sed -e "s|\${KEEPIA_ARCHIVE_IMAGE:-\${MAIL_ARCHIVE_IMAGE:-mail-archive:local}}|\${KEEPIA_ARCHIVE_IMAGE:-\${MAIL_ARCHIVE_IMAGE:-$image:$version}}|" \
 			-e 's| (image built by ./ma)||'
 } > "$dir/docker-compose.yml"
-if grep -q 'build:' "$dir/docker-compose.yml" || ! grep -q "$image:$version" "$dir/docker-compose.yml"; then
+# Every image line names the released image, under the new variable with
+# the old one (until 1.6) as its fallback.
+if grep -q 'build:' "$dir/docker-compose.yml" || grep -q 'mail-archive:local' "$dir/docker-compose.yml" ||
+	! grep -qF "image: \${KEEPIA_ARCHIVE_IMAGE:-\${MAIL_ARCHIVE_IMAGE:-$image:$version}}" "$dir/docker-compose.yml"; then
 	echo "could not rewrite docker-compose.yml" >&2
 	exit 1
 fi
@@ -64,7 +67,7 @@ Docs:    https://pklnx.github.io/mail-archive/
 Release: https://github.com/pklnx/mail-archive/releases/tag/v$version
 
 First start:
-  cp .env.example .env     # set POSTGRES_PASSWORD and MAIL_ARCHIVE_SECRET_KEY
+  cp .env.example .env     # set POSTGRES_PASSWORD and KEEPIA_ARCHIVE_SECRET_KEY
   ./ma migrate             # also makes data/ writable for the container
   ./ma user add NAME --admin
   docker compose up -d web # http://localhost:8080
@@ -78,7 +81,7 @@ and data/:
 Optional worker service for background jobs (attachment text) with its own
 memory limit: COMPOSE_PROFILES=worker and WEB_JOB_WORKERS=0 in .env.
 
-Journaling over SMTP with login (MAIL_ARCHIVE_SMTP_AUTH=required): the
+Journaling over SMTP with login (KEEPIA_ARCHIVE_SMTP_AUTH=required): the
 certificate is mounted by docker-compose.smtp.yml; set
 COMPOSE_FILE=docker-compose.yml:docker-compose.smtp.yml in .env.
 EOF

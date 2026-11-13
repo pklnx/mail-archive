@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/pklnx/mail-archive/internal/auth"
+	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/crypto"
 	"github.com/pklnx/mail-archive/internal/store/storetest"
 	"github.com/pklnx/mail-archive/internal/testwait"
@@ -23,7 +24,7 @@ func runUser(t *testing.T, stdin string, args ...string) error {
 
 func TestUserCommands(t *testing.T) {
 	st, url := storetest.NewWithURL(t)
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
+	t.Setenv(config.EnvDatabaseURL, url)
 	ctx := context.Background()
 
 	if err := runUser(t, "short\n", "add", "patrick", "--admin", "--password-stdin"); err == nil || !strings.Contains(err.Error(), "12 characters") {
@@ -104,9 +105,9 @@ func runCmd(t *testing.T, root *cobra.Command, stdin string, args ...string) err
 
 func TestAccountOwners(t *testing.T) {
 	st, url := storetest.NewWithURL(t)
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
+	t.Setenv(config.EnvDatabaseURL, url)
 	key, _ := crypto.GenerateKey()
-	t.Setenv("MAIL_ARCHIVE_SECRET_KEY", key)
+	t.Setenv(config.EnvSecretKey, key)
 	ctx := context.Background()
 	add := func(name string, extra ...string) error {
 		args := append([]string{"add", name, "--host", "h", "--username", "u", "--skip-check", "--password-stdin"}, extra...)
@@ -199,7 +200,7 @@ func TestAccountOwners(t *testing.T) {
 
 func TestUserRoleAndResetCommands(t *testing.T) {
 	st, url := storetest.NewWithURL(t)
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
+	t.Setenv(config.EnvDatabaseURL, url)
 	ctx := context.Background()
 	if err := runUser(t, "correct horse battery\n", "add", "admin", "--admin", "--password-stdin"); err != nil {
 		t.Fatal(err)
@@ -236,7 +237,7 @@ func TestUserRoleAndResetCommands(t *testing.T) {
 // works for the last admin too.
 func TestResetTwoFactorOfLastAdmin(t *testing.T) {
 	st, url := storetest.NewWithURL(t)
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
+	t.Setenv(config.EnvDatabaseURL, url)
 	ctx := context.Background()
 	if err := runUser(t, "correct horse battery\n", "add", "admin", "--admin", "--password-stdin"); err != nil {
 		t.Fatal(err)

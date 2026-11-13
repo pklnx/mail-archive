@@ -3,6 +3,7 @@ package main
 import (
 	"testing"
 
+	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/imapsync"
 	"github.com/pklnx/mail-archive/internal/store"
 )
@@ -22,7 +23,7 @@ func TestShellQuote(t *testing.T) {
 }
 
 func TestExclusionHint(t *testing.T) {
-	t.Setenv("MAIL_ARCHIVE_COMMAND", "./ma")
+	t.Setenv(config.EnvCommand, "./ma")
 	folders := []imapsync.Folder{
 		{Name: "INBOX"},
 		{Name: "Spam", Attrs: []string{`\Junk`}},

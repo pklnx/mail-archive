@@ -85,7 +85,7 @@ func newAuthFixture(t *testing.T) *authFixture {
 	return newAuthFixtureWith(t, false)
 }
 
-// newAuthFixtureWith is newAuthFixture with MAIL_ARCHIVE_REQUIRE_2FA.
+// newAuthFixtureWith is newAuthFixture with KEEPIA_ARCHIVE_REQUIRE_2FA.
 func newAuthFixtureWith(t *testing.T, require2FA bool) *authFixture {
 	t.Helper()
 	return newAuthFixtureOpts(t, Options{Require2FA: require2FA})

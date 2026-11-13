@@ -226,16 +226,21 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      # How docker-compose.yml resolves the new and the old variable names
+      # (#585); `docker compose config` only.
+      - run: scripts/compose-env-test.sh
       - run: scripts/compose-smoke-test.sh
       # The release bundle, with the image the run above built: its
       # docker-compose.yml must work without the source and without a build.
+      # Its .env has the old variable names (MAIL_ARCHIVE_*), as after an
+      # upgrade from 1.6 without changes (#585); the run above has the new.
       - name: Release bundle
         run: |
           scripts/release-bundle.sh 99.0.0 "$RUNNER_TEMP/dist"
           # No entry may carry the runner's UID.
           tar -tvzf "$RUNNER_TEMP/dist/mail-archive.tar.gz" | awk '$2 != "0/0" { print; bad = 1 } END { exit bad }'
           tar -C "$RUNNER_TEMP" -xzf "$RUNNER_TEMP/dist/mail-archive.tar.gz"
-          SMOKE_DIR="$RUNNER_TEMP/mail-archive" MAIL_ARCHIVE_IMAGE=mail-archive:smoke scripts/compose-smoke-test.sh
+          SMOKE_DIR="$RUNNER_TEMP/mail-archive" SMOKE_ENV_NAMES=old MAIL_ARCHIVE_IMAGE=mail-archive:smoke scripts/compose-smoke-test.sh
       # The semver rules of scripts/next-version.sh, with JSON fixtures
       # instead of the GitHub API.
       - name: Release version numbers

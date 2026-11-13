@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -18,7 +19,20 @@ import (
 
 var version = "dev"
 
+// defaultDataDir is the data directory when KEEPIA_ARCHIVE_DATA_DIR is not
+// set. The image sets /data at build time (-X main.defaultDataDir=/data),
+// so that it names no variable that `docker run -e` could conflict with
+// (#585).
+var defaultDataDir = "./data"
+
 func main() {
+	config.SetDefaultDataDir(defaultDataDir)
+	// Before any command: refuse a variable set under its new and its old
+	// name to different values, and warn once about old names (#585).
+	if err := checkEnv(os.Environ(), os.Stderr); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(exitStartRefused)
+	}
 	sig, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	// A writer that must stop (lost writers lock, encryption at rest
@@ -97,6 +111,11 @@ func exitStatus(ctx context.Context, err error) (int, string) {
 	if errors.As(err, &keyErr) {
 		return exitStartRefused, err.Error()
 	}
+	// A variable set under both names to different values (#585).
+	var conflictErr *config.EnvConflictError
+	if errors.As(err, &conflictErr) {
+		return exitStartRefused, err.Error()
+	}
 	// A refused setup token (#396, part 3).
 	var tokenErr *config.SetupTokenError
 	if errors.As(err, &tokenErr) {
@@ -125,10 +144,31 @@ func (e *exitError) exitCode() int {
 	return e.code
 }
 
-func newLogger(level string) *slog.Logger {
+func newLogger(level string) *slog.Logger { return newLoggerTo(os.Stderr, level) }
+
+// newLoggerTo is newLogger writing to w.
+func newLoggerTo(w io.Writer, level string) *slog.Logger {
 	var l slog.Level
 	if err := l.UnmarshalText([]byte(level)); err != nil {
 		l = slog.LevelInfo
 	}
-	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: l}))
+	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: l}))
+}
+
+// checkEnv scans environ once against the variables' old names (#585),
+// before cobra runs a command, so that it does not depend on when a
+// command reads its configuration: a variable set under its new and its
+// old name to different values is refused (*config.EnvConflictError);
+// old names in use get one WARN line on stderr through the logger, at the
+// log level the environment sets (silent at error). Never values.
+func checkEnv(environ []string, stderr io.Writer) error {
+	inUse, err := config.ScanEnv(environ)
+	if err != nil {
+		return err
+	}
+	if len(inUse) > 0 {
+		level := config.EnvValue(environ, config.EnvLogLevel)
+		newLoggerTo(stderr, level).Warn(config.DeprecationWarning(inUse))
+	}
+	return nil
 }

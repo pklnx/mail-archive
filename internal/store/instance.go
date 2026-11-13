@@ -286,7 +286,7 @@ type InstanceStatus struct {
 	// (BlobOff without a row or before its table exists).
 	EncryptionAtRest string
 	// EncryptionAtSetupOff: the instance is configured to start without
-	// encryption at setup (MAIL_ARCHIVE_ENCRYPTION_AT_SETUP=off, for test
+	// encryption at setup (KEEPIA_ARCHIVE_ENCRYPTION_AT_SETUP=off, for test
 	// instances only). Configuration, not the database: the caller sets
 	// it.
 	EncryptionAtSetupOff bool

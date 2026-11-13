@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/store/storetest"
 )
@@ -15,7 +16,7 @@ import (
 // move --other-group.
 func TestGroupCommands(t *testing.T) {
 	st, url := storetest.NewWithURL(t)
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
+	t.Setenv(config.EnvDatabaseURL, url)
 	ctx := context.Background()
 	group := func(args ...string) error { return runCmd(t, newGroupCmd(), "", args...) }
 	out := func(fn func() error) string {

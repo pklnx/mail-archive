@@ -581,8 +581,8 @@ func runBackup(ctx context.Context, job backupJob) (string, error) {
 // holds a secret, and libpq, OpenSSL, Kerberos or the client install may
 // need them (HOME for ~/.pgpass and ~/.postgresql/root.crt, SSL_CERT_* for
 // sslrootcert=system, KRB5* for GSSAPI). Nothing else is passed on, so no
-// MAIL_ARCHIVE_* variable and no PG* variable of this process reaches the
-// tools.
+// KEEPIA_ARCHIVE_* or MAIL_ARCHIVE_* (old name) variable and no PG* variable
+// of this process reaches the tools.
 var pgToolEnvNames = []string{
 	"PATH", "HOME", "TMPDIR", "TZ", "LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "LD_LIBRARY_PATH",
 	"SSL_CERT_FILE", "SSL_CERT_DIR", "OPENSSL_CONF", "KRB5CCNAME", "KRB5_CONFIG",

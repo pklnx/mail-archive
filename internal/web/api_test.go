@@ -599,7 +599,7 @@ func TestMessageHTMLNeutralizedAfterInlining(t *testing.T) {
 
 // linkServer is the fixture's server through the real route table, with
 // archive.example as a further allowed host (a public URL's host, as from
-// MAIL_ARCHIVE_PUBLIC_URL) next to 127.0.0.1.
+// KEEPIA_ARCHIVE_PUBLIC_URL) next to 127.0.0.1.
 func (f *apiFixture) linkServer() *httptest.Server {
 	f.t.Helper()
 	f.server.allowedHosts = append(f.server.allowedHosts, "archive.example")

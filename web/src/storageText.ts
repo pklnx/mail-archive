@@ -34,7 +34,7 @@ const en = {
   encryptionOff: "Off",
   groupQuotaFirst: (quota: string) =>
     `The group's quota of ${quota} applies before the instance quota. It was set at the command line (./ma group set-quota).`,
-  instanceQuotaHelp: "The instance quota is set by the operator (MAIL_ARCHIVE_STORAGE_QUOTA).",
+  instanceQuotaHelp: "The instance quota is set by the operator (KEEPIA_ARCHIVE_STORAGE_QUOTA).",
   groupsTitle: "Customer groups",
   groupsHelp: (warn: number, overflow: number) =>
     `At ${warn} % of its quota a group is nearly full; at 100 % its syncs and imports pause; from ${100 + overflow} % the SMTP server defers its journal mail, which the sending server retries. A group's quota cannot be above the instance quota.`,
@@ -110,7 +110,7 @@ const de: typeof en = {
   encryptionOff: "Aus",
   groupQuotaFirst: (quota) =>
     `Das Kontingent der Gruppe von ${quota} greift vor dem der Instanz. Es wurde auf der Kommandozeile gesetzt (./ma group set-quota).`,
-  instanceQuotaHelp: "Das Kontingent der Instanz legt der Betreiber fest (MAIL_ARCHIVE_STORAGE_QUOTA).",
+  instanceQuotaHelp: "Das Kontingent der Instanz legt der Betreiber fest (KEEPIA_ARCHIVE_STORAGE_QUOTA).",
   groupsTitle: "Kundengruppen",
   groupsHelp: (warn, overflow) =>
     `Ab ${warn} % ihres Kontingents ist eine Gruppe fast voll; bei 100 % pausieren ihre Synchronisierungen und Importe; ab ${100 + overflow} % stellt der SMTP-Server ihre Journal-Mails zurück, und der sendende Server versucht es erneut. Das Kontingent einer Gruppe kann nicht über dem der Instanz liegen.`,
