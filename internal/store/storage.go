@@ -410,7 +410,8 @@ func IsSerializationFailure(err error) bool {
 type StorageUsage struct {
 	// Messages and Bytes are exact (the counters).
 	Messages, Bytes int64
-	// State is the instance's quota state (part 2; "ok" until then).
+	// State is the instance's persisted quota state (ok, warn, full,
+	// overflow or disk_low; internal/quota).
 	State string
 	// SnapshotAt is when the last snapshot ran; nil before the first.
 	SnapshotAt *time.Time

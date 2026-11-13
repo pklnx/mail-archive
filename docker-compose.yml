@@ -118,6 +118,12 @@ services:
       MAIL_ARCHIVE_RECONCILE_MAX_MESSAGES: ${MAIL_ARCHIVE_RECONCILE_MAX_MESSAGES:-}
       MAIL_ARCHIVE_IMAP_MAX_FOLDERS: ${MAIL_ARCHIVE_IMAP_MAX_FOLDERS:-}
       MAIL_ARCHIVE_IMAP_IDLE_TIMEOUT: ${MAIL_ARCHIVE_IMAP_IDLE_TIMEOUT:-}
+      # Storage quota of the instance and the disk reserve; empty = the
+      # default. See "Storage and quotas" in the Operations guide.
+      MAIL_ARCHIVE_STORAGE_QUOTA: ${MAIL_ARCHIVE_STORAGE_QUOTA:-}
+      MAIL_ARCHIVE_STORAGE_WARN_PERCENT: ${MAIL_ARCHIVE_STORAGE_WARN_PERCENT:-}
+      MAIL_ARCHIVE_STORAGE_SMTP_OVERFLOW_PERCENT: ${MAIL_ARCHIVE_STORAGE_SMTP_OVERFLOW_PERCENT:-}
+      MAIL_ARCHIVE_MIN_FREE_DISK: ${MAIL_ARCHIVE_MIN_FREE_DISK:-}
       # Journaling over SMTP for smtp accounts; off unless the listen address is set.
       MAIL_ARCHIVE_SMTP_LISTEN: ${MAIL_ARCHIVE_SMTP_LISTEN:-}
       # required (the default once the listen address is set): mail servers
@@ -246,6 +252,12 @@ services:
       MAIL_ARCHIVE_RECONCILE_MAX_MESSAGES: ${MAIL_ARCHIVE_RECONCILE_MAX_MESSAGES:-}
       MAIL_ARCHIVE_IMAP_MAX_FOLDERS: ${MAIL_ARCHIVE_IMAP_MAX_FOLDERS:-}
       MAIL_ARCHIVE_IMAP_IDLE_TIMEOUT: ${MAIL_ARCHIVE_IMAP_IDLE_TIMEOUT:-}
+      # Storage quota of the instance and the disk reserve; empty = the
+      # default. See "Storage and quotas" in the Operations guide.
+      MAIL_ARCHIVE_STORAGE_QUOTA: ${MAIL_ARCHIVE_STORAGE_QUOTA:-}
+      MAIL_ARCHIVE_STORAGE_WARN_PERCENT: ${MAIL_ARCHIVE_STORAGE_WARN_PERCENT:-}
+      MAIL_ARCHIVE_STORAGE_SMTP_OVERFLOW_PERCENT: ${MAIL_ARCHIVE_STORAGE_SMTP_OVERFLOW_PERCENT:-}
+      MAIL_ARCHIVE_MIN_FREE_DISK: ${MAIL_ARCHIVE_MIN_FREE_DISK:-}
       # Read by `./ma account add-smtp` to tell whether the web server receives.
       MAIL_ARCHIVE_SMTP_LISTEN: ${MAIL_ARCHIVE_SMTP_LISTEN:-}
       MAIL_ARCHIVE_SMTP_AUTH: ${MAIL_ARCHIVE_SMTP_AUTH:-}

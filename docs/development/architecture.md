@@ -1363,6 +1363,46 @@ hold it. Migration 00041 holds the schema; the code is in
   (`./ma usage`). The measured costs are in
   [Hardware and budgets](../guide/operations#hardware-and-budgets).
 
+## Storage quotas
+
+The gate is `internal/quota` (#397, part 2): `quota.Gate`, one per process
+that stores mail (`serve`, and `./ma sync`, `./ma import`, `./ma account
+fill`), on `store.StorageGateFigures` and `store.TransitionStorageState`
+(`internal/store/quota.go`). The settings are `config.Storage`; group quotas
+are `customer_groups.quota_bytes`, the states `storage_states` (00041).
+
+- **Read.** Every 10 seconds (`serve` runs `Gate.Run`; the commands read
+  when they check after that time) one statement reads the instance's exact
+  bytes, each group's figure (snapshot, folded and open deltas, as in
+  `GroupStorageUsage`), the quotas, the persisted states and whether a
+  snapshot exists, plus `statfs` of the data directory. The store tells the
+  gate after every committed save what it added (`SetWriteObserver`;
+  `recordGroupUsage` returns the bytes new to the group, an upper bound for
+  the instance too); the gate adds these local bytes until its next read.
+- **States.** `quota.Thresholds.Next` is the state machine: up to the level
+  a figure reached, down only 1 % of the quota below a threshold.
+  `disk_low` is the instance's, entered below the reserve and left 1 % of
+  it above. The effective state of a group's account is the worst of the
+  group's (only with a quota and after the first snapshot), the
+  instance's and the disk's.
+- **Transitions** come from the database figures alone: under
+  `SELECT … FROM storage_states … FOR UPDATE` the scope's figures are read
+  again (and `statfs` for the instance), and the row is updated with
+  `state_since` and `event_seq + 1` only if the state changes. Event IDs are
+  `storage:<instance|group id>:<event_seq>` (`store.StorageEventID`). The
+  local bytes never reach the database.
+- **Enforcement.** `Gate.Admit` (below full) is asked by the sync runner's
+  schedule, at the start of a sync, fill or import, and in the fetch sink
+  and the import loop before each `Blobs.Put`; a refusal from a sink is
+  `imapsync.Stop`, which closes the IMAP connection instead of draining the
+  rest of the answer. The SMTP server asks `Gate.State` (`Deferred`:
+  overflow or worse) at `RCPT` (step e, with the group from
+  `LookupSMTPAddress`) and again at the start of `DATA`. Accounts carry
+  their owner's group (`Account.GroupID`, `SMTPRoute.GroupID`,
+  `SyncHealth.GroupID`, `FillHealth.GroupID`) from a join in the same
+  statement. The web server answers manual syncs `409 storage_full` and
+  lists paused accounts in `/healthz/sync`.
+
 ## Start-up of serve and worker
 
 `serve` and `worker` run `prepareInstance` (`cmd/mail-archive/startup.go`,

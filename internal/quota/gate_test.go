@@ -214,7 +214,7 @@ func TestGateWorstOfThree(t *testing.T) {
 			{Group: &g1, Quota: ptr(10 * gib), Bytes: 10 * gib}, // full
 			{Group: &g2, Quota: ptr(10 * gib), Bytes: 1 * gib},  // ok
 		}})
-	free := int64(100 * gib)
+	free := 100 * gib
 	c := newClock()
 	g := testGate(Config{InstanceQuota: 100 * gib, MinFreeDisk: gib}, &view{db: db}, func() (int64, error) { return free, nil }, c)
 	check := func(group *int64, want State, wantScope Scope) {
@@ -361,7 +361,7 @@ func TestGateInterval(t *testing.T) {
 func TestGateDiskLow(t *testing.T) {
 	db := newFakeDB(store.GateFigures{Counted: true})
 	c := newClock()
-	free := int64(100 * gib)
+	free := 100 * gib
 	calls := 0
 	g := testGate(Config{MinFreeDisk: 100 * gib}, &view{db: db}, func() (int64, error) { calls++; return free, nil }, c)
 	step := func(f int64, want State, persisted string) {

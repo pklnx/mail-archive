@@ -258,6 +258,27 @@ database connection, so a crashed process cannot leave it behind. A sync
 interrupted by a crash is shown as failed with the error `interrupted` the
 next time the account is synced.
 
+## Paused at a storage limit
+
+When the operator set a [storage quota](./operations#storage-and-quotas)
+and the account's customer group or the whole instance reaches it, or the
+disk runs low, new mail is not archived until space is freed:
+
+- The schedule skips the account; the **Sync** button and `./ma sync`
+  answer that the storage limit is reached (`409` with the code
+  `storage_full` in the API, exit code 75 on the command line).
+- A sync that is running when the limit is reached saves what it fetched
+  and stops before the next message. Its run is `partial` with the error
+  `storage_full: the storage limit is reached; new mail is archived again
+  once space is freed`. It does not count as a failed sync, sends no alert,
+  and the account is not stale while paused.
+- Once the operator raises the quota or frees space, the next sync goes on
+  where the paused one stopped. Mail deleted on the server in the meantime
+  is not archived.
+
+Users of the account learn only that storage is full, not which limit was
+reached or how much other accounts use.
+
 ## Sync status
 
 The Accounts page shows for each account whether it is syncing and when its
@@ -275,8 +296,8 @@ that comes back is. Syncs before version 1.5.3 keep the figure they
 recorded then.
 
 A sync ends as `ok`, `partial` (some folders failed, or could not be
-reconciled; the others are archived) or `failed` (for example a wrong
-password).
+reconciled; the others are archived; or it [paused](#paused-at-a-storage-limit)
+at a storage limit) or `failed` (for example a wrong password).
 
 The account's page also shows how many messages are no longer on the server
 (*Only in archive*, a link to them) and when the account was last compared

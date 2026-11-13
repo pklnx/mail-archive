@@ -177,7 +177,8 @@ case; commands find a group by its name in any case.
 | Command | Purpose |
 |---|---|
 | `group add NAME` | Create a group. |
-| `group list` | List groups with their number of users, the accounts those users own (removed ones too), and when each was created. |
+| `group list` | List groups with their number of users, the accounts those users own (removed ones too), their storage quota (`QUOTA`), the storage they use (`USED`, as in [`usage`](#usage); `-` before the first snapshot), their quota state (`STATE`) and when each was created. |
+| `group set-quota NAME SIZE\|none` | Set a group's storage quota in message bytes, deduplicated within the group, like `50GiB`, `500GB` or `2TiB`; `none` removes it. Refused above the instance quota (`MAIL_ARCHIVE_STORAGE_QUOTA`). Takes effect within 10 seconds. Audited as `group.quota` with the old and new value in bytes. See [Storage and quotas](../guide/operations#storage-and-quotas). |
 | `group rename NAME NEW-NAME` | Rename a group. |
 | `group remove NAME` | Remove a group. Refused while it has users, while a legal hold names it (also a released one), and for the last group. |
 
@@ -296,7 +297,11 @@ when someone who knows a secret should no longer deliver mail.
 Without flags it lists the fills, with the schedule, health and waiting
 messages of recurring ones. The first run happens in the foreground and
 prints the first message the account received over SMTP and then the
-progress per folder; exit code `1` when some folders failed. In the counts
+progress per folder; exit code `1` when some folders failed, `75` when the
+account's group or the instance reached its
+[storage limit](../guide/operations#storage-and-quotas): the fill then stays
+running with what it stored, and the web server continues it once space is
+freed. In the counts
 per folder, `NEW` is the part of `IMPORTED` the account did not hold before
 in any of its folders, even if the archive held the same bytes from another
 account. The web UI
@@ -377,7 +382,7 @@ retention has usually ended too, so the next deletion run lists it.
 
 | Command | Purpose |
 |---|---|
-| `sync` | Copy new messages from all enabled accounts. Prints a line per account with `fetched=N new=N`; `new` counts the messages the account did not hold before in any of its folders, even if the archive held the same bytes from another account. Exits non-zero if any account failed. Accounts that are being synced elsewhere are skipped. With `MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL` set, sends the alerts that became due at the end (for up to 15 seconds; failed deliveries are retried by the next sync or the web server). |
+| `sync` | Copy new messages from all enabled accounts. Prints a line per account with `fetched=N new=N`; `new` counts the messages the account did not hold before in any of its folders, even if the archive held the same bytes from another account. Exits non-zero if any account failed. Accounts that are being synced elsewhere are skipped. An account whose customer group or the instance reached its [storage limit](../guide/operations#storage-and-quotas) is not synced, or its sync stops before the next message and keeps what it fetched: its line ends `paused:` with the limit, and without failures the command exits with `75`. With `MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL` set, sends the alerts that became due at the end (for up to 15 seconds; failed deliveries are retried by the next sync or the web server). |
 | `sync --account NAME` | Only these accounts (repeatable), also when disabled. `--user USER` limits to one user's accounts. |
 | `sync --reconcile` | Also compare every selected folder with the server now, not only those due by `MAIL_ARCHIVE_RECONCILE_INTERVAL`. A plain `sync` reconciles due folders. The output adds `gone=N back=N flags=N` for accounts that were reconciled. See [Reconcile](../guide/syncing#reconcile). |
 | `status` | Distinct messages per account with its ID, SOURCE, owner and the last sync result (`--user USER` for one user). SOURCE is `snapshot (IMAP)`, `complete (SMTP)` or `import`. Import accounts show `import` instead of enabled. `GONE` counts the account's messages that are no longer on its server (`-` for import and smtp accounts). For smtp accounts, LAST SYNC is when the account last received a message. `EVERY` is how often the web server's schedule syncs an IMAP account (`6h (default)`, `30m`, `15m (min)` when the floor raised it, `manual`, or `off` when the schedule is off), `NEXT SYNC` when it does next (`due` when that has passed, `-` when disabled or not scheduled), and `HEALTH` is `ok`, `failing` or `stale` as in `/healthz/sync`; this command cannot see the web server's queue, so an account waiting there may show `stale`. `FAILED` shows `-`, or how many syncs in a row failed and since when (`4x since 2026-10-01 12:00`). The ID is what [`/healthz/sync`](../guide/operations#healthz-sync) and alerts name. Without `--user`, a line shows the storage of the instance, exact: `storage: 1234 unique messages, 5.6 GiB; per group and account: ./ma usage` ([`usage`](#usage) shows them per group and account). A line shows the newest [attestation](#attest), another the number of [retention rules and legal holds](#retention), `off` without a key, or `overdue` when it is older than twice `MAIL_ARCHIVE_ATTEST_INTERVAL`. A line counts the [background jobs](../guide/operations#background-jobs) per kind: `jobs: attachment_text 12 queued (oldest 3m), 1 running, 2 failed`, also `retrying` for jobs that wait for another attempt, or `jobs: none`. A line shows encryption at rest: `on`, `off`, or an unfinished `encryption enable` or `disable` with its progress and the command that finishes it. Then a `schema:` line, and a `setup:` line: `complete since …`, waiting for the first admin from the [setup link](#setup-token) with the end of its window, its token expired, or no user yet; with `MAIL_ARCHIVE_ENCRYPTION_AT_SETUP=off` on an instance that is not set up, a second `setup:` line says that a new instance starts without encryption at rest. When the PDF reader could not be prepared in the process that ran them, a further line says `attachment text: PDF extractor unavailable for N message(s)`: the cause is in the log of the web server or worker; after fixing it and a restart, `jobs retry attachment_text`. |
@@ -432,7 +437,11 @@ list commands are not recorded.
 
 Running the same import again adds only what is missing. Progress goes to
 stderr after every batch, a summary per folder to stdout. Exit codes: `0`
-done, `1` messages skipped or an error. Import accounts are never synced:
+done, `1` messages skipped or an error, `75` paused at a
+[storage limit](../guide/operations#storage-and-quotas): the import refuses
+to start, or stops with "storage quota of group NAME reached after N
+messages" and keeps what it read; run the same command again once space is
+freed. Import accounts are never synced:
 `sync --account NAME` refuses them, and `account enable`, `disable`,
 `set-password`, `set-folders` and `folders` do not apply. `rename`, `move`
 and `remove` work. Without `--journal`, an smtp account is refused; with it,
@@ -469,7 +478,9 @@ info     imap  bob    Example Ltd  2410      171.9 MiB  40.2 MiB
   figure as the `storage:` line of [`status`](#archive).
 - **Groups** count each message once per group: a message in two groups
   counts fully in each. `QUOTA` is the group's quota (`-` without one),
-  `STATE` its quota state. A row `Without group` appears while accounts
+  `STATE` its quota state (see
+  [Storage and quotas](../guide/operations#storage-and-quotas); set quotas
+  with [`group set-quota`](#groups)). A row `Without group` appears while accounts
   without an owner exist, which happens only before the first user.
 - **Accounts** show their messages and bytes, and in `EXCLUSIVE` the bytes
   no other account holds: what a [purge](#accounts) of the account
