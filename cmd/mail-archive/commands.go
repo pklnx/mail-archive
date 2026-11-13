@@ -1110,14 +1110,18 @@ the worker and syncs run.`,
 	}
 }
 
-// reindexAttachments enqueues the attachment backfill and works off the
-// attachment kinds in the foreground until none is due. It returns how
-// many attachments with text it stored and how many of the kinds' jobs
-// are left to other processes or to a retry.
+// reindexAttachments enqueues the attachment backfill, runs the repair of
+// the attachment text flags once (as serve and worker do at start and
+// every 15 minutes: installations that run only sync or import from cron
+// catch up here), and works off the attachment kinds in the foreground
+// until none is due. It returns how many attachments with text it stored
+// and how many of the kinds' jobs are left to other processes or to a
+// retry.
 func reindexAttachments(ctx context.Context, a *app, blobs *blobstore.Store, log *slog.Logger) (int64, int64, error) {
 	if _, err := a.store.EnqueueJobs(ctx, []store.NewJob{store.AttachmentBackfillJob()}, false); err != nil {
 		return 0, 0, err
 	}
+	(&attachmentRepair{store: a.store, log: log}).pass(ctx)
 	x := attachmentIndexer(a, blobs, log)
 	defer func() { _ = processExtractor(log).Close() }()
 	kinds := &jobs.Registry{}

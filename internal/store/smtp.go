@@ -353,24 +353,29 @@ func (s *Store) ReceiveMessage(ctx context.Context, accountID int64, meta Messag
 		if err != nil {
 			return err
 		}
+		att, err := newAttachmentText(ctx, q, group, []string{meta.SHA256})
+		if err != nil {
+			return err
+		}
 		n, err := q.InsertMessage(ctx, insertMessageParams(&meta))
 		if err != nil {
 			return fmt.Errorf("insert message %s: %w", meta.SHA256, err)
 		}
 		res.NewMessage = n == 1
-		if err := enqueueAttachmentText(ctx, q, &meta, n); err != nil {
-			return err
-		}
+		textOK := att.flag(&meta, n)
 		uid, err := q.NextUID(ctx, folder.ID)
 		if err != nil {
 			return err
 		}
 		locID, err := q.InsertReceivedLocation(ctx, db.InsertReceivedLocationParams{
 			MessageSha256: meta.SHA256, FolderID: folder.ID, Uidvalidity: folder.Uidvalidity, Uid: uid,
-			InternalDate: &received,
+			InternalDate: &received, AttachmentTextOk: textOK,
 		})
 		if err != nil {
 			return fmt.Errorf("insert location: %w", err)
+		}
+		if err := att.inserted(ctx, q, meta.SHA256, textOK); err != nil {
+			return err
 		}
 		var ip *netip.Addr
 		if env.ClientIP.IsValid() {

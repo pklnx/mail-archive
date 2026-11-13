@@ -164,23 +164,38 @@ secret key and one backup, and a message that several groups received is
 stored once and shown to each only through its own accounts.
 
 Sync, import and fill statistics count per account: a message is *new* when
-the account did not hold it before. Since 1.6.0, one more thing does not
+the account did not hold it before. Since 1.6.0, two more things do not
 depend on what accounts of other customer groups hold or held:
 
 - whether a message deleted by retention or an account purge is archived
   again: it is skipped only in the accounts and groups it was deleted from,
   and only while that group holds no copy of it.
+- when the text of its attachments becomes searchable: in each group, only
+  after an extraction that started once that copy was stored (for a copy
+  that moves into the group while its extraction runs: when it ends), or,
+  when a user or account that could search it moves into the group, as soon
+  as the move commits. From then on, other users of the group who save the
+  message can search it at once.
 
 Accepted:
 
 - Within one group, a user who holds the exact bytes of a message can tell
-  from this that another account of the group archived it before.
+  from these that another account of the group archived it before.
 - Messages deleted by a version before 1.6.0 count as deleted in every group
   that holds no copy.
 - A purge by a version before 1.6.0 recorded a message only when no other
   account held it. Whether such a message is archived again in the purged
   account's group therefore still depends on whether another account held
   it then.
+- After an attachment extraction failed (after three failed attempts in a
+  row, or `extractor unavailable`), it is not tried again for later groups
+  until an admin runs `jobs retry attachment_text`. Until then, those groups
+  cannot search that message's attachment text. A message whose file can no
+  longer be read while its stored attachment text can be searched counts as
+  such a failed extraction.
+- All groups share one job queue, so a group's attachment text can become
+  searchable sooner or later when another group's job for the same message
+  is already queued or running.
 - While a process of a version before 1.6.0 still runs after the upgrade, it
   behaves as before 1.6.0: its search shows attachment text, and its syncs,
   fills and deliveries skip and store messages as before 1.6.0. Stop web and
@@ -557,7 +572,8 @@ In both modes:
   15 seconds and about 96 MiB of memory plus its own size. A PDF beyond a
   limit, a damaged one, or one that needs a password to open is not
   searchable by its content. A message whose extraction failed or ended the
-  process three times is skipped. Extracted text, like all message content,
+  process three times is skipped. When a customer group can search a
+  message's attachment text is described under [Login](#login). Extracted text, like all message content,
   is never logged.
 - **Envelopes reveal BCC recipients.** They are visible only to the owner of
   the smtp account, in the message view and to the `to:` filter. Another user

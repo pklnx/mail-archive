@@ -379,6 +379,18 @@ func TestConvertLegacyFill(t *testing.T) {
 	if err := st.SetFillRecurring(ctx, f.ID, nil, nil, seal); err != nil {
 		t.Fatal(err)
 	}
+	// Attachment text per location (#539, part 2): messages 10 and 11 have
+	// an attachment; 10 is not searchable in the fill's folders yet, 11 is
+	// in Sent; 12 has none.
+	for _, sql := range []string{
+		"UPDATE messages SET has_attachment = true WHERE sha256 IN (repeat('0a', 32), repeat('0b', 32))",
+		`UPDATE message_locations l SET attachment_text_ok = (l.message_sha256 = repeat('0b', 32) AND fo.name = 'alice/Sent')
+			FROM folders fo WHERE fo.id = l.folder_id AND fo.name LIKE 'alice/%'`,
+	} {
+		if _, err := conn.Exec(ctx, sql); err != nil {
+			t.Fatal(err)
+		}
+	}
 	f, _ = st.GetFill(ctx, f.ID)
 	n, err := st.ConvertLegacyFill(ctx, f)
 	if err != nil || n != 3 {
@@ -409,6 +421,21 @@ func TestConvertLegacyFill(t *testing.T) {
 	}
 	if !slices.Equal([]string{locs[2].sha[:2], locs[3].sha[:2], locs[4].sha[:2]}, []string{"0a", "0b", "0c"}) {
 		t.Errorf("copied %+v", locs[2:])
+	}
+	// A copy shows the text when a copied location of the same account
+	// does or the message has none; 10's copy waits for its job.
+	frows, err := conn.Query(ctx, `SELECT l.attachment_text_ok FROM message_locations l JOIN folders fo ON fo.id = l.folder_id
+		WHERE fo.account_id = $1 AND fo.name = $2 AND l.uid > 2 ORDER BY l.uid`, a.ID, store.SMTPFolder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := pgx.CollectRows(frows, pgx.RowTo[bool]); err != nil || !slices.Equal(got, []bool{false, true, true}) {
+		t.Errorf("flags of the copies %v, %v", got, err)
+	}
+	var queued int
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM jobs WHERE kind = $1 AND key = repeat('0a', 32) AND state = 'queued' AND priority = $2`,
+		store.JobAttachmentText, store.PriorityNew).Scan(&queued); err != nil || queued != 1 {
+		t.Errorf("job of the copy without the flag: %d, %v", queued, err)
 	}
 	var lastUID int64
 	if err := conn.QueryRow(ctx, "SELECT last_uid FROM folders WHERE account_id = $1 AND name = $2", a.ID, store.SMTPFolder).Scan(&lastUID); err != nil || lastUID != 5 {

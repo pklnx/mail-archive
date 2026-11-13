@@ -512,9 +512,14 @@ func (s *Store) saveIntoJournal(ctx context.Context, folderID int64, folderName 
 		if err != nil {
 			return err
 		}
+		att, err := newAttachmentText(ctx, q, group, keptHashes(metas, skip))
+		if err != nil {
+			return err
+		}
 		type pending struct {
-			meta *MessageMeta
-			loc  Location
+			meta   *MessageMeta
+			loc    Location
+			textOK bool
 		}
 		var (
 			add   []pending
@@ -548,10 +553,7 @@ func (s *Store) saveIntoJournal(ctx context.Context, folderID int64, folderName 
 				res.Added++
 				added = append(added, m)
 			}
-			if err := enqueueAttachmentText(ctx, q, m, n); err != nil {
-				return err
-			}
-			add = append(add, pending{m, locs[i]})
+			add = append(add, pending{m, locs[i], att.flag(m, n)})
 		}
 		if len(add) > 0 {
 			last, err := q.AllocateUIDs(ctx, db.AllocateUIDsParams{ID: folder.ID, N: int64(len(add))})
@@ -573,10 +575,13 @@ func (s *Store) saveIntoJournal(ctx context.Context, folderID int64, folderName 
 				}
 				err := q.InsertFilledLocation(ctx, db.InsertFilledLocationParams{
 					MessageSha256: p.meta.SHA256, FolderID: folder.ID, Uidvalidity: folder.Uidvalidity, Uid: first + int64(i),
-					Flags: flags, InternalDate: internal, FillID: fillID, ImportID: importID,
+					Flags: flags, InternalDate: internal, FillID: fillID, ImportID: importID, AttachmentTextOk: p.textOK,
 				})
 				if err != nil {
 					return fmt.Errorf("insert location: %w", err)
+				}
+				if err := att.inserted(ctx, q, p.meta.SHA256, p.textOK); err != nil {
+					return err
 				}
 			}
 		}
@@ -1002,11 +1007,22 @@ func (s *Store) convertLegacyBatch(ctx context.Context, fillID, journal int64, l
 		if err != nil {
 			return fmt.Errorf("lock folder: %w", err)
 		}
-		got, err = q.ConvertLegacyFillBatch(ctx, db.ConvertLegacyFillBatchParams{
+		rows, err := q.ConvertLegacyFillBatch(ctx, db.ConvertLegacyFillBatchParams{
 			JournalID: journal, Uidvalidity: folder.Uidvalidity, LastUid: folder.LastUid, FillID: fillID,
 			Folders: legacy, After: after, MaxRows: convertBatch,
 		})
-		if err != nil || len(got) == 0 {
+		if err != nil || len(rows) == 0 {
+			return err
+		}
+		got = make([]string, len(rows))
+		var queue []string
+		for i, r := range rows {
+			got[i] = r.MessageSha256
+			if !r.AttachmentTextOk {
+				queue = append(queue, r.MessageSha256)
+			}
+		}
+		if err := queueCopies(ctx, q, queue); err != nil {
 			return err
 		}
 		last, err := q.AllocateUIDs(ctx, db.AllocateUIDsParams{ID: journal, N: int64(len(got))})
