@@ -65,6 +65,8 @@ func TestServeStarting(t *testing.T) {
 	_, dbURL := storetest.NewWithURL(t)
 	startEnv(t, dbURL, false)
 	t.Setenv(config.EnvAllowedHosts, "archive.lan")
+	// A test instance: it starts new, without encryption at setup.
+	t.Setenv(config.EnvEncryptionAtSetup, "off")
 	k := newTestKey(t)
 	useKeyFile(t, k)
 	ctx, cancel := context.WithTimeout(context.Background(), testwait.Limit(t))

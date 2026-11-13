@@ -146,6 +146,8 @@ var auditActionClasses = map[string][]AuditClass{
 	"user.2fa_reset":        {AuditTargeted},
 	"user.passkeys_removed": {AuditTargeted},
 	"user.group_change":     {AuditTargeted},
+	// The first admin from the setup link (#396): about the new admin.
+	"user.setup": {AuditTargeted},
 
 	"group.add":    {AuditTargeted},
 	"group.rename": {AuditTargeted},

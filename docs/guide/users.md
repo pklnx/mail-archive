@@ -11,15 +11,31 @@ and shares stay inside it. A tax advisor or tax auditor gets an
 
 ## The first admin
 
-The operator creates the first user, an admin, on the command line when the
-instance is set up:
+The first user of an instance is an admin. It comes from one of two ways:
 
-```sh
-./ma user add patrick --admin
-```
+- **The setup link.** A new instance started from configuration waits for
+  its first admin: the operator sends the link
+  `https://archive.example.com/#setup=…` once (see
+  [Start from configuration](./getting-started#start-from-configuration)).
+  Whoever opens it chooses the admin's user name and password and is logged
+  in. The link works once, only while no user exists, and for 7 days; after
+  that, or once it was used, it shows that the instance is set up, or that
+  the link has expired, and offers the login page. The audit log records the
+  setup as `user.setup`.
+
+  ![The setup link's page: user name, password and its repetition](/screenshots/setup.png)
+
+- **The command line.** The operator creates the admin when the instance is
+  set up:
+
+  ```sh
+  ./ma user add patrick --admin
+  ```
+
+  This also completes the setup: a setup link set afterwards never works.
 
 Administrators must set up two-factor authentication (TOTP) at their first
-web login, after choosing their own password. Admins cannot turn it off.
+web login, right after the setup link or after choosing their own password. Admins cannot turn it off.
 Another admin, or `./ma user reset-2fa NAME` on the command line, can reset
 it; the admin then sets it up again at the next login.
 

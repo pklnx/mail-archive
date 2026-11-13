@@ -10,7 +10,7 @@
 // itself does not name its frame.
 import { writeFile } from "node:fs/promises";
 import { expect, test as base, type Frame, type Locator, type Page } from "@playwright/test";
-import { origin } from "./demo";
+import { origin, setupOrigin } from "./demo";
 
 export { expect };
 
@@ -158,6 +158,12 @@ export interface Guards {
   /** An answer with this status to a request for this path is expected. */
   allowHTTPError(path: string, status: number): void;
   /**
+   * The test also uses the demo's second instance, the new one at
+   * setupOrigin (#396): requests to it are not foreign. No other origin can
+   * be allowed.
+   */
+  allowSetupInstance(): void;
+  /**
    * A console error whose text matches is expected exactly count times. The
    * matches up to count are not problems; any further match is one, and at
    * the end of the test fewer matches than count are one too.
@@ -194,6 +200,9 @@ export const test = base.extend<{ guards: Guards }>({
       context.pages().forEach(logFrames);
       context.on("page", logFrames);
       const allowed: { path: string; status: number }[] = [];
+      // The demo's origins this test uses: the main one, and the new
+      // instance after allowSetupInstance.
+      const origins = new Set([origin]);
       const expected: { text: RegExp; count: number; seen: number }[] = [];
       // Up to count matches of an expectation are expected; a match beyond
       // that is counted and reported, so a flood is never silenced.
@@ -209,13 +218,13 @@ export const test = base.extend<{ guards: Guards }>({
         allowed.some((a) => {
           try {
             const u = new URL(url);
-            return u.origin === origin && u.pathname === a.path && text.includes(`status of ${a.status} `);
+            return origins.has(u.origin) && u.pathname === a.path && text.includes(`status of ${a.status} `);
           } catch {
             return false;
           }
         });
       await context.route(
-        (url) => url.origin !== origin,
+        (url) => !origins.has(url.origin),
         (route) => {
           problems.push(`request to another host: ${route.request().method()} ${route.request().url()}`);
           return route.abort("blockedbyclient");
@@ -291,6 +300,7 @@ export const test = base.extend<{ guards: Guards }>({
       });
       await use({
         allowHTTPError: (path, status) => allowed.push({ path, status }),
+        allowSetupInstance: () => void origins.add(setupOrigin),
         expectConsoleError: (text, count = 1) => void expected.push({ text, count, seen: 0 }),
         takeProblems: () => problems.splice(0),
         frameLog: () => formatFrameEvents(frameEvents),

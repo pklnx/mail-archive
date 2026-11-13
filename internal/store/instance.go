@@ -275,12 +275,27 @@ type InstanceStatus struct {
 	Pending []string
 	// LastMigrationFailure is the failure record, nil if there is none.
 	LastMigrationFailure *MigrationFailure
+	// SetupState is the setup of the first admin (SetupCLI, SetupToken,
+	// SetupExpired, SetupComplete); empty before instance_state exists.
+	// SetupCompletedAt is when the first user was created, and
+	// SetupTokenExpires when a stored setup token stops working.
+	SetupState        string
+	SetupCompletedAt  *time.Time
+	SetupTokenExpires *time.Time
+	// EncryptionAtRest is the recorded state of encryption at rest
+	// (BlobOff without a row or before its table exists).
+	EncryptionAtRest string
+	// EncryptionAtSetupOff: the instance is configured to start without
+	// encryption at setup (MAIL_ARCHIVE_ENCRYPTION_AT_SETUP=off, for test
+	// instances only). Configuration, not the database: the caller sets
+	// it.
+	EncryptionAtSetupOff bool
 }
 
 // InstanceStatus returns the instance's state for the binary of version
 // binaryVersion.
 func (s *Store) InstanceStatus(ctx context.Context, binaryVersion string) (InstanceStatus, error) {
-	st := InstanceStatus{BinaryVersion: binaryVersion}
+	st := InstanceStatus{BinaryVersion: binaryVersion, EncryptionAtRest: BlobOff}
 	schema, err := s.SchemaState(ctx)
 	if err != nil {
 		return st, err
@@ -288,6 +303,28 @@ func (s *Store) InstanceStatus(ctx context.Context, binaryVersion string) (Insta
 	st.SchemaVersion, st.LatestVersion, st.Pending = schema.Version, schema.Latest, schema.PendingPaths()
 	if st.LastMigrationFailure, err = s.LastMigrationFailure(ctx); err != nil {
 		return st, err
+	}
+	if ok, err := s.instanceStateExists(ctx); err != nil {
+		return st, err
+	} else if ok {
+		setup, err := s.SetupState(ctx, time.Now())
+		if err != nil {
+			return st, err
+		}
+		st.SetupState, st.SetupCompletedAt, st.SetupTokenExpires = setup.State, setup.CompletedAt, setup.TokenExpires
+	}
+	var blobTable bool
+	if err := s.pool.QueryRow(ctx, `SELECT to_regclass('blob_encryption') IS NOT NULL`).Scan(&blobTable); err != nil {
+		return st, err
+	}
+	if blobTable {
+		row, err := s.BlobEncryption(ctx)
+		if err != nil {
+			return st, err
+		}
+		if row != nil {
+			st.EncryptionAtRest = row.State
+		}
 	}
 	return st, nil
 }

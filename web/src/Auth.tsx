@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { Button, CodeSnippet, Form, InlineNotification, PasswordInput, TextInput } from "@carbon/react";
+import { Button, Form, PasswordInput, TextInput } from "@carbon/react";
 import { ApiError, UNAUTHORIZED_EVENT, passkeyApi, retryAfter, sessionApi, unknownPasskey, type Session, type SessionState } from "./api";
-import { ThemeToggle } from "./ThemeToggle";
 import { applySettings, t } from "./i18n";
-import { ProductMark } from "./ProductMark";
+import { Brand, Centered, ErrorNotice, Heading } from "./authLayout";
+import { forgetSetupToken, takeSetupToken } from "./setupLink";
 import { autofillSupported, browserError, credentialJSON, forgetPasskey, passkeysSupported, requestOptions } from "./webauthn";
 import { LazyView, lazyNamed } from "./lazyView";
 
@@ -13,6 +13,11 @@ const PasswordForm = lazyNamed(() => import("./Profile"), "PasswordForm");
 const TwoFactorSetup = lazyNamed(() => import("./Profile"), "TwoFactorSetup");
 // An auditor's grant choice (#393) comes with the auditor shell's chunk.
 const GrantChoice = lazyNamed(() => import("./AuditorShell"), "GrantChoice");
+// The page of a setup link (#396) is used once per instance.
+const SetupPage = lazyNamed(() => import("./Setup"), "SetupPage");
+// So is the notice without any user: an instance shows it once, before its
+// first admin exists.
+const SetupNotice = lazyNamed(() => import("./Setup"), "SetupNotice");
 
 type GateState = SessionState | { loading: true } | { error: string };
 
@@ -27,7 +32,8 @@ interface Props {
 
 /**
  * Shows the app only with a valid session. Without one it shows the login
- * page, or how to create the first admin. Any 401 from the API (the session
+ * page, the setup page of a setup link (#396), or how to create the first
+ * admin. Any 401 from the API (the session
  * ended) brings the login page back; the URL is kept, so the user returns
  * to the same view after logging in.
  *
@@ -38,6 +44,13 @@ interface Props {
  */
 export function AuthGate({ children }: Props) {
   const [state, setGateState] = useState<GateState>({ loading: true });
+  // The token of a setup link (#396), taken from the address at the first
+  // render and kept until it is used or of no use.
+  const [setupToken, setSetupToken] = useState(takeSetupToken);
+  const dropSetupToken = useCallback(() => {
+    forgetSetupToken();
+    setSetupToken(null);
+  }, []);
   // Why the last Log out failed. Any change of the gate state drops it, so a
   // stale alert never comes back after a new login.
   const [logoutError, setLogoutError] = useState("");
@@ -61,6 +74,12 @@ export function AuthGate({ children }: Props) {
     window.addEventListener(UNAUTHORIZED_EVENT, check);
     return () => window.removeEventListener(UNAUTHORIZED_EVENT, check);
   }, [check]);
+
+  // A setup link opened in a browser that is logged in is of no use.
+  const loggedIn = "user" in state && !!state.user;
+  useEffect(() => {
+    if (loggedIn && setupToken !== null) dropSetupToken();
+  }, [loggedIn, setupToken, dropSetupToken]);
 
   if ("loading" in state) {
     return (
@@ -146,52 +165,32 @@ export function AuthGate({ children }: Props) {
     }
     return children(state, logout, logoutError, setState);
   }
-  if (state.setupRequired) return <SetupNotice check={check} />;
+  if (setupToken !== null) {
+    return (
+      <LazyView>
+        <SetupPage
+          token={setupToken}
+          setup={state.setup}
+          done={(s: Session) => {
+            dropSetupToken();
+            setState(s);
+          }}
+          toLogin={() => {
+            dropSetupToken();
+            check();
+          }}
+        />
+      </LazyView>
+    );
+  }
+  if (state.setupRequired) {
+    return (
+      <LazyView>
+        <SetupNotice check={check} setup={state.setup} />
+      </LazyView>
+    );
+  }
   return <LoginPage done={setState} passkeyOrigin={state.passkeyOrigin} />;
-}
-
-function Centered({ children }: { children: ReactNode }) {
-  return (
-    <div className="auth-page">
-      <div className="auth-page__theme">
-        <ThemeToggle />
-      </div>
-      <main className="auth-page__column">{children}</main>
-    </div>
-  );
-}
-
-function Brand() {
-  return (
-    <div className="auth-page__brand">
-      <ProductMark size={40} />
-      <h1 className="type-heading-04">{t.appName}</h1>
-    </div>
-  );
-}
-
-function Heading({ title, text }: { title: string; text: string }) {
-  return (
-    <div>
-      <h2 className="type-heading-03">{title}</h2>
-      <p className="auth-page__text">{text}</p>
-    </div>
-  );
-}
-
-/** An error on the login screens: announced, and not closable (the next try clears it). */
-function ErrorNotice({ text, alert = false }: { text: string; alert?: boolean }) {
-  return (
-    <InlineNotification
-      className="auth-page__wide"
-      kind="error"
-      lowContrast
-      hideCloseButton
-      role={alert ? "alert" : "status"}
-      statusIconDescription={t.carbon.status.error}
-      subtitle={text}
-    />
-  );
 }
 
 function loginError(err: unknown): string {
@@ -396,27 +395,6 @@ function LoginPage({ done, passkeyOrigin }: { done: (s: Session) => void; passke
           </Button>
         </>
       )}
-    </Centered>
-  );
-}
-
-function SetupNotice({ check }: { check: () => void }) {
-  return (
-    <Centered>
-      <Brand />
-      <Heading title={t.setupTitle} text={t.setupText} />
-      <CodeSnippet
-        type="single"
-        className="auth-page__wide"
-        aria-label={t.carbon.copy}
-        copyButtonDescription={t.carbon.copy}
-        feedback={t.carbon.copied}
-      >
-        ./ma user add NAME --admin
-      </CodeSnippet>
-      <div>
-        <Button onClick={check}>{t.checkAgain}</Button>
-      </div>
     </Centered>
   );
 }

@@ -19,6 +19,10 @@ var auditorAllowlist = []string{
 	"GET /api/session", "POST /api/session", "POST /api/session/2fa",
 	"POST " + passkeyLoginBeginPath, "POST " + passkeyLoginFinishPath, "DELETE /api/session",
 	"PUT /api/session/grant",
+	// The setup of the first admin (#396) is a login route: it takes no
+	// session, so an auditor's session cannot reach a gate there; it
+	// answers 404 once any user exists.
+	"POST " + setupPath,
 	"PUT " + profilePasswordPath, "PATCH /api/profile",
 	"GET /api/profile/2fa", "POST /api/profile/2fa/setup", "POST /api/profile/2fa/confirm",
 	"GET /api/profile/passkeys", "POST /api/profile/passkeys/begin", "POST /api/profile/passkeys/finish",

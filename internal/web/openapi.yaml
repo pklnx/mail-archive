@@ -427,6 +427,69 @@ paths:
         "503":
           $ref: "#/components/responses/PasskeysOff"
 
+  /api/setup:
+    post:
+      tags: [session]
+      operationId: setup
+      x-auditor: true
+      summary: Create the first admin with the setup token
+      description: |
+        Creates the first admin of a new instance with the setup token the
+        operator configured (`MAIL_ARCHIVE_SETUP_TOKEN_FILE`), once. The
+        link `<public URL>/#setup=<token>` carries the token in its
+        fragment, which never reaches the server; the web UI sends it here.
+        It works only while no user exists, setup was never completed, and
+        the token matches and is under 7 days old from the first start with
+        it. In one transaction it creates the admin, records the setup as
+        complete and consumes the token; after that, and after `user add`,
+        it answers 404.
+
+        The answer is a login: it sets the session cookie, and the admin
+        sets up 2FA next. Like the other login routes it takes no session,
+        so an auditor's session makes no difference (`x-auditor`). Recorded as `user.setup` and `auth.login`, both
+        with method `setup_token`. Wrong or expired tokens count as failed
+        logins of the client address.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, username, password]
+              additionalProperties: false
+              properties:
+                token:
+                  type: string
+                username:
+                  type: string
+                password:
+                  type: string
+                  description: At least 12 characters.
+      responses:
+        "201":
+          description: The admin is created and logged in.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: Wrong or expired setup token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Setup not available, because it is complete or no setup token is set (the two look the same).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
   /api/profile:
     patch:
       tags: [profile]
@@ -3887,13 +3950,21 @@ components:
           const: false
     NoSession:
       type: object
-      required: [error, setupRequired]
+      required: [error, setupRequired, setup]
       properties:
         error:
           type: string
         setupRequired:
           type: boolean
           description: No user exists yet.
+        setup:
+          type: string
+          enum: [cli, token, expired, complete]
+          description: |
+            How the first admin is created: `cli` (`user add` on the
+            command line), `token` (the operator's setup link works,
+            `POST /api/setup`), `expired` (its token is older than 7 days)
+            or `complete` (a first user exists or existed).
         passkeyOrigin:
           type: string
           description: Where passkey logins work; missing when they are off.

@@ -85,6 +85,7 @@ func main() {
 	listen := flag.String("listen", "127.0.0.1:18080", "address of the web UI")
 	imapListen := flag.String("imap-listen", "127.0.0.1:0", "address of the demo IMAP server (port 0: a free port)")
 	nowFlag := flag.String("now", "", "RFC 3339 instant the demo mail is dated from (empty: the current time); for reproducible screenshots")
+	setupListen := flag.String("setup-listen", "", "address of a second, new instance that waits for its first admin from the setup link (empty: none)")
 	flag.Parse()
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	now, err := parseNow(*nowFlag, time.Now)
@@ -92,7 +93,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "demo:", err)
 		os.Exit(2)
 	}
-	if err := run(*dbURL, *listen, *imapListen, now, log); err != nil {
+	if err := run(*dbURL, *listen, *imapListen, *setupListen, now, log); err != nil {
 		fmt.Fprintln(os.Stderr, "demo:", err)
 		os.Exit(1)
 	}
@@ -113,8 +114,9 @@ func parseNow(s string, wall func() time.Time) (time.Time, error) {
 
 // run starts the demo. now dates the made-up mail (the IMAP messages, the
 // journal copies and the import's cut-off); everything else, such as the
-// 2FA setup and the times the server records, uses the real clock.
-func run(dbURL, listen, imapListen string, now time.Time, log *slog.Logger) error {
+// 2FA setup and the times the server records, uses the real clock. With
+// setupListen it also serves a new instance there (setupDemo).
+func run(dbURL, listen, imapListen, setupListen string, now time.Time, log *slog.Logger) error {
 	if dbURL == "" {
 		return errors.New("set -db or MAIL_ARCHIVE_DATABASE_URL")
 	}
@@ -288,10 +290,107 @@ func run(dbURL, listen, imapListen string, now time.Time, log *slog.Logger) erro
 	})
 	fmt.Printf("demo UI on %s, log in as %q with password %q and a TOTP code for secret %s (Ctrl-C to stop and delete the demo data)\n",
 		publicURL, loginName, loginPassword, loginTOTPSecret)
-	if err := srv.ListenAndServe(ctx, listen); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	setupDone := make(chan error, 1)
+	if setupListen != "" {
+		// Ready before the main UI answers: whoever waits for the demo's
+		// /healthz finds the new instance listening too.
+		serveSetup, closeSetup, err := setupDemo(ctx, dbURL, setupListen, sealer, key, log)
+		if err != nil {
+			return fmt.Errorf("the setup instance: %w", err)
+		}
+		defer closeSetup()
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		go func() { setupDone <- serveSetup(ctx) }()
+		defer func() {
+			cancel()
+			<-setupDone
+		}()
+	}
+	served := make(chan error, 1)
+	go func() { served <- srv.ListenAndServe(ctx, listen) }()
+	select {
+	case err = <-served:
+	case setupErr := <-setupDone:
+		setupDone <- setupErr // for the deferred wait
+		// It ends with an error, or without one when ctx ended (a
+		// signal): then the main UI stops as well.
+		stop()
+		err = <-served
+		if setupErr != nil {
+			return fmt.Errorf("the setup instance: %w", setupErr)
+		}
+	}
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil
+}
+
+// demoSetupToken is the setup token of the new instance (setupDemo); the
+// end-to-end tests and the screenshots open its link. Made up and not
+// secret: it only works on this demo's throwaway database.
+var demoSetupToken = strings.Repeat("demo-setup-", 4)
+
+// setupDemo prepares a second, new instance at listen, on a database of its
+// own: no user yet and a setup token stored, as `serve` stores it at
+// start (#396). Its link is http://localhost:<port>/#setup=<demoSetupToken>.
+// It listens at once; serve serves until its ctx ends, and closeAll drops
+// the database afterwards.
+func setupDemo(ctx context.Context, dbURL, listen string, sealer *crypto.Sealer, key []byte, log *slog.Logger) (serve func(context.Context) error, closeAll func(), err error) {
+	var closers []func()
+	closeAll = func() {
+		for i := len(closers) - 1; i >= 0; i-- {
+			closers[i]()
+		}
+	}
+	defer func() {
+		if err != nil {
+			closeAll()
+		}
+	}()
+	setupURL, dropDB, err := createDatabase(ctx, dbURL)
+	if err != nil {
+		return nil, nil, err
+	}
+	closers = append(closers, dropDB)
+	dataDir, err := os.MkdirTemp("", "mail-archive-demo-setup-")
+	if err != nil {
+		return nil, nil, err
+	}
+	closers = append(closers, func() { _ = os.RemoveAll(dataDir) })
+	st, err := store.Open(ctx, setupURL)
+	if err != nil {
+		return nil, nil, err
+	}
+	closers = append(closers, st.Close)
+	if _, err := st.Migrate(ctx); err != nil {
+		return nil, nil, err
+	}
+	if _, _, err := st.RecordSetupToken(ctx, store.HashSetupToken(demoSetupToken), time.Now()); err != nil {
+		return nil, nil, err
+	}
+	blobs, err := blobstore.New(dataDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	_, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return nil, nil, err
+	}
+	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", listen)
+	if err != nil {
+		return nil, nil, err
+	}
+	publicURL := "http://localhost:" + port
+	srv := web.New(st, blobs, log, web.Options{Sealer: sealer, SecretKey: key, PublicURL: publicURL})
+	fmt.Printf("new instance on %s, set it up with %s/#setup=%s\n", publicURL, publicURL, demoSetupToken)
+	return func(ctx context.Context) error {
+		if err := srv.Serve(ctx, ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
+	}, closeAll, nil
 }
 
 // indexAttachments extracts the text of the archived attachments once, in

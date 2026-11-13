@@ -47,24 +47,31 @@ const (
 )
 
 // instanceStart is the start-up of serve or worker (#396, start-up
-// sequence) up to the point where the process opens its own store:
+// sequence) up to the point where the process opens its own store. Its
+// steps, numbered as in the plan:
 //
-//  2. open a short-lived store for migrations and take the migration lock,
-//     saying so if it has to wait;
-//  3. with MAIL_ARCHIVE_MIGRATE_ON_START=on: refuse a migration that failed
-//     before with the same file (the failure record), else run the
-//     sequence of `migrate` (applyMigrations);
-//  4. check the schema: refuse when migrations are pending or the database
-//     is newer than the binary;
-//  5. serve only: check the secret key (checkSecretKey);
-//  8. release the lock and close the store.
+//   - step 2: open a short-lived store for migrations and take the
+//     migration lock, saying so if it has to wait;
+//   - step 3: with MAIL_ARCHIVE_MIGRATE_ON_START=on, refuse a migration
+//     that failed before with the same file (the failure record), else run
+//     the sequence of `migrate` (applyMigrations);
+//   - step 4: check the schema: refuse when migrations are pending or the
+//     database is newer than the binary;
+//   - step 3b, after the schema check: encryption at setup, the underLock
+//     hook: on a new instance, turn encryption at rest on, or refuse
+//     without an archive key (encryptionAtSetup);
+//   - step 5, serve only: check the secret key (checkSecretKey);
+//   - step 7, serve only: record or revoke the setup token
+//     (recordSetupToken);
+//   - step 8: release the lock and close the store.
 //
-// Steps 3 to 5 run under the lock, so serve, worker and `migrate`
+// Steps 3 to 7 run under the lock, so serve, worker and `migrate`
 // started at the same time apply each migration once, and a process that
 // starts while another one migrates waits for it and then finds nothing
-// left. Step 1, listening with the starting handler, is serve's own
-// (newServeCmd); steps 6 and 7 come with #396 part 3; step 3b is the
-// underLock hook.
+// left; encryption at setup and the setup token, too, are done by one
+// process. Step 1, listening with the starting handler, is serve's own
+// (newServeCmd). Step 6, the start-up checks of encryption at rest, runs
+// when the process opens its store (archive.OpenAtRest).
 type instanceStart struct {
 	cfg  *config.Config
 	log  *slog.Logger
@@ -82,12 +89,20 @@ type instanceStart struct {
 	// secretKey runs step 5, the check of the secret key (checkSecretKey),
 	// after underLock: serve only. The worker seals and opens nothing.
 	secretKey bool
+	// setupToken runs step 7, the setup token (recordSetupToken), after
+	// step 5: serve only.
+	setupToken bool
 }
 
 // prepareInstance runs the start-up steps of serve and worker before they
-// open their store (instanceStart).
+// open their store (instanceStart). Both run encryption at setup (step
+// 3b); serve also checks the secret key and records the setup token.
 func prepareInstance(ctx context.Context, cfg *config.Config, log *slog.Logger, role string) error {
-	return instanceStart{cfg: cfg, log: log, role: role, secretKey: role == "serve"}.run(ctx)
+	serve := role == "serve"
+	return instanceStart{
+		cfg: cfg, log: log, role: role, underLock: encryptionAtSetup(cfg, log),
+		secretKey: serve, setupToken: serve,
+	}.run(ctx)
 }
 
 func (s instanceStart) run(ctx context.Context) error {
@@ -125,7 +140,12 @@ func (s instanceStart) run(ctx context.Context) error {
 		}
 	}
 	if s.secretKey {
-		return checkSecretKey(ctx, st, s.cfg, s.log)
+		if err := checkSecretKey(ctx, st, s.cfg, s.log); err != nil {
+			return err
+		}
+	}
+	if s.setupToken {
+		return recordSetupToken(ctx, st, s.cfg, s.log)
 	}
 	return nil
 }

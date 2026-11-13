@@ -7,7 +7,7 @@
 // its own job with its own demo.
 import { defineConfig, devices } from "@playwright/test";
 import { adminState } from "./e2e/global-setup";
-import { imapPort, origin, port } from "./e2e/demo";
+import { imapPort, origin, port, setupPort } from "./e2e/demo";
 
 const db = process.env.DEMO_DATABASE_URL;
 if (!db) throw new Error("set DEMO_DATABASE_URL to a PostgreSQL URL of a user with CREATEDB");
@@ -74,7 +74,7 @@ export default defineConfig({
     // built first. A fresh demo per run: the tests change its data.
     command:
       `pnpm build && cd .. && go build -o bin/demo ./tools/demo && ` +
-      `exec bin/demo -db "$DEMO_DATABASE_URL" -listen 127.0.0.1:${port} -imap-listen 127.0.0.1:${imapPort}`,
+      `exec bin/demo -db "$DEMO_DATABASE_URL" -listen 127.0.0.1:${port} -imap-listen 127.0.0.1:${imapPort} -setup-listen 127.0.0.1:${setupPort}`,
     url: `${origin}/healthz`,
     reuseExistingServer: false,
     timeout: 180_000,

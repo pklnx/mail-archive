@@ -407,6 +407,10 @@ type noSessionJSON struct {
 	// SetupRequired is true while no user exists; the UI then explains how
 	// to create the first admin.
 	SetupRequired bool `json:"setupRequired"`
+	// Setup is how the first admin is created (#396, part 3): "cli" (user
+	// add), "token" (the operator's setup link works), "expired" (its
+	// token is too old) or "complete".
+	Setup string `json:"setup"`
 	// PasskeyOrigin is where passkey logins work; empty when they are off.
 	PasskeyOrigin string `json:"passkeyOrigin,omitempty"`
 }
@@ -426,12 +430,14 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusOK, body)
 		return
 	}
-	n, err := s.store.CountUsers(r.Context())
+	setup, err := s.store.SetupState(r.Context(), s.currentTime())
 	if err != nil {
 		s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 		return
 	}
-	s.writeJSON(w, http.StatusUnauthorized, noSessionJSON{Error: "login required", SetupRequired: n == 0, PasskeyOrigin: s.publicOrigin})
+	s.writeJSON(w, http.StatusUnauthorized, noSessionJSON{
+		Error: "login required", SetupRequired: !setup.HasUsers, Setup: setup.State, PasskeyOrigin: s.publicOrigin,
+	})
 }
 
 type loginInput struct {

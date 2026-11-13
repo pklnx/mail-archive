@@ -46,6 +46,8 @@ func jobsEnv(t *testing.T) (*store.Store, *pgx.Conn) {
 	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
 	t.Setenv("MAIL_ARCHIVE_DATA_DIR", t.TempDir())
 	t.Setenv("MAIL_ARCHIVE_LOG_LEVEL", "error")
+	// A test instance: the worker starts it without encryption at setup.
+	t.Setenv(config.EnvEncryptionAtSetup, "off")
 	return st, conn
 }
 

@@ -1017,7 +1017,14 @@ it refuses to start (exit code 4) while migrations are pending or a newer
 version migrated the database. A migration that fails ends it with exit
 code 3. It then checks the secret key against the instance and refuses
 another one (exit code 4; see secret-key accept). See
-docs/guide/operations.md, "Upgrades".`,
+docs/guide/operations.md, "Upgrades".
+
+On a new instance (no user, no message yet) it first turns encryption at
+rest on with the archive key, and refuses to start without one (exit code
+4), unless ` + config.EnvEncryptionAtSetup + `=off (test instances only).
+With a setup token (` + config.EnvSetupTokenFile + ` or ` + config.EnvSetupToken + `; see
+setup token), the link ` + config.EnvPublicURL + `/#setup=<token> creates the first
+admin once.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := config.Load()
@@ -1028,6 +1035,9 @@ docs/guide/operations.md, "Upgrades".`,
 			// Before it listens or migrates (#396, step 0).
 			if cfg.SecretKey == nil {
 				return missingSecretKeyError()
+			}
+			if cfg.SetupToken, err = config.SetupTokenFromEnv(cfg); err != nil {
+				return err
 			}
 			ln, err := (&net.ListenConfig{}).Listen(cmd.Context(), "tcp", listen)
 			if err != nil {
@@ -1246,6 +1256,14 @@ encryption at rest: on, off, or an unfinished "encryption enable" or
 				return err
 			}
 			fmt.Println(line)
+			is, err := a.store.InstanceStatus(cmd.Context(), version)
+			if err != nil {
+				return err
+			}
+			is.EncryptionAtSetupOff = !a.cfg.EncryptionAtSetup
+			if line = setupStatus(is); line != "" {
+				fmt.Println(line)
+			}
 			return nil
 		},
 	}
