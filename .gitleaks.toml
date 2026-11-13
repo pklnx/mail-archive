@@ -14,3 +14,16 @@ minVersion = "v8.30.1"
 
 [extend]
 useDefault = true
+
+# A migration name, not a credential: in a list of migration names the entry
+# after "00043_metrics_key_scope" looks to generic-api-key like the value of a
+# key. Only this name, only in the two test files where it follows that entry
+# (migrations 00042 and 00043, internal/store/migrations).
+[[allowlists]]
+description = "migration name 00042_deletion_marks after 00043_metrics_key_scope in store tests"
+condition = "AND"
+paths = [
+  '''^internal/store/attest_test\.go$''',
+  '''^internal/store/storage_test\.go$''',
+]
+regexes = ['''^00042_deletion_marks$''']
