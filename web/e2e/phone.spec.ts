@@ -29,7 +29,7 @@ test("phone: the navigation and the folders, open a message, back to the list", 
   await closed();
   await menu.click();
   await expect(nav.getByRole("link", { name: "All mail" })).toBeFocused();
-  for (const name of ["Accounts", "Users", "Log", "Retention", "Profile"]) await expect(nav.getByRole("link", { name })).toBeInViewport();
+  for (const name of ["Accounts", "Users", "Log", "Retention", "Storage", "Profile"]) await expect(nav.getByRole("link", { name })).toBeInViewport();
   await page.keyboard.press("Escape");
   await closed();
   await expect(menu).toBeFocused();

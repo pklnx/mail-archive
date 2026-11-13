@@ -3,7 +3,7 @@ import { Button, InlineLoading, MenuItem, MenuItemDivider, TextInput } from "@ca
 import { accountsApi, ApiError, type Account, type AccountsResponse } from "./api";
 import { PurgeDialog, PurgeProgress } from "./AccountPurge";
 import { FillSection } from "./FillPanel";
-import { day, formatCount, relativeTime } from "./format";
+import { day, formatCount, relativeTime, storageSize } from "./format";
 import { t } from "./i18n";
 import {
   AccountForm,
@@ -31,6 +31,13 @@ import { settingsText } from "./settingsText";
 export interface AccountDetailProps {
   account: Account;
   data: AccountsResponse;
+  /**
+   * The account's size at the last count (#397, part 4): its unique
+   * messages' bytes, shared with other accounts that hold them too; null
+   * before the first count. counting is false while the usage is not loaded.
+   */
+  size?: { messages: number; bytes: number } | null;
+  counting?: boolean;
   admin: boolean;
   /** The page's h1: the focus target of a page change and after a purge is confirmed. */
   heading: RefObject<HTMLHeadingElement | null>;
@@ -162,6 +169,14 @@ export function AccountDetail(p: AccountDetailProps) {
         ]
       : []),
     { label: s.foldersArchived, value: <span className="app-tabular">{formatCount(a.folders.length)}</span> },
+    ...(p.counting
+      ? [
+          {
+            label: t.accountSize,
+            value: p.size ? <span className="app-tabular">{storageSize(p.size.bytes)}</span> : <span className="app-text-secondary">{t.accountSizeNotCounted}</span>,
+          },
+        ]
+      : []),
     ...(a.removed ? [] : [last]),
   ];
 

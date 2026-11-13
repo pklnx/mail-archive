@@ -4,7 +4,7 @@
 // German texts of Carbon's components.
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Account, AccountsResponse, PurgePreview } from "./api";
+import type { Account, AccountsResponse, PurgePreview, Usage } from "./api";
 import { AccountsPage } from "./AccountsPage";
 import { PostfixPanel } from "./accountParts";
 import { PurgeReview } from "./AccountPurge";
@@ -974,5 +974,23 @@ describe("German", () => {
     } finally {
       applySettings({ language: "en", locale: "en" });
     }
+  });
+});
+
+describe("an account's size (#397, part 4)", () => {
+  const page = (usage: Usage | null) =>
+    render(<AccountsPage accounts={{ data: data([account("work")]), error: "", reload: vi.fn() }} usage={usage} admin={false} renamed={vi.fn()} showGone={vi.fn()} showAccount={vi.fn()} />);
+  const tile = (label: string) => screen.getByText(label, { selector: "dt" }).closest(".app-summary__tile")!;
+
+  it("shows the size of the last count, or that it was not counted yet, and no tile before the usage loads", () => {
+    window.history.replaceState(null, "", "/?view=accounts&id=work");
+    const { unmount } = page({ state: "ok", accounts: [{ name: "work", messages: 12, bytes: 3 * 1024 ** 2 }] });
+    expect(tile(t.accountSize).textContent).toContain("3.0 MiB");
+    unmount();
+    const second = page({ state: "ok", accounts: [{ name: "work", messages: null, bytes: null }] });
+    expect(tile(t.accountSize).textContent).toContain(t.accountSizeNotCounted);
+    second.unmount();
+    page(null);
+    expect(screen.queryByText(t.accountSize, { selector: "dt" })).toBeNull();
   });
 });

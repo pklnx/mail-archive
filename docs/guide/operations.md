@@ -1112,7 +1112,7 @@ each. The database and the extracted attachment texts are shown by
 | Limit | Set with | Applies to |
 |---|---|---|
 | Instance quota | `MAIL_ARCHIVE_STORAGE_QUOTA` ([Configuration](../reference/configuration)) | the exact total of the instance, and so every group |
-| Group quota | `./ma group set-quota NAME SIZE` (`none` removes it; [CLI](../reference/cli#groups)) | the group's figure; never above the instance quota |
+| Group quota | **Edit quota** on the [Storage page](./web-ui#storage), or `./ma group set-quota NAME SIZE` (`none` removes it; [CLI](../reference/cli#groups)) | the group's figure; never above the instance quota |
 | Disk reserve | `MAIL_ARCHIVE_MIN_FREE_DISK` (default `1GiB`, `0`: off) | the free space of the file system of `MAIL_ARCHIVE_DATA_DIR`, also without a quota |
 
 Group quotas may add up to more than the instance quota; `./ma usage` shows
@@ -1124,7 +1124,10 @@ applies first.
 
 ### States
 
-Every limit has a state. `./ma usage` and `./ma group list` show them.
+Every limit has a state. The [Storage page](./web-ui#storage), `./ma usage`
+and `./ma group list` show them; admins get a banner from `warn` on, a
+group's members one from `full` on that says only that new mail is not
+archived.
 
 | State | From | What happens |
 |---|---|---|
@@ -1173,9 +1176,10 @@ nothing is dropped.
 Exit code 75 (`EX_TEMPFAIL`) lets a cron wrapper tell a pause from a
 failure.
 
-A raised quota (`./ma group set-quota`, or a larger
-`MAIL_ARCHIVE_STORAGE_QUOTA` after a restart) or freed space takes effect
-within 10 seconds in every process; paused syncs resume at their next
+A raised quota (**Edit quota** on the Storage page, `./ma group set-quota`,
+or a larger `MAIL_ARCHIVE_STORAGE_QUOTA` after a restart) or freed space
+takes effect within 10 seconds in every process (a quota set on the Storage
+page at once in the web server); paused syncs resume at their next
 scheduled run, a manual sync at once.
 
 ### How exact the limits are

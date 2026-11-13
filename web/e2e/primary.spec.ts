@@ -206,6 +206,28 @@ const views: View[] = [
   },
 
   {
+    // Count again is tertiary, Edit quota ghost (#397, part 4).
+    name: "Storage",
+    open: async (page) => {
+      const main = await mainPage(page, "/?view=storage", "Storage");
+      await expect(main.getByRole("table", { name: "Customer groups" })).toBeVisible();
+      return main;
+    },
+  },
+  {
+    name: "Storage, Edit quota dialog",
+    exactly: "Save quota",
+    open: async (page) => {
+      const main = await mainPage(page, "/?view=storage", "Storage");
+      await main.getByRole("button", { name: "Actions for group Lindqvist Design" }).click();
+      await page.getByRole("menuitem", { name: "Edit quota" }).click();
+      const dialog = page.getByRole("dialog", { name: "Storage quota of “Lindqvist Design”" });
+      await expect(dialog.getByRole("textbox", { name: "Quota" })).toBeVisible();
+      return dialog;
+    },
+  },
+
+  {
     name: "Users",
     open: async (page) => {
       const main = await mainPage(page, "/?view=users", "Users");

@@ -1,8 +1,8 @@
 // The requests of the Users page that change users and customer groups.
-// Only UsersPage imports this module, so it is part of the lazy Users chunk
-// and not of the initial bundle (#470 part 2); api.ts keeps usersApi.list,
-// which the Log and Retention pages use too.
-import { getJSON, send, type GeneratedPassword } from "./api";
+// Only UsersPage and StoragePage (group quotas, #397 part 4) import this
+// module, so it stays out of the initial bundle (#470 part 2); api.ts keeps
+// usersApi.list, which the Log and Retention pages use too.
+import { getJSON, send, type GeneratedPassword, type StorageState } from "./api";
 
 /** A customer group (#470), with its users and their accounts (removed ones too). */
 export interface CustomerGroup {
@@ -11,6 +11,10 @@ export interface CustomerGroup {
   users: number;
   accounts: number;
   createdAt: string;
+  /** The storage quota in message bytes, null without one; the usage and the quota state (#397). */
+  quotaBytes: number | null;
+  bytes: number;
+  state: StorageState;
 }
 
 /** A grant that ended with its auditor's removal (#393): it stays in its owner's list as history. */
@@ -53,5 +57,7 @@ export const groupsApi = {
   list: async (signal?: AbortSignal) => (await getJSON<{ groups: CustomerGroup[] }>("/api/groups", signal)).groups,
   create: async (name: string) => (await send<CustomerGroup>("POST", "/api/groups", { name }))!,
   rename: (id: number, name: string) => send("PATCH", groupPath(id), { name }),
+  /** Sets the group's storage quota in bytes; null removes it (#397). */
+  setQuota: (id: number, quotaBytes: number | null) => send("PATCH", groupPath(id), { quotaBytes }),
   remove: (id: number) => send("DELETE", groupPath(id)),
 };
