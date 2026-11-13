@@ -92,6 +92,16 @@ func (q *Queries) DeleteSeenGroupDeltas(ctx context.Context) (int64, error) {
 	return result.RowsAffected(), nil
 }
 
+const ensureGroupStorageState = `-- name: EnsureGroupStorageState :exec
+INSERT INTO storage_states (group_id) VALUES ($1) ON CONFLICT (group_id) DO NOTHING
+`
+
+// A group's state row exists from its first transition on.
+func (q *Queries) EnsureGroupStorageState(ctx context.Context, groupID *int64) error {
+	_, err := q.db.Exec(ctx, ensureGroupStorageState, groupID)
+	return err
+}
+
 const foldGroupDeltas = `-- name: FoldGroupDeltas :execrows
 WITH d AS (
     DELETE FROM storage_group_deltas gd
@@ -133,6 +143,30 @@ func (q *Queries) FoldStorageCounters(ctx context.Context) (int64, error) {
 	var folded int64
 	err := row.Scan(&folded)
 	return folded, err
+}
+
+const groupGateFigure = `-- name: GroupGateFigure :one
+SELECT g.quota_bytes,
+       (coalesce(u.bytes, 0) + coalesce(u.added_bytes, 0)
+        + coalesce((SELECT sum(gd.bytes) FROM storage_group_deltas gd WHERE gd.group_id = g.id), 0))::bigint AS bytes,
+       (SELECT s.computed_at IS NOT NULL FROM storage_snapshot s)::boolean AS counted
+FROM customer_groups g
+LEFT JOIN storage_usage_groups u ON u.group_id = g.id
+WHERE g.id = $1
+`
+
+type GroupGateFigureRow struct {
+	QuotaBytes *int64
+	Bytes      int64
+	Counted    bool
+}
+
+// One group's figure and quota, read again under its state's row lock.
+func (q *Queries) GroupGateFigure(ctx context.Context, groupID int64) (GroupGateFigureRow, error) {
+	row := q.db.QueryRow(ctx, groupGateFigure, groupID)
+	var i GroupGateFigureRow
+	err := row.Scan(&i.QuotaBytes, &i.Bytes, &i.Counted)
+	return i, err
 }
 
 const groupHeldMessages = `-- name: GroupHeldMessages :many
@@ -242,6 +276,38 @@ func (q *Queries) GroupStorageUsage(ctx context.Context) ([]GroupStorageUsageRow
 	return items, nil
 }
 
+const groupsAboveQuota = `-- name: GroupsAboveQuota :many
+SELECT id, name, quota_bytes::bigint AS quota_bytes FROM customer_groups
+WHERE quota_bytes > $1::bigint ORDER BY lower(name), id
+`
+
+type GroupsAboveQuotaRow struct {
+	ID         int64
+	Name       string
+	QuotaBytes int64
+}
+
+// The groups whose quota is above the given instance quota: start-up warns.
+func (q *Queries) GroupsAboveQuota(ctx context.Context, instanceQuota int64) ([]GroupsAboveQuotaRow, error) {
+	rows, err := q.db.Query(ctx, groupsAboveQuota, instanceQuota)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GroupsAboveQuotaRow
+	for rows.Next() {
+		var i GroupsAboveQuotaRow
+		if err := rows.Scan(&i.ID, &i.Name, &i.QuotaBytes); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const insertGroupDelta = `-- name: InsertGroupDelta :exec
 INSERT INTO storage_group_deltas (group_id, messages, bytes) VALUES ($1, $2, $3)
 `
@@ -308,6 +374,22 @@ func (q *Queries) LockFolderAccountGroup(ctx context.Context, folderID int64) (L
 	return i, err
 }
 
+const lockGroupQuota = `-- name: LockGroupQuota :one
+SELECT name, quota_bytes FROM customer_groups WHERE id = $1 FOR UPDATE
+`
+
+type LockGroupQuotaRow struct {
+	Name       string
+	QuotaBytes *int64
+}
+
+func (q *Queries) LockGroupQuota(ctx context.Context, id int64) (LockGroupQuotaRow, error) {
+	row := q.db.QueryRow(ctx, lockGroupQuota, id)
+	var i LockGroupQuotaRow
+	err := row.Scan(&i.Name, &i.QuotaBytes)
+	return i, err
+}
+
 const lockOwnerGroup = `-- name: LockOwnerGroup :one
 SELECT group_id FROM users WHERE id = $1 FOR KEY SHARE
 `
@@ -320,6 +402,25 @@ func (q *Queries) LockOwnerGroup(ctx context.Context, id int64) (int64, error) {
 	var group_id int64
 	err := row.Scan(&group_id)
 	return group_id, err
+}
+
+const lockStorageState = `-- name: LockStorageState :one
+SELECT state, event_seq FROM storage_states
+WHERE group_id IS NOT DISTINCT FROM $1::bigint FOR UPDATE
+`
+
+type LockStorageStateRow struct {
+	State    string
+	EventSeq int64
+}
+
+// The row lock under which a transition reads the scope's figures again;
+// group_id NULL is the instance.
+func (q *Queries) LockStorageState(ctx context.Context, groupID *int64) (LockStorageStateRow, error) {
+	row := q.db.QueryRow(ctx, lockStorageState, groupID)
+	var i LockStorageStateRow
+	err := row.Scan(&i.State, &i.EventSeq)
+	return i, err
 }
 
 const lockStorageXact = `-- name: LockStorageXact :exec
@@ -407,6 +508,43 @@ func (q *Queries) RefreshUsage(ctx context.Context) (RefreshUsageRow, error) {
 	return i, err
 }
 
+const setGroupQuota = `-- name: SetGroupQuota :exec
+UPDATE customer_groups SET quota_bytes = $1 WHERE id = $2
+`
+
+type SetGroupQuotaParams struct {
+	QuotaBytes *int64
+	ID         int64
+}
+
+func (q *Queries) SetGroupQuota(ctx context.Context, arg SetGroupQuotaParams) error {
+	_, err := q.db.Exec(ctx, setGroupQuota, arg.QuotaBytes, arg.ID)
+	return err
+}
+
+const setStorageState = `-- name: SetStorageState :one
+UPDATE storage_states SET state = $1, state_since = now(), event_seq = event_seq + 1
+WHERE group_id IS NOT DISTINCT FROM $2::bigint
+RETURNING event_seq, state_since
+`
+
+type SetStorageStateParams struct {
+	State   string
+	GroupID *int64
+}
+
+type SetStorageStateRow struct {
+	EventSeq   int64
+	StateSince time.Time
+}
+
+func (q *Queries) SetStorageState(ctx context.Context, arg SetStorageStateParams) (SetStorageStateRow, error) {
+	row := q.db.QueryRow(ctx, setStorageState, arg.State, arg.GroupID)
+	var i SetStorageStateRow
+	err := row.Scan(&i.EventSeq, &i.StateSince)
+	return i, err
+}
+
 const storageCounterCheck = `-- name: StorageCounterCheck :one
 SELECT (b.messages + coalesce((SELECT sum(d.messages) FROM storage_counter_deltas d), 0))::bigint AS counted_messages,
        (b.bytes + coalesce((SELECT sum(d.bytes) FROM storage_counter_deltas d), 0))::bigint AS counted_bytes,
@@ -434,6 +572,72 @@ func (q *Queries) StorageCounterCheck(ctx context.Context) (StorageCounterCheckR
 		&i.ExactBytes,
 	)
 	return i, err
+}
+
+const storageGateFigures = `-- name: StorageGateFigures :many
+
+WITH snap AS (
+    SELECT computed_at IS NOT NULL AS counted FROM storage_snapshot
+), deltas AS (
+    SELECT gd.group_id, sum(gd.bytes) AS bytes FROM storage_group_deltas gd GROUP BY gd.group_id
+)
+SELECT CAST(NULL AS bigint) AS group_id, CAST(NULL AS bigint) AS quota_bytes,
+       (b.bytes + coalesce((SELECT sum(d.bytes) FROM storage_counter_deltas d), 0))::bigint AS bytes,
+       st.state, st.event_seq, snap.counted::boolean AS counted
+FROM storage_counter_base b
+CROSS JOIN snap
+JOIN storage_states st ON st.group_id IS NULL
+UNION ALL
+SELECT g.id, g.quota_bytes,
+       (coalesce(u.bytes, 0) + coalesce(u.added_bytes, 0) + coalesce(d.bytes, 0))::bigint,
+       coalesce(st.state, 'ok')::text, coalesce(st.event_seq, 0)::bigint, snap.counted::boolean
+FROM customer_groups g
+CROSS JOIN snap
+LEFT JOIN storage_usage_groups u ON u.group_id = g.id
+LEFT JOIN deltas d ON d.group_id = g.id
+LEFT JOIN storage_states st ON st.group_id = g.id
+`
+
+type StorageGateFiguresRow struct {
+	GroupID    *int64
+	QuotaBytes *int64
+	Bytes      int64
+	State      string
+	EventSeq   int64
+	Counted    bool
+}
+
+// Quota gate (#397, part 2; internal/quota).
+// What the gate of every process reads every 10 seconds, in one statement:
+// the instance (group_id NULL) with its exact bytes, then each group with
+// its figure (as GroupStorageUsage: an upper bound between snapshots) and
+// quota, each with its persisted state, and whether a snapshot was ever
+// taken (before it, group figures do not count).
+func (q *Queries) StorageGateFigures(ctx context.Context) ([]StorageGateFiguresRow, error) {
+	rows, err := q.db.Query(ctx, storageGateFigures)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []StorageGateFiguresRow
+	for rows.Next() {
+		var i StorageGateFiguresRow
+		if err := rows.Scan(
+			&i.GroupID,
+			&i.QuotaBytes,
+			&i.Bytes,
+			&i.State,
+			&i.EventSeq,
+			&i.Counted,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const storageSnapshot = `-- name: StorageSnapshot :one

@@ -14,6 +14,7 @@ import (
 	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/crypto"
 	"github.com/pklnx/mail-archive/internal/imapsync"
+	"github.com/pklnx/mail-archive/internal/quota"
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
@@ -41,6 +42,10 @@ type Syncer struct {
 	MaxRunTime time.Duration
 	// Dial is used to connect to IMAP servers. Defaults to imapsync.Dial.
 	Dial func(context.Context, imapsync.Config) (*imapsync.Conn, error)
+	// Storage is the storage gate (#397); nil stores without a limit. A
+	// sync of an account whose group or the instance is full does not
+	// start, and a running one stops before the next message.
+	Storage *quota.Gate
 
 	// limitRun replaces the run's time limit; a test seam.
 	limitRun func(context.Context) (context.Context, context.CancelFunc)
@@ -72,8 +77,14 @@ type AccountResult struct {
 	// Resume reports a run that reached its time limit after it committed
 	// messages: the rest follows in another run.
 	Resume bool
-	Err    error
+	// Err is a *quota.FullError (errors.Is quota.ErrStorageFull) when the
+	// storage gate paused the sync: at its start (no run is recorded) or
+	// before a message (the run is partial; IsPaused).
+	Err error
 }
+
+// IsPaused reports whether the storage gate paused the sync.
+func (r AccountResult) IsPaused() bool { return errors.Is(r.Err, quota.ErrStorageFull) }
 
 // SyncAll syncs every enabled account (or only the named ones, even if
 // disabled), of all users or, with owner set, of one user. Removed,
@@ -152,6 +163,12 @@ func (s *Syncer) SyncAccountWith(ctx context.Context, a *store.Account, opts Syn
 		return res
 	}
 	a = fresh
+	// Paused while its group or the instance is full: no run, no change
+	// of its health; the next run continues from the last UID.
+	if err := s.Storage.Admit(a.GroupID); err != nil {
+		res.Err = err
+		return res
+	}
 
 	run, err := s.Store.StartSyncRun(ctx, a.ID)
 	if err != nil {
@@ -170,6 +187,8 @@ func (s *Syncer) SyncAccountWith(ctx context.Context, a *store.Account, opts Syn
 		committed, okFolders int
 		// stuck: a folder waits behind a message over the size cap.
 		stuck bool
+		// paused: the storage gate stopped the run (#397).
+		paused bool
 	)
 	// Folders whose first reconcile runs now: what they find gone was
 	// deleted before, not in this run, and never alerts.
@@ -195,14 +214,23 @@ func (s *Syncer) SyncAccountWith(ctx context.Context, a *store.Account, opts Syn
 		run.MessagesFetched, run.MessagesNew = res.Fetched, res.New
 		run.Reconcile = res.Reconcile
 		// The stored text is shown in the web UI and sent in alerts: an
-		// IMAP error's own text goes only to the log.
-		if res.Err != nil {
+		// IMAP error's own text goes only to the log. A pause names no
+		// limit: the account's users learn only that storage is full.
+		switch {
+		case paused && len(folderErrs) > 0:
+			run.Error = DescribeError(errors.Join(folderErrs...)) + "\n" + quota.PausedText
+		case paused:
+			run.Error = quota.PausedText
+		case res.Err != nil:
 			run.Error = DescribeError(res.Err)
 		}
 		// A run cancelled by a shutdown says nothing about the account. A
 		// folder stuck behind a large message is a failure: the account is
-		// not fully archived, and the alert says so.
+		// not fully archived, and the alert says so. A paused run leaves
+		// the streak as it is.
 		switch {
+		case paused:
+			run.Health = store.HealthUnchanged
 		case stuck && status == "partial":
 			run.Health = store.HealthFailure
 		case status == "ok" || status == "partial":
@@ -295,6 +323,14 @@ func (s *Syncer) SyncAccountWith(ctx context.Context, a *store.Account, opts Syn
 		res.Fetched += fetched
 		res.New += added
 		res.Skipped += skipped
+		if errors.Is(err, quota.ErrStorageFull) {
+			// What came before is saved; the run ends here, before the
+			// next folder, and the next one continues from the last UID.
+			flog.Info("sync paused: storage limit reached", "fetched", res.Fetched, "new", res.New)
+			paused = true
+			res.Err = errors.Join(append(folderErrs, err)...)
+			return finish("partial")
+		}
 		// Only a folder that synced cleanly is reconciled: its locations are
 		// complete for the UIDVALIDITY that EXAMINE reported.
 		if err == nil && s.reconcileDue(folder.LastReconciledAt, opts, now) {
@@ -429,9 +465,21 @@ func (s *Syncer) syncFolder(ctx context.Context, conn *imapsync.Conn, a *store.A
 
 	var w *folderWriter
 	w = newFolderWriter(s.Store, folder.ID, s.BatchSize, func(int) { progress(fetched, w.added) })
+	w.pending = s.Storage.Pending(a.GroupID)
+	defer w.pending.Settle() // files of messages that were not saved
 
 	sink := func(r io.Reader) (storedBody, error) {
+		// Before each file: a full group or instance writes no more.
+		if err := w.admit(ctx, s.Storage, a.GroupID); err != nil {
+			if errors.Is(err, quota.ErrStorageFull) {
+				return storedBody{}, imapsync.Stop(err)
+			}
+			return storedBody{}, err
+		}
 		blob, created, err := s.Blobs.Put(r)
+		if err == nil {
+			w.pending.Add(blob.Size)
+		}
 		return storedBody{blob, created}, err
 	}
 	err = imapsync.FetchAfter(conn, folder.LastUID, sink, func(m imapsync.Message[storedBody]) error {
@@ -448,9 +496,16 @@ func (s *Syncer) syncFolder(ctx context.Context, conn *imapsync.Conn, a *store.A
 			Flags: storedFlags(m.Flags), InternalDate: m.InternalDate,
 		})
 	})
-	if lim, ok := oversized(err); ok {
+	switch lim, ok := oversized(err); {
+	case ok:
 		err = s.holdBefore(ctx, w, folder.ID, lim, err, log)
-	} else if err == nil {
+	case errors.Is(err, quota.ErrStorageFull):
+		// Paused by the storage gate: the queued messages are saved as at
+		// the end of a batch, so the last UID covers every stored message.
+		if ferr := w.flush(ctx); ferr != nil {
+			err = ferr
+		}
+	case err == nil:
 		err = w.flush(ctx)
 	}
 	if w.skipped > 0 {

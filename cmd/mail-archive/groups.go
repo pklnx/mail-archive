@@ -27,7 +27,7 @@ own group and never see names of other groups' users.
 An instance starts with one group, "Default". While it is the only one,
 nothing changes for anyone. Move users with: user set-group NAME GROUP`,
 	}
-	cmd.AddCommand(newGroupAddCmd(), newGroupListCmd(), newGroupRenameCmd(), newGroupRemoveCmd())
+	cmd.AddCommand(newGroupAddCmd(), newGroupListCmd(), newGroupRenameCmd(), newGroupRemoveCmd(), newGroupSetQuotaCmd())
 	return cmd
 }
 
@@ -62,7 +62,11 @@ func newGroupListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
 		Short: "List customer groups",
-		Args:  cobra.NoArgs,
+		Long: `List customer groups with their users, accounts, storage quota (QUOTA, "-"
+without one), storage used (USED: message bytes deduplicated within the
+group, as in usage; "-" before the first snapshot) and quota state (STATE:
+ok, warn, full or overflow).`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			a, err := openApp(cmd.Context())
 			if err != nil {
@@ -73,10 +77,26 @@ func newGroupListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			usage, err := groupStorage(cmd.Context(), a)
+			if err != nil {
+				return err
+			}
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "NAME\tUSERS\tACCOUNTS\tCREATED")
+			fmt.Fprintln(w, "NAME\tUSERS\tACCOUNTS\tQUOTA\tUSED\tSTATE\tCREATED")
 			for _, g := range groups {
-				fmt.Fprintf(w, "%s\t%d\t%d\t%s\n", g.Name, g.Users, g.Accounts, g.CreatedAt.Local().Format(time.DateOnly))
+				u := usage[g.ID]
+				quota, used, state := "-", "-", u.State
+				if u.QuotaBytes != nil {
+					quota = humanBytes(*u.QuotaBytes)
+				}
+				if u.SnapshotAt != nil {
+					used = humanBytes(u.Bytes)
+				}
+				if state == "" {
+					state = "ok"
+				}
+				fmt.Fprintf(w, "%s\t%d\t%d\t%s\t%s\t%s\t%s\n", g.Name, g.Users, g.Accounts, quota, used, state,
+					g.CreatedAt.Local().Format(time.DateOnly))
 			}
 			return w.Flush()
 		},

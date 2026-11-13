@@ -213,3 +213,68 @@ FROM accounts a
 LEFT JOIN users o ON o.id = a.owner_id
 LEFT JOIN storage_usage_accounts u ON u.account_id = a.id
 ORDER BY o.name NULLS FIRST, a.name, a.id;
+
+-- Quota gate (#397, part 2; internal/quota).
+
+-- name: StorageGateFigures :many
+-- What the gate of every process reads every 10 seconds, in one statement:
+-- the instance (group_id NULL) with its exact bytes, then each group with
+-- its figure (as GroupStorageUsage: an upper bound between snapshots) and
+-- quota, each with its persisted state, and whether a snapshot was ever
+-- taken (before it, group figures do not count).
+WITH snap AS (
+    SELECT computed_at IS NOT NULL AS counted FROM storage_snapshot
+), deltas AS (
+    SELECT gd.group_id, sum(gd.bytes) AS bytes FROM storage_group_deltas gd GROUP BY gd.group_id
+)
+SELECT CAST(NULL AS bigint) AS group_id, CAST(NULL AS bigint) AS quota_bytes,
+       (b.bytes + coalesce((SELECT sum(d.bytes) FROM storage_counter_deltas d), 0))::bigint AS bytes,
+       st.state, st.event_seq, snap.counted::boolean AS counted
+FROM storage_counter_base b
+CROSS JOIN snap
+JOIN storage_states st ON st.group_id IS NULL
+UNION ALL
+SELECT g.id, g.quota_bytes,
+       (coalesce(u.bytes, 0) + coalesce(u.added_bytes, 0) + coalesce(d.bytes, 0))::bigint,
+       coalesce(st.state, 'ok')::text, coalesce(st.event_seq, 0)::bigint, snap.counted::boolean
+FROM customer_groups g
+CROSS JOIN snap
+LEFT JOIN storage_usage_groups u ON u.group_id = g.id
+LEFT JOIN deltas d ON d.group_id = g.id
+LEFT JOIN storage_states st ON st.group_id = g.id;
+
+-- name: GroupGateFigure :one
+-- One group's figure and quota, read again under its state's row lock.
+SELECT g.quota_bytes,
+       (coalesce(u.bytes, 0) + coalesce(u.added_bytes, 0)
+        + coalesce((SELECT sum(gd.bytes) FROM storage_group_deltas gd WHERE gd.group_id = g.id), 0))::bigint AS bytes,
+       (SELECT s.computed_at IS NOT NULL FROM storage_snapshot s)::boolean AS counted
+FROM customer_groups g
+LEFT JOIN storage_usage_groups u ON u.group_id = g.id
+WHERE g.id = @group_id;
+
+-- name: EnsureGroupStorageState :exec
+-- A group's state row exists from its first transition on.
+INSERT INTO storage_states (group_id) VALUES (@group_id) ON CONFLICT (group_id) DO NOTHING;
+
+-- name: LockStorageState :one
+-- The row lock under which a transition reads the scope's figures again;
+-- group_id NULL is the instance.
+SELECT state, event_seq FROM storage_states
+WHERE group_id IS NOT DISTINCT FROM sqlc.narg(group_id)::bigint FOR UPDATE;
+
+-- name: SetStorageState :one
+UPDATE storage_states SET state = @state, state_since = now(), event_seq = event_seq + 1
+WHERE group_id IS NOT DISTINCT FROM sqlc.narg(group_id)::bigint
+RETURNING event_seq, state_since;
+
+-- name: LockGroupQuota :one
+SELECT name, quota_bytes FROM customer_groups WHERE id = @id FOR UPDATE;
+
+-- name: SetGroupQuota :exec
+UPDATE customer_groups SET quota_bytes = sqlc.narg(quota_bytes) WHERE id = @id;
+
+-- name: GroupsAboveQuota :many
+-- The groups whose quota is above the given instance quota: start-up warns.
+SELECT id, name, quota_bytes::bigint AS quota_bytes FROM customer_groups
+WHERE quota_bytes > @instance_quota::bigint ORDER BY lower(name), id;

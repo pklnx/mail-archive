@@ -32,6 +32,10 @@ are named on the guide pages: the default sync interval
 | `MAIL_ARCHIVE_RECONCILE_MAX_MESSAGES` | `2000000` | Folders with more messages are not [reconciled](../guide/syncing#reconcile); their sync ends `partial` with an error that names this setting. `10000` to `20000000`; each 100,000 more cost about 9 MiB. |
 | `MAIL_ARCHIVE_IMAP_MAX_FOLDERS` | `10000` | How many folders one IMAP account may list. More fail the whole sync, fill or login check, with an error that names this setting. `100` to `200000`; each 1,000 more cost up to about 13 MiB. A login check may read about 1.1 KiB per folder of this limit, at least 16 MiB. |
 | `MAIL_ARCHIVE_IMAP_IDLE_TIMEOUT` | `2m` | How long an IMAP server may send nothing while a command is in flight before the connection is closed (the folder fails; the next one gets a new connection). From `30s` to `30m`. |
+| `MAIL_ARCHIVE_STORAGE_QUOTA` | (none) | The instance's storage quota in message bytes after deduplication (each unique message once), like `500GiB` or `2TiB` (KiB, MiB, GiB, TiB: powers of 1024; KB, MB, GB, TB: powers of 1000); empty or `0`: none. It is the upper bound of every [group quota](./cli#groups). See [Storage and quotas](../guide/operations#storage-and-quotas). |
+| `MAIL_ARCHIVE_STORAGE_WARN_PERCENT` | `80` | From this share of a quota (the instance's and every group's) its scope is in `warn`. `1` to `99`. |
+| `MAIL_ARCHIVE_STORAGE_SMTP_OVERFLOW_PERCENT` | `10` | At 100 % of a quota syncs, fills and imports pause; the SMTP server still accepts journal mail up to 100 % plus this share, then defers it with `452 4.3.1`. `0` to `100`. |
+| `MAIL_ARCHIVE_MIN_FREE_DISK` | `1GiB` | While the file system of `MAIL_ARCHIVE_DATA_DIR` has less free space, nothing new is stored (`disk_low`: syncs, fills and imports pause, SMTP defers), also without a quota. `0` turns it off. |
 | `MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL` | (none: no alerts) | Where alerts about failing syncs are posted. `http://` or `https://`, no `#fragment`. A secret: it often contains a topic or token, and is never logged. See [Monitoring and alerts](../guide/operations#monitoring-and-alerts). |
 | `MAIL_ARCHIVE_NOTIFY_WEBHOOK_FORMAT` | `json` | `json` (Gotify, Slack, Mattermost, Discord and generic receivers) or `ntfy` (plain text with `Title`, `Priority` and `Tags` headers). |
 | `MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION` | (none) | Sent as the `Authorization` header, like `Bearer tk_...` for ntfy or Gotify, so the token need not be in the URL. A secret, never logged. |
@@ -121,6 +125,12 @@ Compose passes the four IMAP limits (`MAIL_ARCHIVE_FILL_MAX_FOLDER_MESSAGES`,
 `MAIL_ARCHIVE_RECONCILE_MAX_MESSAGES`, `MAIL_ARCHIVE_IMAP_MAX_FOLDERS`,
 `MAIL_ARCHIVE_IMAP_IDLE_TIMEOUT`) to both as well, so `./ma sync`, `./ma fill`
 and `./ma account add` use the same limits as the web server.
+
+Compose passes the four storage settings (`MAIL_ARCHIVE_STORAGE_QUOTA`,
+`MAIL_ARCHIVE_STORAGE_WARN_PERCENT`, `MAIL_ARCHIVE_STORAGE_SMTP_OVERFLOW_PERCENT`,
+`MAIL_ARCHIVE_MIN_FREE_DISK`) to both as well, so `./ma sync`, `./ma import`
+and `./ma fill` pause at the same limits as the web server, and
+`./ma group set-quota` checks against the same instance quota.
 
 Compose passes the two `MAIL_ARCHIVE_ATTEST_*` variables to both as well, so
 `./ma attest` uses the same key as the web server, and the two

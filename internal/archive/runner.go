@@ -33,8 +33,12 @@ type Runner struct {
 	// loaded. A hook that blocks must also return when ctx is done.
 	BeforeSync func(ctx context.Context, id int64)
 
-	mu     sync.Mutex
-	queue  []int64
+	mu    sync.Mutex
+	queue []int64
+	// paused are the accounts the schedule skipped at its last check
+	// because the storage gate pauses them (#397), so that each pause and
+	// resume is logged once.
+	paused map[int64]bool
 	queued map[int64]SyncOptions
 	// claimed holds the accounts Run has taken from the queue and whose
 	// sync has not returned yet: it waits for or holds the account's sync
@@ -175,10 +179,53 @@ func (r *Runner) enqueueDue(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if due := dueAccounts(accounts, runs, r.Schedule, r.now()); len(due) > 0 {
+	due := dueAccounts(accounts, runs, r.Schedule, r.now())
+	if due = r.skipPaused(accounts, due); len(due) > 0 {
 		r.Enqueue(due...)
 	}
 	return nil
+}
+
+// skipPaused leaves out the due accounts the storage gate pauses (their
+// group or the instance is full) and logs the accounts whose pause began
+// or ended since the last check.
+func (r *Runner) skipPaused(accounts []*store.Account, due []int64) []int64 {
+	gate := r.Syncer.Storage
+	if gate == nil {
+		return due
+	}
+	byID := make(map[int64]*store.Account, len(accounts))
+	for _, a := range accounts {
+		byID[a.ID] = a
+	}
+	log := r.Syncer.logger()
+	paused := map[int64]bool{}
+	var out []int64
+	for _, id := range due {
+		a := byID[id]
+		if gate.Admit(a.GroupID) != nil {
+			paused[id] = true
+			continue
+		}
+		out = append(out, id)
+	}
+	r.mu.Lock()
+	before := r.paused
+	r.paused = paused
+	r.mu.Unlock()
+	for id := range paused {
+		if !before[id] {
+			log.Info("scheduled syncs paused: storage limit reached", "account", byID[id].Name, "account_id", id)
+		}
+	}
+	for id := range before {
+		if !paused[id] {
+			if a, ok := byID[id]; ok && slices.Contains(out, id) {
+				log.Info("scheduled syncs resumed", "account", a.Name, "account_id", id)
+			}
+		}
+	}
+	return out
 }
 
 // dueAccounts returns the enabled IMAP accounts whose last run of any kind
@@ -210,6 +257,9 @@ func (r *Runner) syncOne(ctx context.Context, id int64, opts SyncOptions) {
 	switch {
 	case errors.Is(res.Err, ErrSyncRunning), errors.Is(res.Err, ErrAccountRemoved), errors.Is(res.Err, ErrNoServer):
 		log.Debug("sync skipped", "account", a.Name, "reason", res.Err)
+	case res.IsPaused():
+		// Logged by the sync (a run that paused) or by the schedule.
+		log.Debug("sync paused: storage limit reached", "account", a.Name)
 	case res.Resume:
 		// At its time limit with progress: the rest follows after the
 		// accounts waiting now.

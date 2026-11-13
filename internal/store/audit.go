@@ -152,6 +152,8 @@ var auditActionClasses = map[string][]AuditClass{
 	"group.add":    {AuditTargeted},
 	"group.rename": {AuditTargeted},
 	"group.remove": {AuditTargeted},
+	// A group's storage quota set or removed (#397): from and to in bytes.
+	"group.quota": {AuditTargeted},
 
 	"account.add":          {AuditTargeted},
 	"account.change":       {AuditTargeted},

@@ -15,8 +15,11 @@ SELECT address, account_id FROM smtp_addresses ORDER BY account_id, address;
 SELECT address FROM smtp_addresses WHERE account_id = $1 ORDER BY address;
 
 -- name: LookupSMTPAddress :one
-SELECT a.id, a.enabled, (a.removed_at IS NOT NULL)::boolean AS removed
+-- With the owner's customer group (NULL without an owner), for the storage
+-- gate at RCPT (#397): no query of its own.
+SELECT a.id, a.enabled, (a.removed_at IS NOT NULL)::boolean AS removed, o.group_id
 FROM smtp_addresses s JOIN accounts a ON a.id = s.account_id
+LEFT JOIN users o ON o.id = a.owner_id
 WHERE s.address = $1;
 
 -- name: ShareAccount :one

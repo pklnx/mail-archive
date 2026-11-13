@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/pklnx/mail-archive/internal/archive"
+	"github.com/pklnx/mail-archive/internal/quota"
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
@@ -28,12 +29,17 @@ type syncHealthJSON struct {
 	Status  string  `json:"status"`
 	Failing []int64 `json:"failing,omitempty"`
 	Stale   []int64 `json:"stale,omitempty"`
+	Paused  []int64 `json:"paused,omitempty"`
 }
 
 // handleSyncHealth answers 200 when every enabled IMAP account syncs and
-// every recurring fill runs, and 503 with the IDs of failing and stale
-// accounts otherwise; a failing or stale recurring fill lists its smtp
-// account. It needs no login, so it names no accounts, users or mail.
+// every recurring fill runs, and 503 with the IDs of failing, stale and
+// paused accounts otherwise; a failing, stale or paused recurring fill
+// lists its smtp account. Paused accounts are those whose syncs or fills
+// the storage gate holds back (#397): their group or the instance is
+// full; they are never stale meanwhile. It needs no login, so it names no
+// accounts, users, groups, figures or mail: which limit was reached is
+// not said either.
 func (s *Server) handleSyncHealth(w http.ResponseWriter, r *http.Request) {
 	now := s.currentTime()
 	c := &s.healthCache
@@ -80,6 +86,10 @@ func (s *Server) syncHealthAnswer(r *http.Request) (int, []byte) {
 			out.Failing = append(out.Failing, id)
 		case store.HealthStale:
 			out.Stale = append(out.Stale, id)
+		default:
+			if h.Enabled && s.storagePaused(h.GroupID) {
+				out.Paused = append(out.Paused, id)
+			}
 		}
 	}
 	for _, h := range fills {
@@ -92,12 +102,21 @@ func (s *Server) syncHealthAnswer(r *http.Request) (int, []byte) {
 			if !slices.Contains(out.Stale, h.AccountID) {
 				out.Stale = append(out.Stale, h.AccountID)
 			}
+		default:
+			if h.Enabled && s.storagePaused(h.GroupID) && !slices.Contains(out.Paused, h.AccountID) {
+				out.Paused = append(out.Paused, h.AccountID)
+			}
 		}
 	}
-	if len(out.Failing)+len(out.Stale) > 0 {
+	// An account failing by its syncs and paused by a fill is listed once.
+	out.Paused = slices.DeleteFunc(out.Paused, func(id int64) bool {
+		return slices.Contains(out.Failing, id) || slices.Contains(out.Stale, id)
+	})
+	if len(out.Failing)+len(out.Stale)+len(out.Paused) > 0 {
 		out.Status, status = "degraded", http.StatusServiceUnavailable
 		slices.Sort(out.Failing)
 		slices.Sort(out.Stale)
+		slices.Sort(out.Paused)
 	}
 	var buf bytes.Buffer
 	_ = json.NewEncoder(&buf).Encode(out)
@@ -232,8 +251,29 @@ func (b busyState) fillSince(h *store.FillHealth, now time.Time) *time.Time {
 }
 
 // fillHealthState is a recurring fill's health on this server's schedule.
+// While the storage gate pauses its account's group, it is never stale
+// (#397).
 func (s *Server) fillHealthState(h *store.FillHealth, busy busyState, now time.Time) string {
-	return h.State(s.alertAfter, s.schedule().Every(h.Interval), busy.fillSince(h, now), now)
+	st := h.State(s.alertAfter, s.schedule().Every(h.Interval), busy.fillSince(h, now), now)
+	if st == store.HealthStale && s.storagePaused(h.GroupID) {
+		return store.HealthOK
+	}
+	return st
+}
+
+// storageGate is the storage gate of the server's syncs, fills and SMTP
+// server (#397); nil without one.
+func (s *Server) storageGate() *quota.Gate {
+	if s.syncer == nil {
+		return nil
+	}
+	return s.syncer.Storage
+}
+
+// storagePaused reports whether the storage gate pauses syncs and fills
+// of the group (nil: an account without an owner).
+func (s *Server) storagePaused(group *int64) bool {
+	return s.storageGate().Admit(group) != nil
 }
 
 // since is when the account became busy: the start of its running sync;
@@ -254,7 +294,12 @@ func (b busyState) since(id int64, now time.Time) *time.Time {
 	return nil
 }
 
-// healthState is the account's health on this server's schedule.
+// healthState is the account's health on this server's schedule. While
+// the storage gate pauses its group, it is never stale (#397).
 func (s *Server) healthState(h *store.SyncHealth, busy busyState, now time.Time) string {
-	return h.State(s.alertAfter, s.schedule().Every(h.SyncInterval), busy.since(h.AccountID, now), now)
+	st := h.State(s.alertAfter, s.schedule().Every(h.SyncInterval), busy.since(h.AccountID, now), now)
+	if st == store.HealthStale && s.storagePaused(h.GroupID) {
+		return store.HealthOK
+	}
+	return st
 }

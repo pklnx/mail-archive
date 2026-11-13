@@ -997,6 +997,9 @@ func (s *Server) handleSyncAccount(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if s.refuseStorageFull(w, a.GroupID) {
+		return
+	}
 	var in struct {
 		// Reconcile also compares every folder with the server, except
 		// folders compared in the last few minutes.
@@ -1025,6 +1028,24 @@ func (s *Server) handleSyncAccount(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusAccepted, map[string]int{"queued": 1})
 }
 
+// errStorageFull: a manual sync while the account's group or the instance
+// is full (#397).
+const errStorageFull = "storage_full"
+
+// refuseStorageFull answers 409 storage_full while the storage gate pauses
+// the group's syncs. The answer is the same whichever limit was reached
+// (the group's, the instance's or the disk's): users learn only that new
+// mail is not archived, never another group's figures or state.
+func (s *Server) refuseStorageFull(w http.ResponseWriter, group *int64) bool {
+	if !s.storagePaused(group) {
+		return false
+	}
+	s.writeJSON(w, http.StatusConflict, apiError{
+		Error: "the storage limit is reached: new mail is not archived until space is freed", Code: errStorageFull,
+	})
+	return true
+}
+
 // reconcileFloor: the reconcile button skips folders compared this
 // recently, so that repeated clicks do not hammer the mail server.
 const reconcileFloor = 5 * time.Minute
@@ -1042,6 +1063,10 @@ func (s *Server) handleSyncAll(w http.ResponseWriter, r *http.Request) {
 	for _, a := range accounts {
 		if a.Enabled && a.RemovedAt == nil && a.Kind == store.KindIMAP {
 			ids = append(ids, a.ID)
+			// The caller's own accounts are all in the caller's group.
+			if s.refuseStorageFull(w, a.GroupID) {
+				return
+			}
 		}
 	}
 	// All of the caller's own accounts: their own act, in their group.

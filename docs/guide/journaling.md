@@ -326,6 +326,7 @@ level:
 | `535` | The login failed: an unknown, revoked or expired secret, or a user name that does not belong to the secret. | Postfix keeps the copy queued and retries (`smtp_sasl_auth_soft_bounce`, on by default). |
 | `454` | 20 failed logins from the mail server's address within 15 minutes: no login from it for 15 minutes. Also when the archive could not check a login. | Postfix keeps the copy queued and retries. |
 | `451` | With a login required: no `STARTTLS` (`4.7.0`), no login, or a secret revoked or expired since the login (`4.7.0`), or an address of another smtp account than the login's (`4.7.1`). Always: the account is disabled (`4.2.1`), or storing failed. | Postfix keeps the copy queued and retries. |
+| `452` | The recipient's customer group or the instance reached its [storage limit](#storage-limits) (`4.3.1`). | Postfix keeps the copy queued and retries. |
 | `421` | More than 16 connections at once, or with a login required more than 8 from one address. | Postfix retries later. |
 
 With a login required, a connection that has not logged in within 60
@@ -355,13 +356,51 @@ archive   unix  -  -  n  -  10  smtp
 and use `archive:[127.0.0.1]:2525` instead of `smtp:[127.0.0.1]:2525` in the
 transport map.
 
+### Storage limits
+
+When the operator sets [storage quotas](./operations#storage-and-quotas),
+the archive defers new journal mail of a customer group whose quota is
+exceeded beyond the SMTP overflow share (`overflow`: 100 % plus
+`MAIL_ARCHIVE_STORAGE_SMTP_OVERFLOW_PERCENT`, 10 % by default), of every
+group when the instance's quota is, and of every group while the disk is
+below its reserve (`disk_low`). From 100 % to the overflow, mail is still
+accepted, with a warning in the archive's log, so that the operator has
+that headroom to react to the `full` alert. A storage limit always gets
+`452 4.3.1 insufficient system storage, try again later`, never a `5xx`:
+Postfix keeps the copy queued and retries.
+
+- **Per recipient.** The answer comes at `RCPT`, for that recipient only.
+  With `MAIL_ARCHIVE_SMTP_AUTH=required` (the default) a transaction holds
+  the login's smtp account only, so the `452` defers the whole message.
+  With `off`, a recipient of another group in the same transaction is
+  accepted and stored, and Postfix retries only the deferred one.
+- **At `DATA`.** The limit is checked again before the message is written.
+  The archive answers only after the whole body, as SMTP requires: if every
+  account of the transaction is now deferred, the body is dropped unread
+  and nothing is written; with `off` and several groups, the copies of the
+  groups below the limit are stored and the answer is `452`. Postfix then
+  retries the message; the retry merges into what was stored, nothing is
+  stored twice.
+- **Queue lifetime.** Postfix drops a copy that is still deferred after
+  `maximal_queue_lifetime` (5 days by default). Keep it at least that long
+  for the archive's transport, watch the alerts and the queue (below), and
+  raise the quota or free space before then: **a copy deferred for longer
+  is lost.**
+- **Logs.** The archive logs a deferral at warning level (`smtp recipient
+  deferred` or `smtp message deferred`, with `code=452`, `reason=storage`,
+  the account and group IDs and the state). Per group, the first deferral
+  after a change of state is logged in full, then one summary line a minute
+  with the count (`smtp storage deferred since the last line`), so that a
+  full group's retries do not flood the log.
+
 ## Monitoring
 
 The archive cannot tell a broken setup from a quiet mailbox, so watch your
 mail server. Two checks cover both kinds of failure:
 
 - **The queue.** Copies for the archive that wait in the queue mean `4xx`
-  answers, an archive that is down or a disabled account:
+  answers, an archive that is down, a disabled account or a reached
+  [storage limit](#storage-limits):
 
   ```sh
   mailq | grep -c archive.local

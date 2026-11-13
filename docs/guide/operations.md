@@ -954,6 +954,7 @@ migrations; the one-time steps of those versions are in the
 | A version without deletion marks per customer group (before 1.6.0) | Stop the web server and the worker before upgrading: `docker compose stop web worker`, then `./ma migrate` and `docker compose up -d web` (`web worker` with the worker on). The migration only adds an empty table and is quick; it neither reads nor rewrites existing rows. Deliveries, syncs and search go on; retention runs and purges wait at most a moment while it adds its foreign keys (to `deleted_messages`, `deletion_runs` and `account_purges`). From then on a retention run marks every deleted message with the accounts and customer groups that held it, and a purge every purged message with the account and its group, so a deleted message is skipped only there (see [Deletion](../reference/cli#deletion) and [Security](../reference/security#login)). Deletions recorded before need no step: they count as deleted in every group that holds no copy. A process of a version before 1.6.0 that still runs after the migration behaves as before 1.6.0: its syncs, fills and deliveries skip and store messages as before, and its retention runs and purges record their deletions without accounts and groups, so these count in every group, and a purge of a message that another account keeps is not recorded at all. Rolling back the migration drops the marks: every recorded deletion counts in every group again, and messages purged while another account kept them are archived again. |
 | A version without SMTP login (before 1.6.0) | Only with the SMTP server on (`MAIL_ARCHIVE_SMTP_LISTEN` set). `MAIL_ARCHIVE_SMTP_AUTH=required` is the new default: mail servers log in with an [SMTP secret](../reference/cli#smtp-secrets) over `STARTTLS`, and without `MAIL_ARCHIVE_SMTP_TLS_CERT` and `MAIL_ARCHIVE_SMTP_TLS_KEY` the web server and every `./ma` command refuse to start, naming the variable. Add `MAIL_ARCHIVE_SMTP_AUTH=off` to `.env` **before** the upgrade: a setup that relies on the allowlist alone, such as a Postfix on the same host, then keeps working unchanged. To move to logins afterwards, in this order: upgrade with `off`; create a secret per smtp account (`./ma account smtp-secret NAME --new`, which needs the new version's migration); change the mail server ([Log in with an SMTP secret](./journaling#log-in-with-an-smtp-secret)); put the certificate in place ([SMTP certificate](#smtp-certificate)); remove `off` from `.env` and run `docker compose up -d web`. A setup that already has a certificate starts in `required` mode and answers `451` to mail servers that do not log in yet: their copies wait in the queue (5 days by default) until they log in or `off` is set. The SMTP server now takes 16 connections at once instead of 10. |
 | A version without storage usage (before 1.6.0) | Nothing to run. The migration adds the storage counters and an index over the hashes and sizes of the messages, and holds back every write of messages (syncs, SMTP deliveries, fills, imports, `reindex`) until it is done; searches and reads go on. It reads the message table once, from disk if it is not in memory. Measured on PostgreSQL 16 with 2 cores and 300,000 messages (511 MB of message rows): about 0.6 seconds with the rows in memory, about 4.5 seconds with them on disk (138 MB/s); for 1,500,000 messages (about 2.6 GB) expect about 3 seconds in memory and 20 to 30 seconds from disk. `serve` and `worker` migrate before they work (`serve` answers `503` until then); a separate worker or a `./ma sync` from cron waits for the migration. With a large archive, stop the worker before the upgrade (`docker compose stop worker`). After the upgrade, `./ma usage` shows the groups and accounts as `-` until the background jobs of `serve` or `worker` have taken the first snapshot, soon after their start. Rolling the migration back (`./ma migrate down`) drops the storage figures and the group quotas. |
+| A version without storage quotas (before 1.6.0) | Nothing to run. The disk reserve is on by default: while the file system of `MAIL_ARCHIVE_DATA_DIR` has less than 1 GiB free (`MAIL_ARCHIVE_MIN_FREE_DISK`), syncs, fills and imports pause and the SMTP server defers new mail with `452` instead of failing on a full disk. Set `MAIL_ARCHIVE_MIN_FREE_DISK=0` to turn it off. Quotas apply only once you set them (`MAIL_ARCHIVE_STORAGE_QUOTA`, `./ma group set-quota`); see [Storage and quotas](#storage-and-quotas). Scripts that run `./ma sync` or `./ma import` should treat exit code 75 as "paused", not as a failure. Storage states and their alerts come from `serve`; a cron setup without it gets them from `./ma sync` (see [Which process writes the states](#how-exact-the-limits-are)). |
 | A version without attachment text per customer group (before 1.6.0) | Stop the web server and the worker before upgrading: `docker compose stop web worker`, then `./ma migrate` and `docker compose up -d web` (`web worker` with the worker on). The migration adds a column to the message locations and an index over the few locations that do not show their attachment text yet; every existing location keeps what it shows. Building the index reads every location and holds an exclusive lock on the locations until it is done: everything that reads or writes them waits, also a web server of the old version that still runs (its deliveries, syncs and search). Measured on PostgreSQL 16 with 2 cores: about 0.2 seconds per 1,000,000 locations with them in memory, longer when they are read from disk. From then on, each customer group searches a message's attachment text only after an extraction for that group, so a message that a second group receives is extracted once more in the background (see [Security](../reference/security#login)). A process of a version before 1.6.0 that still runs after the migration behaves as before 1.6.0: its search shows attachment text as before, and the locations it stores show none until their extraction; the web server (with jobs on) or the worker of 1.6.0 queues those extractions at its start and every 15 minutes, and `./ma reindex` once before it extracts, so they catch up after the old processes have stopped. Rolling back the migration (`./ma migrate down`, for development) drops the column, and migrating up again shows the attachment text through every location. |
 | A version without customer groups | Nothing to run. The migration puts every user, and with them every account, into one group, `Default`; existing shares stay. It adds a column and an index on the audit log, which every existing entry leaves empty: like the shared accounts index below, building it reads every partition and holds back audit log writes until it is done, about 0.1 seconds per 1,000,000 entries with the log in memory. With a very large audit log, stop the web server before `./ma migrate` (`docker compose stop web`). For a shared instance, create a group per customer afterwards and move its users (see [Customer groups](./users#customer-groups)). Rolling back the migration refuses while more than one group exists. |
 | A version without attachment search | Nothing to run. The migration only adds two empty tables and is quick; it neither reads nor rewrites the message rows, so deliveries and syncs go on (they wait at most a moment while it adds its foreign keys). Afterwards the web server, or the worker service if you run it, extracts the text of PDF and text attachments of older messages in the background, one message at a time and newest first, and logs at start how many are pending; new mail becomes searchable shortly after it is stored. About 17 ms per message with a typical PDF invoice (26 ms on average over a test corpus of 1,412 varied PDFs), and about 52 MB of database space per 10,000 PDFs with 3.5 KB of text each. `./ma reindex` does the same at once in the foreground; it can run while the web server and syncs run, and can be interrupted and run again. Installations without the web server, which run only `./ma sync` or `./ma import` from cron, get attachment text only from `./ma reindex` or from the worker service: run it after those commands, for example in the same cron job. While it extracts, the process needs up to 224 MiB more memory per worker (see [Hardware and budgets](#hardware-and-budgets)), and the first PDF after a start takes about 3 seconds once (see [Security](../reference/security#the-smtp-server)). Message rows are not rewritten, so no `VACUUM` is needed. With [legal holds](./retention#legal-holds) that use a search filter, run `./ma reindex` before relying on them over attachment text: the background extraction goes newest first, so the oldest mail, which retention deletes first, is extracted last. |
@@ -1098,6 +1099,159 @@ runs in one job slot after the work of new mail. The group lookup looks only
 into the group's own folders, so that its time tells nothing about other
 groups; a group with many thousands of folders makes its syncs slower by
 about 0.16 ms per folder and batch.
+
+## Storage and quotas
+
+The operator limits the storage of the instance and of each customer group.
+What counts is **message bytes**: the size of each unique message, counted
+once however many folders and accounts hold it. A group counts its messages
+once within the group, so a message that two groups hold counts fully for
+each. The database and the extracted attachment texts are shown by
+`./ma usage` but not counted.
+
+| Limit | Set with | Applies to |
+|---|---|---|
+| Instance quota | `MAIL_ARCHIVE_STORAGE_QUOTA` ([Configuration](../reference/configuration)) | the exact total of the instance, and so every group |
+| Group quota | `./ma group set-quota NAME SIZE` (`none` removes it; [CLI](../reference/cli#groups)) | the group's figure; never above the instance quota |
+| Disk reserve | `MAIL_ARCHIVE_MIN_FREE_DISK` (default `1GiB`, `0`: off) | the free space of the file system of `MAIL_ARCHIVE_DATA_DIR`, also without a quota |
+
+Group quotas may add up to more than the instance quota; `./ma usage` shows
+their sum. A group without a quota, and an account without an owner (they
+exist only before the first user), are limited by the instance quota and
+the disk reserve alone. If `MAIL_ARCHIVE_STORAGE_QUOTA` is lowered below a
+group quota, `serve` logs a warning at start; the instance quota then
+applies first.
+
+### States
+
+Every limit has a state. `./ma usage` and `./ma group list` show them.
+
+| State | From | What happens |
+|---|---|---|
+| `ok` | below the warn share | nothing |
+| `warn` | `MAIL_ARCHIVE_STORAGE_WARN_PERCENT` of the quota (80 %) | nothing yet; time to raise the quota or free space |
+| `full` | 100 % of the quota | IMAP syncs, fills and imports of the group (for the instance: of every group) pause. The SMTP server still accepts journal mail, with a warning in the log. |
+| `overflow` | 100 % plus `MAIL_ARCHIVE_STORAGE_SMTP_OVERFLOW_PERCENT` (10 %) | as `full`, and the SMTP server defers the group's journal mail with `452 4.3.1` |
+| `disk_low` | free space below the reserve (instance only) | as `overflow`, for every group |
+
+A state is left only once the figure is 1 % of the quota below the
+threshold that set it (for `disk_low`: once the free space is 1 % of the
+reserve above it), so a figure around a threshold does not flip the state.
+An account's state is the worst of its group's, the instance's and the
+disk's. Reading, searching, logins, retention, purges, legal holds, exports
+and background jobs go on in every state; storage never gets a 5xx, and
+nothing is dropped.
+
+### What pauses and how it resumes
+
+- **IMAP syncs.** The schedule skips the accounts of a full group, and logs
+  each pause and its end once. A sync that is running checks before each
+  message, before it is written to disk: when the limit is reached it saves
+  what it fetched, stops before the next folder and records the run as
+  `partial` with the error `storage_full: the storage limit is reached; …`.
+  The account's failure streak is unchanged and no alert is sent, and while
+  it is paused it is never stale. `/healthz/sync` lists it under `paused`
+  (see below). The next run continues from the last message stored. Mail
+  that is deleted on the server while syncs are paused is not archived.
+- **Manual syncs.** `POST /api/accounts/{name}/sync` and `POST /api/sync`
+  answer `409` with `{"code":"storage_full"}`, the same for every limit.
+  `./ma sync` prints `paused: …` with the limit and exits with code 75.
+- **Fills.** A fill stops before the next message, saves what came before
+  and stays running; nothing ends and its health is unchanged. The web
+  server continues it once space is freed (it checks every minute).
+  Recurring fills start no new run while paused. `./ma account fill`
+  exits with 75.
+- **Imports.** `./ma import` refuses to start, or stops with
+  `storage quota of group NAME reached after N messages; run the same
+  command again once space is freed`, and exits with 75. What it read is
+  saved; running it again adds only what is missing.
+- **SMTP journaling.** From `overflow` on (and at `disk_low`) a recipient
+  of the group gets `452 4.3.1 insufficient system storage, try again
+  later` at `RCPT`; the sending server keeps the copy queued and retries.
+  See [Journaling](./journaling#storage-limits).
+
+Exit code 75 (`EX_TEMPFAIL`) lets a cron wrapper tell a pause from a
+failure.
+
+A raised quota (`./ma group set-quota`, or a larger
+`MAIL_ARCHIVE_STORAGE_QUOTA` after a restart) or freed space takes effect
+within 10 seconds in every process; paused syncs resume at their next
+scheduled run, a manual sync at once.
+
+### How exact the limits are
+
+Every process that stores mail (`serve`, `./ma sync`, `./ma import`,
+`./ma account fill`) reads the figures of the instance and of every group
+every 10 seconds, in one statement, and adds what it stored since. A sync,
+fill or import counts each message as soon as it is written, before its
+batch is saved, so it stops within one message of a limit. Messages the
+group already holds count only until their batch is saved, and a refusal
+they cause saves the batch and asks again, so a sync's or an import's own
+known mail never pauses it (a fill waits for the next check, a minute
+later). This holds per writer: another writer's files that are not saved
+yet, in the same process (in `serve`, a fill next to a sync) and near a
+limit, can pause a sync or import once, early, never late; the next run
+goes on.
+
+**Which process writes the states.** One process at a time writes the
+states, from the database figures alone, under a row lock; it logs each
+transition as `storage state changed`, and each transition is a
+[storage alert](#storage-alerts). `serve` takes this role (an advisory lock,
+the storage state writer) at its first read and keeps it while it runs,
+and wakes its notifier after each transition, so the alert goes out at
+once. A command (`./ma sync`, `./ma import`, `./ma account fill`) writes
+the states only while no `serve` runs, at its reads every 10 seconds and
+once more at its end; `./ma sync` then sends the alerts at its end, the
+others leave them to the next `./ma sync` or `serve`. While `serve` runs,
+the commands decide the same states in memory from the persisted ones and
+the figures, with their own settings: a command run with a changed `.env`
+before `serve` restarts pauses by its own limits but never changes the
+persisted state or sends an alert. `serve` holds the lock on a database
+connection of its own, not one of its pool, and checks it at every read:
+after a PostgreSQL restart it takes the lock again at its next read, and
+a read without the lock writes nothing. Without `serve`, two commands
+running at the same time with different settings (for example one started
+with the old `.env` and one with the new) can each write the state their
+own limits call for, so the state, and its alerts, can go back and forth
+while both run; run commands with the same `.env`.
+
+- **The instance** figure is exact at all times. A process stops at most
+  one message past the quota, plus what other processes stored in the last
+  10 seconds.
+- **A group's** figure is exact after each usage snapshot (hourly, and soon
+  after moves, purges, deletion runs, imports and restores; see
+  [Storage usage](../development/architecture#storage-usage)). In between
+  it counts what was archived since, and deletions show only at the next
+  snapshot. So it is an upper bound, and the gate pauses a group rather too
+  early than too late, with two exceptions, both until a later snapshot:
+  - **Moves.** After a user or account moves to another group (or the
+    first user adopts the accounts without an owner), the moved bytes still
+    count for the old group and not yet for the new one, until a snapshot
+    taken after the move (the one the move requests, usually within
+    minutes; at the latest the hourly one). Meanwhile the new group can go
+    past its quota by up to the moved bytes, and the old group can stay
+    paused by bytes it no longer holds.
+  - **A deletion race.** A message whose only other copy in the group is
+    deleted while it is being added is missing from the figure: one message
+    per such race, a few at most.
+- **Before the first snapshot** after the upgrade (the background jobs of
+  `serve` or `worker` take it soon after their start), only the instance
+  quota and the disk reserve apply.
+- **After a purge or a deletion run**, a paused group resumes once the
+  snapshot the run requests has counted the freed bytes.
+
+### Costs
+
+Measured on PostgreSQL 16 with the client pinned to 2 cores: the
+statement that reads the figures takes about 1 ms with 20 groups and 2,000
+group deltas not folded yet, and about 6 ms with 200 groups and 20,000 (more
+than a busy instance writes between two folds), once per process every 10
+seconds. A transition costs one short transaction of a few milliseconds,
+only when a state changes. The check before each message or recipient is a
+lookup in memory (about 0.2 µs, no allocation), the same for every group;
+at most once per 10 seconds per process the first check after that time
+does the read itself.
+The gate keeps about 100 bytes per group in memory.
 
 ## IMAP limits
 
@@ -1369,7 +1523,10 @@ things make it visible:
 
 Set the URL in `.env` and restart the web server
 (`docker compose up -d web`). Alerts are sent by the web server, and at the
-end of `./ma sync`, so a cron setup without the web server gets them too.
+end of `./ma sync`, so a cron setup without the web server gets them too,
+storage alerts included: without the web server, the commands write the
+storage transitions and `./ma sync` sends them at its end (an import or a
+fill run by hand leaves its transitions to the next `./ma sync`).
 Check the settings with:
 
 ```sh
@@ -1538,8 +1695,12 @@ and `warn` again are three messages with three IDs. Changes that follow
 each other faster than they can be sent go out once, with the latest
 state. A group that is deleted takes its pending alert with it. With ntfy a
 level other than `ok` has the priority `high` and the tag `warning`.
-`./ma usage --json` shows which group an ID is. The storage quota checks
-write the states; while every state stays `ok`, no storage alert is sent.
+`./ma usage --json` shows which group an ID is. The process that writes the
+states (`serve`, or without it `./ma sync`, `./ma import` and
+`./ma account fill`; see [Which process writes the states](#how-exact-the-limits-are))
+writes the transitions; `serve` sends their alerts at once, and without it
+`./ma sync` sends them at its end. While every state stays `ok`, no storage
+alert is sent.
 
 Alerts are delivered **at least once**: if the server stops right after the
 receiver accepted a message, it is sent again with the same `id`. ntfy,
@@ -1620,7 +1781,7 @@ sample, so a name can never end up in a label.
 | Status | Body | Meaning |
 |---|---|---|
 | `200` | `{"status":"ok"}` | Every enabled account syncs, and every recurring fill runs. |
-| `503` | `{"status":"degraded","failing":[3,7],"stale":[5]}` | Account IDs whose last `MAIL_ARCHIVE_ALERT_AFTER_FAILURES` syncs failed, or that had no successful sync within two of their sync intervals (at least one plus an hour); see [Alerts](./syncing#alerts). An smtp account is listed when one of its recurring fills fails or is stale the same way. |
+| `503` | `{"status":"degraded","failing":[3,7],"stale":[5],"paused":[9]}` | Account IDs whose last `MAIL_ARCHIVE_ALERT_AFTER_FAILURES` syncs failed, or that had no successful sync within two of their sync intervals (at least one plus an hour); see [Alerts](./syncing#alerts). In `paused`, enabled accounts whose syncs are paused because their group or the instance reached a [storage limit](#storage-and-quotas); they are never stale meanwhile. An smtp account is listed when one of its recurring fills fails, is stale or is paused the same way. An account is listed once: failing or stale before paused. Which limit was reached is not said. |
 | `503` | `{"status":"unavailable"}` | The database cannot be reached. |
 
 Disabled, removed and import accounts are left out, as are fills that were

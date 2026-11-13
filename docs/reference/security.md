@@ -531,6 +531,25 @@ In both modes:
   message, `MAIL_ARCHIVE_SMTP_MAX_SIZE` per message (`50M`), lines up to 1 MiB,
   5 minutes to send a command or a whole message, 1 minute for each answer
   to be read. A message is acknowledged only after it is stored.
+- **Storage limits never drop mail.** When a recipient's customer group or
+  the instance is beyond its [storage quota](../guide/operations#storage-and-quotas)
+  plus the SMTP overflow share, or the disk is below its reserve, the
+  recipient gets `452 4.3.1`, a temporary answer, never a `5xx`: a mail
+  server drops a BCC copy that gets a `5xx` without telling anyone. The
+  answer is per recipient; with `required` a transaction holds one account,
+  so it covers the whole transaction. The check before the message is
+  written is repeated at `DATA`; when every account is deferred, nothing is
+  written. The answer is the same whichever limit was reached; with `off`,
+  a client in the allowed networks can learn from it which addresses'
+  groups are full, as it can learn which addresses exist (`550`). The
+  check is a lookup in memory, the same for every group. At most once per
+  10 seconds per process, the first check after that time reads the figures
+  itself (in `serve` the background read usually comes first): that read
+  covers every group, so its time grows with the number of groups and of
+  their changes not yet folded, instance-wide, and never depends on which
+  group is asked or on any one group's state, apart from a state change
+  being written: when some group or the instance changes state, the read
+  that writes it takes a few milliseconds more.
 - **The MIME parser sees mail nobody filtered.** Display and search read at
   most 1000 parts, 20 levels of nesting, 1 MiB of top-level header and 256
   MiB of decoded content per message; a message beyond that is stored whole,
@@ -845,7 +864,10 @@ before the start is complete.
 `/healthz/sync` needs no login, so that monitoring tools can use it. It names
 no accounts, users or mail, only account IDs. Still, anyone who can reach the
 server with an allowed host name learns how many accounts exist (roughly,
-from the IDs) and which ones fail to sync. The answer is cached for 15
+from the IDs), which ones fail to sync, and which ones are `paused` because
+their customer group or the instance reached a
+[storage limit](../guide/operations#storage-and-quotas). It does not say
+which limit, nor any figure or group. The answer is cached for 15
 seconds, so it cannot be used to load the database.
 
 `/healthz/jobs` needs no login either. It gives only a status: `ok`, or

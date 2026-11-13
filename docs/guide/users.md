@@ -113,6 +113,25 @@ has **Rename** and **Remove**, which stays off while the group has users.
 
 ![The customer groups under the users table](/screenshots/user-groups.png)
 
+### Storage quota of a group
+
+The operator can limit how much a group stores, in message bytes counted
+once within the group, on the command line:
+
+```sh
+./ma group set-quota "Steuerbüro Meier" 50GiB
+./ma group set-quota "Steuerbüro Meier" none
+./ma group list
+```
+
+`group list` shows each group's quota, the storage it uses and its state
+(`ok`, `warn`, `full`, `overflow`). A group quota is never above the
+instance's (`MAIL_ARCHIVE_STORAGE_QUOTA`); the change is recorded in the
+audit log as `group.quota`. When a group is full, its syncs, fills and
+imports pause, and from the overflow on its journal mail is deferred; its
+users can still read and search everything. See
+[Storage and quotas](./operations#storage-and-quotas).
+
 Groups separate customers logically, inside one database and one archive
 directory (see [Security](../reference/security#login)). A customer who needs
 physical separation gets an individual instance.

@@ -66,8 +66,9 @@ WHERE account_id = @account_id AND notify_lease = @lease;
 -- The health of IMAP accounts that are not removed, of all users or one.
 SELECT a.id, a.name, a.owner_id, a.enabled, a.created_at, a.sync_interval_seconds,
        coalesce(h.failure_streak, 0)::int AS failure_streak, h.failing_since, h.last_success_at,
-       coalesce(h.notified_state, 'ok')::text AS notified_state
+       coalesce(h.notified_state, 'ok')::text AS notified_state, o.group_id
 FROM accounts a LEFT JOIN account_sync_health h ON h.account_id = a.id
+LEFT JOIN users o ON o.id = a.owner_id
 WHERE a.kind = 'imap' AND a.removed_at IS NULL
   AND (sqlc.narg(owner)::bigint IS NULL OR a.owner_id = sqlc.narg(owner)::bigint)
 ORDER BY a.id;

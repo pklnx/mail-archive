@@ -257,6 +257,15 @@ func (conn *Conn) wrap(op string, err error) error {
 	return classify(conn.ctx, conn.m, op, conn.loginSent, err)
 }
 
+// stop closes the connection for a Stop of the caller and returns its
+// error. As in connErr, it never waits for go-imap's reader: the literal
+// is unread or partly read, and the caller's drain loop lets go-imap
+// discard the rest, each read failing fast on the closed connection.
+func (conn *Conn) stop(cause error) error {
+	_ = conn.m.Close()
+	return cause
+}
+
 // trip closes the connection because the server exceeded a cap and
 // returns the classified error.
 func (conn *Conn) trip(op string, lim *LimitError) error {
@@ -509,6 +518,28 @@ type Message[T any] struct {
 // It must read r to EOF (or return an error).
 type BodySink[T any] func(r io.Reader) (T, error)
 
+// Stop wraps an error of a BodySink or of a fetch's handle that ends the
+// whole fetch at once: the connection is closed instead of reading and
+// dropping the rest of the answer (for a large folder, every remaining
+// body), and the fetch returns err unwrapped. The connection is Broken
+// afterwards. The storage gate uses it to pause a sync before it
+// downloads more (#397).
+func Stop(err error) error { return &stopError{err} }
+
+type stopError struct{ err error }
+
+func (e *stopError) Error() string { return e.err.Error() }
+func (e *stopError) Unwrap() error { return e.err }
+
+// stopped returns the error a Stop wraps, nil for other errors.
+func stopped(err error) error {
+	var se *stopError
+	if errors.As(err, &se) {
+		return se.err
+	}
+	return nil
+}
+
 // FetchAfter streams every message in the currently examined folder whose
 // UID is greater than after. sink consumes each body; handle is then called
 // with the complete message. Messages without a body are skipped. It
@@ -635,6 +666,10 @@ func fetchMessages[T any](conn *Conn, cmd *imapclient.FetchCommand, op string, l
 		}
 		m, hasBody, payload, err := readMessage(conn, op, msg, sink)
 		if err != nil {
+			if cause := stopped(err); cause != nil {
+				stopErr = conn.stop(cause)
+				continue
+			}
 			if CategoryOf(err) != "" {
 				stopErr = err
 			} else {
@@ -647,6 +682,8 @@ func fetchMessages[T any](conn *Conn, cmd *imapclient.FetchCommand, op string, l
 		}
 		switch err := handle(m); {
 		case errors.Is(err, errSkip):
+		case stopped(err) != nil:
+			stopErr = conn.stop(stopped(err))
 		case err != nil:
 			handleErr = err
 		default:
@@ -725,6 +762,9 @@ func readMessage[T any](conn *Conn, op string, msg *imapclient.FetchMessageData,
 			}
 			r := newCreditReader(item.Literal, conn.m)
 			body, err := sink(r)
+			if stopped(err) != nil && r.err == nil {
+				return m, false, 0, err // fetchMessages closes the connection
+			}
 			if err != nil {
 				// A failure of the connection, not of the sink: the sink
 				// only passed on the read error, or the conn or context
