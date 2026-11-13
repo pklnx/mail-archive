@@ -146,7 +146,7 @@ func runServe(parent context.Context, cfg *config.Config, log *slog.Logger, ln n
 	}
 	if n, err := a.store.CountUsers(ctx); err != nil {
 		return err
-	} else if n == 0 {
+	} else if n == 0 && cfg.SetupToken == "" {
 		log.Warn("no users yet; the web UI shows how to create the first admin", "command", commandName()+" user add NAME --admin")
 	}
 	// The first attestation of a large archive takes minutes; it runs

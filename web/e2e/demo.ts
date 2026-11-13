@@ -33,6 +33,15 @@ export const hintHTTPPort = 18184;
 export const hintConnectPort = 18185;
 export const controlHTTPPort = 18186;
 export const controlConnectPort = 18187;
+/**
+ * The demo's second, new instance (tools/demo -setup-listen, #396): no user
+ * yet and a setup token stored, so its setup link creates the first admin.
+ * setup.spec.ts uses it once per run. The token is made up and works only
+ * on that throwaway database; it matches demoSetupToken in tools/demo.
+ */
+export const setupPort = 18188;
+export const setupOrigin = `http://localhost:${setupPort}`;
+export const setupToken = "demo-setup-".repeat(4);
 
 /** The demo admin. Admins need 2FA; globalSetup logs it in once. */
 export const admin = { name: "demo", password: "demo-password", totpSecret: "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP" };

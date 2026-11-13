@@ -43,6 +43,10 @@ type ConvertOptions struct {
 	// lock cancelled the run.
 	Tick   <-chan time.Time
 	OnLost func(error)
+
+	// prepare runs once the conversion holds its locks, before it reads
+	// the state (EnableAtSetup).
+	prepare func(ctx context.Context) error
 }
 
 // ConvertResult is what Enable or Disable did.
@@ -231,6 +235,11 @@ func convertArchive(ctx context.Context, st *store.Store, blobs *blobstore.Store
 	defer off.close()
 	ctx = off.ctx
 	orphanDir := off.orphans
+	if opts.prepare != nil {
+		if err := opts.prepare(ctx); err != nil {
+			return nil, err
+		}
+	}
 
 	atOpts := AtRestOptions{DataDir: opts.DataDir, KEK: opts.KEK, Logger: opts.Logger, keyringHeld: true}
 	row, err := st.BlobEncryption(ctx)

@@ -381,9 +381,13 @@ recover it without them.
 
 ### Turning it on
 
-A **new instance** turns it on before it archives anything:
-`./ma encryption enable` on the empty archive only records the state (see
-[Getting started](./getting-started#the-archive-key)).
+A **new instance** turns it on before it archives anything. Started from
+configuration, the web server or the worker does it at its first start,
+with the configured archive key, and refuses to start without one (see
+[Start from configuration](./getting-started#start-from-configuration));
+`MAIL_ARCHIVE_ENCRYPTION_AT_SETUP=off` is for test instances only. Set up
+from the command line, `./ma encryption enable` on the empty archive only
+records the state (see [Getting started](./getting-started#the-archive-key)).
 
 An **existing archive** is converted offline, in one maintenance window:
 nothing may write message files while it runs.
@@ -706,10 +710,18 @@ start, and hold it until they have checked the database schema:
   MAIL_ARCHIVE_MIGRATE_ON_START=on`. A database that a newer version
   migrated is refused too, with both versions; see
   [Going back after an upgrade](#going-back-after-an-upgrade).
+- On a new instance (no user, no message, no state of encryption at rest
+  yet), the first of them to get the lock turns encryption at rest on with
+  the archive key, or refuses to start without one (exit code `4`); see
+  [Encryption at rest](#turning-it-on). It refuses too, naming it, while a
+  command-line writer such as `./ma import` runs.
 - The web server then checks the secret key against the check value the
   database keeps, and refuses another key; see
   [The secret key](../reference/security#the-secret-key). The worker does
   not need the key.
+- Last, while no user exists, the web server stores the hash of the
+  configured setup token, or revokes a stored one when none is configured;
+  see [Start from configuration](./getting-started#start-from-configuration).
 
 While it starts, the web server already listens: `/healthz` answers `503`
 with `{"status":"starting"}` and every other request `503` with
@@ -861,7 +873,7 @@ migrations; the one-time steps of those versions are in the
 
 | When upgrading from | Run |
 |---|---|
-| A version before 1.6.0 | Nothing to run, if the web server has `MAIL_ARCHIVE_SECRET_KEY`. The first start of 1.6.0 checks the secret key: if accounts with stored passwords or users with TOTP exist, the key must open them, otherwise the start is refused with exit code `4` (then configure the key the instance used, or see [`secret-key accept`](../reference/cli#secret-key)); then the database keeps a check value of the key, and every later start with another key is refused. A web server without a secret key no longer starts in browse-only mode: create one with `./ma keygen`. The bundled `docker-compose.yml` no longer requires `MAIL_ARCHIVE_SECRET_KEY` in `.env`, because the key may come from a file instead (`MAIL_ARCHIVE_SECRET_KEY_FILE`, see [Configuration](../reference/configuration#docker-compose-only)), and no longer gives it to the worker service. |
+| A version before 1.6.0 | Nothing to run, if the web server has `MAIL_ARCHIVE_SECRET_KEY`. An instance that already has users counts as set up: a setup token never works on it, and encryption at setup leaves it alone. The first start of 1.6.0 checks the secret key: if accounts with stored passwords or users with TOTP exist, the key must open them, otherwise the start is refused with exit code `4` (then configure the key the instance used, or see [`secret-key accept`](../reference/cli#secret-key)); then the database keeps a check value of the key, and every later start with another key is refused. A web server without a secret key no longer starts in browse-only mode: create one with `./ma keygen`. The bundled `docker-compose.yml` no longer requires `MAIL_ARCHIVE_SECRET_KEY` in `.env`, because the key may come from a file instead (`MAIL_ARCHIVE_SECRET_KEY_FILE`, see [Configuration](../reference/configuration#docker-compose-only)), and no longer gives it to the worker service. |
 | A version without customer groups | Nothing to run. The migration puts every user, and with them every account, into one group, `Default`; existing shares stay. It adds a column and an index on the audit log, which every existing entry leaves empty: like the shared accounts index below, building it reads every partition and holds back audit log writes until it is done, about 0.1 seconds per 1,000,000 entries with the log in memory. With a very large audit log, stop the web server before `./ma migrate` (`docker compose stop web`). For a shared instance, create a group per customer afterwards and move its users (see [Customer groups](./users#customer-groups)). Rolling back the migration refuses while more than one group exists. |
 | A version without attachment search | Nothing to run. The migration only adds two empty tables and is quick; it neither reads nor rewrites the message rows, so deliveries and syncs go on (they wait at most a moment while it adds its foreign keys). Afterwards the web server, or the worker service if you run it, extracts the text of PDF and text attachments of older messages in the background, one message at a time and newest first, and logs at start how many are pending; new mail becomes searchable shortly after it is stored. About 17 ms per message with a typical PDF invoice (26 ms on average over a test corpus of 1,412 varied PDFs), and about 52 MB of database space per 10,000 PDFs with 3.5 KB of text each. `./ma reindex` does the same at once in the foreground; it can run while the web server and syncs run, and can be interrupted and run again. Installations without the web server, which run only `./ma sync` or `./ma import` from cron, get attachment text only from `./ma reindex` or from the worker service: run it after those commands, for example in the same cron job. While it extracts, the process needs up to 224 MiB more memory per worker (see [Hardware and budgets](#hardware-and-budgets)), and the first PDF after a start takes about 3 seconds once (see [Security](../reference/security#the-smtp-server)). Message rows are not rewritten, so no `VACUUM` is needed. With [legal holds](./retention#legal-holds) that use a search filter, run `./ma reindex` before relying on them over attachment text: the background extraction goes newest first, so the oldest mail, which retention deletes first, is extracted last. |
 | A version without shared accounts | Nothing to run. The migration adds an empty table and an index on the audit log. Building the index reads every partition of the audit log and holds back audit log writes until it is done, and with them the web server's reads and logins: about 0.1 seconds for 1,000,000 entries (253 MB) on PostgreSQL 18 with the log in memory, longer when it has to be read from disk. With a very large audit log, stop the web server before `./ma migrate` (`docker compose stop web`). |

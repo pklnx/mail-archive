@@ -25,6 +25,54 @@ func (q *Queries) ClearMigrationFailure(ctx context.Context) (int64, error) {
 	return result.RowsAffected(), nil
 }
 
+const clearSetupToken = `-- name: ClearSetupToken :execrows
+UPDATE instance_state
+SET setup_token_hash = NULL, setup_token_since = NULL, updated_at = now()
+WHERE setup_token_hash IS NOT NULL
+`
+
+// A start without a token revokes a stored one.
+func (q *Queries) ClearSetupToken(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, clearSetupToken)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const completeSetup = `-- name: CompleteSetup :execrows
+UPDATE instance_state
+SET setup_completed_at = now(), setup_user_id = $1::bigint,
+    setup_token_hash = NULL, setup_token_since = NULL, updated_at = now()
+WHERE setup_completed_at IS NULL
+`
+
+// The first user completes the setup for good and consumes the token.
+func (q *Queries) CompleteSetup(ctx context.Context, userID int64) (int64, error) {
+	result, err := q.db.Exec(ctx, completeSetup, userID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const freshInstance = `-- name: FreshInstance :one
+SELECT (setup_completed_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM users)
+        AND NOT EXISTS (SELECT 1 FROM messages)
+        AND NOT EXISTS (SELECT 1 FROM blob_encryption))::boolean AS fresh
+FROM instance_state
+`
+
+// A new instance (#396, revision 1): setup not complete, no user, no
+// message and no state of encryption at rest recorded.
+func (q *Queries) FreshInstance(ctx context.Context) (bool, error) {
+	row := q.db.QueryRow(ctx, freshInstance)
+	var fresh bool
+	err := row.Scan(&fresh)
+	return fresh, err
+}
+
 const getMigrationFailure = `-- name: GetMigrationFailure :one
 SELECT migration_failed_version, migration_failed_sha256, migration_failed_at
 FROM instance_state
@@ -52,6 +100,32 @@ func (q *Queries) GetSecretKeyCheck(ctx context.Context) ([]byte, error) {
 	var secret_key_check []byte
 	err := row.Scan(&secret_key_check)
 	return secret_key_check, err
+}
+
+const getSetupState = `-- name: GetSetupState :one
+SELECT setup_token_hash, setup_token_since, setup_completed_at,
+       EXISTS (SELECT 1 FROM users)::boolean AS has_users
+FROM instance_state
+`
+
+type GetSetupStateRow struct {
+	SetupTokenHash   []byte
+	SetupTokenSince  *time.Time
+	SetupCompletedAt *time.Time
+	HasUsers         bool
+}
+
+// The setup of the first admin (#396, part 3) and whether a user exists.
+func (q *Queries) GetSetupState(ctx context.Context) (GetSetupStateRow, error) {
+	row := q.db.QueryRow(ctx, getSetupState)
+	var i GetSetupStateRow
+	err := row.Scan(
+		&i.SetupTokenHash,
+		&i.SetupTokenSince,
+		&i.SetupCompletedAt,
+		&i.HasUsers,
+	)
+	return i, err
 }
 
 const instanceStateExists = `-- name: InstanceStateExists :one
@@ -92,6 +166,26 @@ func (q *Queries) LockSecretKeyCheck(ctx context.Context) ([]byte, error) {
 	var secret_key_check []byte
 	err := row.Scan(&secret_key_check)
 	return secret_key_check, err
+}
+
+const lockSetupState = `-- name: LockSetupState :one
+SELECT setup_token_hash, setup_token_since, setup_completed_at
+FROM instance_state FOR UPDATE
+`
+
+type LockSetupStateRow struct {
+	SetupTokenHash   []byte
+	SetupTokenSince  *time.Time
+	SetupCompletedAt *time.Time
+}
+
+// serializes the creation of the first user: POST /api/setup and every
+// other way to create a user lock this row first.
+func (q *Queries) LockSetupState(ctx context.Context) (LockSetupStateRow, error) {
+	row := q.db.QueryRow(ctx, lockSetupState)
+	var i LockSetupStateRow
+	err := row.Scan(&i.SetupTokenHash, &i.SetupTokenSince, &i.SetupCompletedAt)
+	return i, err
 }
 
 const recordSecretKeyCheck = `-- name: RecordSecretKeyCheck :execrows
@@ -169,6 +263,29 @@ SET secret_key_check = $1::bytea, updated_at = now()
 
 func (q *Queries) SetSecretKeyCheck(ctx context.Context, keyCheck []byte) (int64, error) {
 	result, err := q.db.Exec(ctx, setSecretKeyCheck, keyCheck)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setSetupToken = `-- name: SetSetupToken :execrows
+UPDATE instance_state
+SET setup_token_hash = $1::bytea, setup_token_since = $2::timestamptz, updated_at = now()
+WHERE setup_completed_at IS NULL
+  AND setup_token_hash IS DISTINCT FROM $1::bytea
+`
+
+type SetSetupTokenParams struct {
+	TokenHash []byte
+	Since     time.Time
+}
+
+// A start with a token while setup is not complete: a token of another
+// hash replaces the stored one and starts a new window; the same token
+// keeps its window.
+func (q *Queries) SetSetupToken(ctx context.Context, arg SetSetupTokenParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setSetupToken, arg.TokenHash, arg.Since)
 	if err != nil {
 		return 0, err
 	}

@@ -60,6 +60,8 @@ func (s *Server) routes() []route {
 		au("POST "+passkeyLoginBeginPath, s.handleBeginPasskeyLogin, accessLogin),
 		au("POST "+passkeyLoginFinishPath, s.handleFinishPasskeyLogin, accessLogin),
 		au("DELETE /api/session", s.handleLogout, accessLogin),
+		// The first admin from the operator's setup link (#396, part 3).
+		au("POST "+setupPath, s.handleSetup, accessLogin),
 		// An auditor picks the grant the session reads through (#393).
 		au("PUT /api/session/grant", s.handleSelectGrant, accessSession),
 

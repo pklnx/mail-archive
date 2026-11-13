@@ -82,63 +82,90 @@ type NewUser struct {
 }
 
 // CreateUserInGroup inserts a user, like CreateUser, into u.GroupID. An
-// unknown group is ErrUnknownGroup.
+// unknown group is ErrUnknownGroup. The first user completes the setup of
+// the instance for good (#396): a setup token stops working then.
 func (s *Store) CreateUserInGroup(ctx context.Context, nu NewUser) (*User, error) {
 	if nu.Auditor && nu.Admin {
 		return nil, ErrAuditorAdmin
 	}
 	var u *User
 	err := s.inTx(ctx, func(q *db.Queries) error {
-		group := nu.GroupID
-		if group == 0 {
-			ids, err := q.FirstGroups(ctx)
-			if err != nil {
-				return err
-			}
-			switch len(ids) {
-			case 0:
-				return ErrUnknownGroup
-			case 1:
-				group = ids[0]
-			default:
-				return ErrGroupRequired
-			}
-		}
-		r, err := q.CreateUser(ctx, db.CreateUserParams{
-			Name: nu.Name, PasswordHash: nu.PasswordHash, IsAdmin: nu.Admin, MustChangePassword: nu.Generated, GroupID: group,
-			IsAuditor: nu.Auditor,
-		})
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return fmt.Errorf("user %q: %w", nu.Name, ErrConflict)
-		}
-		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
-			return ErrUnknownGroup
-		}
-		if err != nil {
-			return err
-		}
-		u = userFromDB(r)
-		fillAuditTarget(ctx, TargetUser, u.ID)
-		if e := auditFrom(ctx); e != nil && nu.Auditor {
-			e.Detail("auditor", true)
-		}
-		n, err := q.CountUsers(ctx)
-		if err != nil {
-			return err
-		}
-		if n == 1 {
-			// The first user sets up the instance and gets the accounts
-			// added before; an auditor can do neither.
-			if nu.Auditor {
-				return ErrFirstUserAuditor
-			}
-			_, err = q.AdoptUnownedAccounts(ctx, &u.ID)
-		}
+		var err error
+		u, err = createUser(ctx, q, nu)
 		return err
 	})
 	if err != nil {
 		return nil, err
+	}
+	return u, nil
+}
+
+// createUser inserts nu in the transaction of q. It locks the row of
+// instance_state first, so that the creation of the first user and the
+// setup with a token (CompleteSetup) are serialized (#396, revision 1,
+// point 5): of two that race, the second sees the first's user.
+func createUser(ctx context.Context, q *db.Queries, nu NewUser) (*User, error) {
+	state, err := q.InstanceStateExists(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if state {
+		if _, err := q.LockSetupState(ctx); err != nil {
+			return nil, err
+		}
+	}
+	group := nu.GroupID
+	if group == 0 {
+		ids, err := q.FirstGroups(ctx)
+		if err != nil {
+			return nil, err
+		}
+		switch len(ids) {
+		case 0:
+			return nil, ErrUnknownGroup
+		case 1:
+			group = ids[0]
+		default:
+			return nil, ErrGroupRequired
+		}
+	}
+	r, err := q.CreateUser(ctx, db.CreateUserParams{
+		Name: nu.Name, PasswordHash: nu.PasswordHash, IsAdmin: nu.Admin, MustChangePassword: nu.Generated, GroupID: group,
+		IsAuditor: nu.Auditor,
+	})
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return nil, fmt.Errorf("user %q: %w", nu.Name, ErrConflict)
+	}
+	if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+		return nil, ErrUnknownGroup
+	}
+	if err != nil {
+		return nil, err
+	}
+	u := userFromDB(r)
+	fillAuditTarget(ctx, TargetUser, u.ID)
+	if e := auditFrom(ctx); e != nil && nu.Auditor {
+		e.Detail("auditor", true)
+	}
+	n, err := q.CountUsers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if n == 1 {
+		// The first user sets up the instance and gets the accounts
+		// added before; an auditor can do neither.
+		if nu.Auditor {
+			return nil, ErrFirstUserAuditor
+		}
+		if _, err := q.AdoptUnownedAccounts(ctx, &u.ID); err != nil {
+			return nil, err
+		}
+		if state {
+			if _, err := q.CompleteSetup(ctx, u.ID); err != nil {
+				return nil, err
+			}
+		}
 	}
 	return u, nil
 }
