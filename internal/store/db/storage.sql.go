@@ -136,30 +136,38 @@ func (q *Queries) FoldStorageCounters(ctx context.Context) (int64, error) {
 }
 
 const groupHeldMessages = `-- name: GroupHeldMessages :many
-WITH l AS MATERIALIZED (
-    SELECT ml.message_sha256, ml.folder_id FROM message_locations ml
-    WHERE ml.message_sha256 = ANY ($3::bpchar[])
-)
-SELECT DISTINCT l.message_sha256::text AS sha256
-FROM l
-JOIN folders f ON f.id = l.folder_id
-JOIN accounts a ON a.id = f.account_id
-JOIN users o ON o.id = a.owner_id
-WHERE f.account_id <> $1 AND o.group_id = $2
+SELECT DISTINCT s.sha::text AS sha256
+FROM unnest($1::bpchar[]) AS s (sha)
+CROSS JOIN (
+    SELECT f.id FROM folders f
+    JOIN accounts a ON a.id = f.account_id
+    JOIN users o ON o.id = a.owner_id
+    WHERE o.group_id = $2 AND a.id <> $3
+    OFFSET 0
+) gf
+JOIN LATERAL (
+    SELECT 1 FROM message_locations ml
+    WHERE ml.folder_id = gf.id AND ml.message_sha256 = s.sha
+    LIMIT 1
+) held ON true
 `
 
 type GroupHeldMessagesParams struct {
-	AccountID int64
-	GroupID   int64
 	Shas      []string
+	GroupID   int64
+	AccountID int64
 }
 
 // The hashes of a batch that another account of the group holds (gone
-// locations included). Driven by message_locations_sha_idx (materialized,
-// so that a small group does not turn it into a probe per folder), with
-// the folder, account and owner by primary key.
+// locations included). Driven from the group's own folders: one probe of
+// message_locations_folder_sha_idx per folder and hash, so the cost
+// depends only on the group's folders and the batch, never on how many
+// accounts of other groups hold the same bytes (#539; TestUsageRefreshPlan
+// checks the custom and the generic plan). OFFSET 0 and LIMIT 1 keep the
+// planner from flattening the probes into a lookup by hash
+// (message_locations_sha_idx).
 func (q *Queries) GroupHeldMessages(ctx context.Context, arg GroupHeldMessagesParams) ([]string, error) {
-	rows, err := q.db.Query(ctx, groupHeldMessages, arg.AccountID, arg.GroupID, arg.Shas)
+	rows, err := q.db.Query(ctx, groupHeldMessages, arg.Shas, arg.GroupID, arg.AccountID)
 	if err != nil {
 		return nil, err
 	}

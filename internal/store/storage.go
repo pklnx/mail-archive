@@ -135,8 +135,10 @@ func lockAccountGroup(ctx context.Context, q *db.Queries, t lockTarget) (account
 // (counted in SaveResult.Added). One probe (GroupHeldMessages) finds those
 // another account of the group holds; the rest are new to the group and
 // go into one delta row. The probe runs for every hash new to the account,
-// whether or not it is new to the archive, so its timing tells nothing
-// about other accounts (#539). Without a group, nothing is recorded.
+// whether or not it is new to the archive, and looks only into the group's
+// own folders (message_locations_folder_sha_idx), so its timing depends on
+// the group's folders and the batch, never on other groups (#539). Without
+// a group (an account without an owner), nothing is probed or recorded.
 //
 // Two saves that add the same message to two accounts of one group at the
 // same time may both count it: the figure stays an upper bound, and the

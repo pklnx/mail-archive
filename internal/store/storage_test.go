@@ -513,7 +513,9 @@ func TestUsageRequests(t *testing.T) {
 // TestUsageRefreshPlan: the snapshot aggregates with hashes and no
 // per-row subplan, and reads the sizes with an index-only scan of
 // messages_sha_size_idx, not the message heap; GroupHeldMessages probes
-// message_locations_sha_idx.
+// message_locations_folder_sha_idx from the group's folders, never
+// message_locations_sha_idx (by hash, over every group: #539), in the
+// custom and in the generic plan.
 func TestUsageRefreshPlan(t *testing.T) {
 	f := newUsageFixture(t)
 	u := f.user("alice", f.defaultGroup())
@@ -555,14 +557,34 @@ func TestUsageRefreshPlan(t *testing.T) {
 	if plan := explain(rec.sql); !strings.Contains(plan, "Index Only Scan using messages_sha_size_idx") {
 		t.Errorf("counter check reads the message heap:\n%s", plan)
 	}
-	shas := []string{usageMsg(1, 0).SHA256, usageMsg(2, 0).SHA256}
-	if _, err := db.New(&rec).GroupHeldMessages(f.ctx, db.GroupHeldMessagesParams{Shas: shas, AccountID: 1, GroupID: 1}); !errors.Is(err, errRecorded) {
+	// Account 0: alice's folder is one of the group's other folders.
+	shas := []string{lpadHex(1), lpadHex(2)}
+	if _, err := db.New(&rec).GroupHeldMessages(f.ctx, db.GroupHeldMessagesParams{Shas: shas, AccountID: 0, GroupID: f.defaultGroup()}); !errors.Is(err, errRecorded) {
 		t.Fatalf("record: %v", err)
 	}
-	if plan := explain(rec.sql, rec.args...); !strings.Contains(plan, "message_locations_sha_idx") || strings.Contains(plan, "Seq Scan on message_locations") {
-		t.Errorf("GroupHeldMessages does not probe message_locations_sha_idx:\n%s", plan)
+	probeOK := func(plan string) bool {
+		return strings.Contains(plan, "message_locations_folder_sha_idx") &&
+			!strings.Contains(plan, "message_locations_sha_idx") && !strings.Contains(plan, "Seq Scan on message_locations")
+	}
+	if plan := explain(rec.sql, rec.args...); !probeOK(plan) {
+		t.Errorf("GroupHeldMessages (custom plan) does not probe message_locations_folder_sha_idx only:\n%s", plan)
+	}
+	// The generic plan, as a prepared statement gets it after five runs
+	// (pgx caches statements): an unnamed statement is always planned
+	// with its values, so this uses PREPARE.
+	f.exec("PREPARE group_held(bpchar[], bigint, bigint) AS " + rec.sql)
+	f.exec("SET plan_cache_mode = force_generic_plan")
+	defer f.exec("RESET plan_cache_mode")
+	// EXPLAIN EXECUTE takes no parameters: the values as literals (hex
+	// hashes and numbers).
+	generic := fmt.Sprintf("EXECUTE group_held(ARRAY['%s']::bpchar[], %d, 0)", strings.Join(shas, "','"), f.defaultGroup())
+	if plan := explain(generic); !probeOK(plan) {
+		t.Errorf("GroupHeldMessages (generic plan) does not probe message_locations_folder_sha_idx only:\n%s", plan)
 	}
 }
+
+// lpadHex is the hash TestUsageRefreshPlan stores for message i.
+func lpadHex(i int) string { return fmt.Sprintf("%064x", i) }
 
 // TestStorageMigration: 00041 fills the base from the messages there; Down
 // drops everything; Up again works.
