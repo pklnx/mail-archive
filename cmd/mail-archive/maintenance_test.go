@@ -402,14 +402,17 @@ func TestPgEnvAllowlist(t *testing.T) {
 	t.Setenv("PATH", "/opt/pg/bin:/usr/bin")
 	env := pgToolEnv(t, "postgres://u:url-pw@db.example:6543/arch?sslmode=require&connect_timeout=5&application_name=x")
 	for _, p := range checkPgToolEnv(env, append(basics, "PATH=/opt/pg/bin:/usr/bin", "PGHOST=db.example", "PGPORT=6543", "PGUSER=u",
-		"PGDATABASE=arch", "PGPASSWORD=url-pw", "PGSSLMODE=require", "PGGSSENCMODE=disable")...) {
+		"PGDATABASE=arch", "PGPASSWORD=url-pw", "PGSSLMODE=require", "PGGSSENCMODE=disable",
+		"PGSSLROOTCERT=basic-HOME/.postgresql/root.crt", "PGSSLCERT=basic-HOME/.postgresql/postgresql.crt", "PGSSLKEY=basic-HOME/.postgresql/postgresql.key",
+		"PGSSLSNI=1", "PGSSLNEGOTIATION=postgres", "PGTARGETSESSIONATTRS=any", "PGCHANNELBINDING=prefer")...) {
 		t.Error(p)
 	}
-	// Every basic (PATH included), the six URL variables and
-	// PGGSSENCMODE=disable; the other URL parameters are not passed on, as
-	// before, and neither is the parent's PGAPPNAME (setEnvMarkers).
-	// TestPgToolConn covers the other TLS keys.
-	if len(env) != len(pgToolEnvNames)+7 {
+	// Every basic (PATH included), the five connection variables, the TLS
+	// variables but the empty require_auth, and PGGSSENCMODE=disable; the
+	// other URL parameters are not passed on, as before, and neither is
+	// the parent's PGAPPNAME (setEnvMarkers). TestPgToolConn covers the
+	// TLS keys.
+	if len(env) != len(pgToolEnvNames)+5+8+1 {
 		t.Errorf("%d variables: %v", len(env), env)
 	}
 

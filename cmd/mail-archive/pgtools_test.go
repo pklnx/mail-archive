@@ -212,6 +212,18 @@ func TestRestoreDumpRefusesTLSEnv(t *testing.T) {
 	}
 }
 
+// pgToolDefaultEnv are the TLS variables every tool gets where the URL
+// sets nothing, with HOME home: the defaults named explicitly, the
+// certificate files under home as paths, and GSSAPI encryption off.
+func pgToolDefaultEnv(home string) map[string]string {
+	dir := filepath.Join(home, ".postgresql")
+	return map[string]string{
+		"PGSSLMODE": "prefer", "PGSSLROOTCERT": filepath.Join(dir, "root.crt"), "PGSSLCERT": filepath.Join(dir, "postgresql.crt"),
+		"PGSSLKEY": filepath.Join(dir, "postgresql.key"), "PGSSLSNI": "1", "PGSSLNEGOTIATION": "postgres", "PGTARGETSESSIONATTRS": "any",
+		"PGCHANNELBINDING": "prefer", "PGGSSENCMODE": "disable",
+	}
+}
+
 // TestPgToolConn: what the tools get, and what they refuse.
 func TestPgToolConn(t *testing.T) {
 	home := cleanPgEnv(t)
@@ -224,7 +236,7 @@ func TestPgToolConn(t *testing.T) {
 	for _, c := range []struct {
 		name, url string
 		env       map[string]string
-		want      map[string]string // the PG* variables of the tool, exactly
+		want      map[string]string // the PG* variables of the tool that differ from pgToolDefaultEnv
 	}{
 		{"defaults are left out", "postgres://u:pw@h/db", nil,
 			map[string]string{"PGHOST": "h", "PGPORT": "5432", "PGUSER": "u", "PGDATABASE": "db", "PGPASSWORD": "pw"}},
@@ -274,8 +286,12 @@ func TestPgToolConn(t *testing.T) {
 			}
 			env := pgToolEnv(t, c.url)
 			got := pgVars(env)
+			want := pgToolDefaultEnv(home)
+			for name, value := range c.want {
+				want[name] = value
+			}
+			c.want = want
 			// Every tool gets GSSAPI encryption off, once.
-			c.want["PGGSSENCMODE"] = "disable"
 			n := 0
 			for _, kv := range env {
 				if strings.HasPrefix(kv, "PGGSSENCMODE=") {
@@ -524,5 +540,143 @@ func TestConnStringSettings(t *testing.T) {
 		if _, err := connStringSettings(in); err == nil {
 			t.Errorf("%s: accepted", in)
 		}
+	}
+}
+
+// TestPgToolHomeCertFiles (regression): with the certificate files under
+// HOME/.postgresql and a URL that names none, pgx verifies the server with
+// root.crt and sends postgresql.crt; the tools get the same files as
+// paths, so that a libpq that looks elsewhere for its defaults (libpq 14:
+// the account's home directory) uses them too.
+func TestPgToolHomeCertFiles(t *testing.T) {
+	home := cleanPgEnv(t)
+	dir := filepath.Join(home, ".postgresql")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ca, cert, key := testCerts(t, t.TempDir(), "home")
+	files := map[string]string{ca: "root.crt", cert: "postgresql.crt", key: "postgresql.key"}
+	for from, name := range files {
+		data, err := os.ReadFile(from) //nolint:gosec // the test's own file
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := pgVars(pgToolEnv(t, "postgres://u@h/db?sslmode=require"))
+	for name, file := range map[string]string{"PGSSLROOTCERT": "root.crt", "PGSSLCERT": "postgresql.crt", "PGSSLKEY": "postgresql.key"} {
+		if got[name] != filepath.Join(dir, file) {
+			t.Errorf("%s=%q, want %s", name, got[name], filepath.Join(dir, file))
+		}
+	}
+
+	// A certificate without its key: pgx ignores both, libpq refuses at
+	// connect time, so the commands refuse before they start.
+	if err := os.Remove(filepath.Join(dir, "postgresql.key")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolvePgToolConn("pg_dump", "postgres://u@h/db?sslmode=require", os.Environ()); err == nil ||
+		!strings.Contains(err.Error(), "only one of postgresql.crt and postgresql.key") {
+		t.Errorf("certificate without key: %v", err)
+	}
+	if _, err := resolvePgToolConn("pg_dump", "postgres://u@h/db?sslmode=require&sslcert="+url.QueryEscape(cert)+"&sslkey="+url.QueryEscape(key), os.Environ()); err != nil {
+		t.Errorf("certificate files in the URL: %v", err)
+	}
+
+	// Without HOME, pgx looks for no file and libpq in the account's home
+	// directory: refused where TLS is used, unless the URL names the files.
+	t.Setenv("HOME", "")
+	if err := os.Unsetenv("HOME"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolvePgToolConn("pg_dump", "postgres://u@h/db?sslmode=require", os.Environ()); err == nil || !strings.Contains(err.Error(), "HOME is not set") {
+		t.Errorf("without HOME: %v", err)
+	}
+	if _, err := resolvePgToolConn("pg_dump", "postgres://u@h/db?sslmode=disable", os.Environ()); err != nil {
+		t.Errorf("without HOME, without TLS: %v", err)
+	}
+	full := "postgres://u@h/db?sslmode=verify-ca&sslrootcert=" + url.QueryEscape(ca) + "&sslcert=" + url.QueryEscape(cert) + "&sslkey=" + url.QueryEscape(key)
+	if _, err := resolvePgToolConn("pg_dump", full, os.Environ()); err != nil {
+		t.Errorf("without HOME, files in the URL: %v", err)
+	}
+}
+
+// TestPgToolEnvMatchesCheckString: the tools get exactly the settings the
+// cross-check compares. Key by key, the variable equals the value in
+// checkString; a certificate file that does not exist is empty there, and
+// only an empty value is left out of the environment. A key in one but
+// not the other fails.
+func TestPgToolEnvMatchesCheckString(t *testing.T) {
+	home := cleanPgEnv(t)
+	ca, cert, key := testCerts(t, t.TempDir(), "m")
+	envName := map[string]string{"database": "PGDATABASE"}
+	for _, k := range append(append([]struct{ key, env string }{}, pgToolConnKeys...), pgToolTLSKeys...) {
+		envName[k.key] = k.env
+	}
+	check := func(raw string) {
+		t.Helper()
+		conn, err := resolvePgToolConn("pg_dump", raw, os.Environ())
+		if err != nil {
+			t.Fatalf("%s: %v", raw, err)
+		}
+		cs, err := connStringSettings(conn.checkString())
+		if err != nil {
+			t.Fatal(err)
+		}
+		vars := pgVars(conn.env(os.Environ()))
+		seen := map[string]bool{"PGPASSWORD": true}
+		for _, k := range pgToolFixedKeys {
+			if vars[k.env] != k.value {
+				t.Errorf("%s: %s=%q, want %q", raw, k.env, vars[k.env], k.value)
+			}
+			seen[k.env] = true
+		}
+		for key, cv := range cs {
+			name, ok := envName[key]
+			if !ok || key == "password" {
+				t.Errorf("%s: checkString names %s, which the tools do not get", raw, key)
+				continue
+			}
+			seen[name] = true
+			ev, inEnv := vars[name]
+			switch {
+			case !inEnv && cv != "":
+				t.Errorf("%s: %s=%q is compared but not passed on", raw, key, cv)
+			case inEnv && ev != cv && (cv != "" || fileExists(ev)):
+				t.Errorf("%s: the tools get %s=%q, the cross-check compares %q", raw, name, ev, cv)
+			}
+		}
+		for name := range vars {
+			if !seen[name] {
+				t.Errorf("%s: the tools get %s, which the cross-check does not compare", raw, name)
+			}
+		}
+	}
+	urls := []string{
+		"postgres://u:pw@h/db",
+		"postgres://u@h1,h2:5433/db?sslmode=verify-ca&sslrootcert=" + url.QueryEscape(ca) + "&sslcert=" + url.QueryEscape(cert) + "&sslkey=" +
+			url.QueryEscape(key) + "&target_session_attrs=read-write&channel_binding=require&require_auth=scram-sha-256&sslsni=0",
+		"postgres://u@h/db?sslnegotiation=direct",
+		"postgres://u@h/db?sslrootcert=system",
+		"host=h user=u dbname=db sslmode=disable",
+	}
+	for _, raw := range urls {
+		check(raw)
+	}
+	// And with the default files under HOME.
+	dir := filepath.Join(home, ".postgresql")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for from, name := range map[string]string{ca: "root.crt", cert: "postgresql.crt", key: "postgresql.key"} {
+		data, _ := os.ReadFile(from) //nolint:gosec // the test's own file
+		if err := os.WriteFile(filepath.Join(dir, name), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, raw := range append(urls, "postgres://u@h/db?sslmode=require") {
+		check(raw)
 	}
 }

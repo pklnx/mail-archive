@@ -94,10 +94,13 @@ command refuses to run (see below):
   last value, as for the app. Where the app's driver derives the mode from
   another key, the tools get that mode too: `sslnegotiation=direct` without
   `sslmode` is `require`, and `sslrootcert=system` is always `verify-full`.
-  What the URL leaves out takes libpq's default. The app finds
-  `~/.postgresql/root.crt`, `postgresql.crt` and `postgresql.key` through
-  `HOME`; recent libpq versions do too, older ones through the home
-  directory of the user account, so keep `HOME` that directory.
+  What the URL leaves out, the tools get named explicitly with the value
+  the app takes, so that it does not depend on the libpq version's own
+  defaults: `prefer`, `sslsni=1`, and for `sslrootcert`, `sslcert` and
+  `sslkey` the files the app looks at, `$HOME/.postgresql/root.crt`,
+  `postgresql.crt` and `postgresql.key` (a file that does not exist is
+  not used, by the app or the tools). Only an empty `require_auth` is
+  left out, which means the same in every libpq version.
 - **`PGGSSENCMODE=disable`,** always: libpq built with GSSAPI would
   otherwise prefer GSSAPI encryption to TLS, whatever `sslmode` says,
   where Kerberos credentials and the server allow it. The app never uses
@@ -115,7 +118,7 @@ included), the app with Go's TLS: the settings are the same, the TLS
 libraries are not.
 
 Both commands refuse before `backup` writes its audit entry or anything
-into `DIR`, before `restore-dump` opens the dump, and before either runs
+into `DIR`, before `restore-dump` decrypts the dump, and before either runs
 `pg_dump` or `pg_restore`, when:
 
 - the process sets `PGSSLMODE`, `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY`,
@@ -129,6 +132,11 @@ into `DIR`, before `restore-dump` opens the dump, and before either runs
   other settings than the app, and the password of a client key could only
   reach them on the command line. Put the settings into the URL, and use a
   client key without a password;
+- `HOME` is not set, the connection uses TLS and the URL does not name
+  `sslrootcert`, `sslcert` and `sslkey`: the app then looks for no
+  certificate file, libpq in the home directory of the user account;
+- `$HOME/.postgresql` holds `postgresql.crt` without `postgresql.key` or
+  the other way round, which the app ignores and libpq refuses;
 - the URL sets `ssl` to anything but `true`, or a keyword/value string
   (`host=… sslmode=…`) sets `ssl` at all: use `sslmode`;
 - the URL sets `sslnegotiation=direct` with `sslmode=allow` or `disable`,

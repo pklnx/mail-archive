@@ -80,10 +80,11 @@ const pgToolDocs = `see "Backups without Docker" in the operations guide`
 
 // pgToolConn is the connection of pg_dump or pg_restore: one map of libpq
 // keywords, from which both the tools' environment (env) and the string
-// of the cross-check (checkString) are built. It holds host, port, user,
-// dbname, the password when there is one, and the TLS keys the connection
-// string sets to a value; a TLS key it does not hold takes libpq's default
-// in the tool.
+// of the cross-check (checkString) are built: the tools get exactly the
+// settings the cross-check compares. It holds host, port, user, dbname,
+// the password when there is one, every TLS key with its value (the
+// connection string's, else the default pgx takes, the certificate files
+// under HOME/.postgresql named as paths), and gssencmode.
 type pgToolConn struct {
 	settings map[string]string
 }
@@ -115,13 +116,20 @@ func resolvePgToolConn(tool, databaseURL string, environ []string) (*pgToolConn,
 	if app.Password != "" {
 		conn.settings["password"] = app.Password
 	}
+	defaults, homeOK := libpqTLSDefaults()
 	for _, k := range pgToolTLSKeys {
-		// An empty value is libpq's default in the tool: the variable is
-		// left out. Where pgx reads the empty value differently (an empty
-		// sslrootcert is no root certificate for pgx, the default file for
-		// libpq), the cross-check refuses.
-		if v := given[k.key]; v != "" {
-			conn.settings[k.key] = v
+		// An empty value is the default. Where pgx reads an empty value
+		// differently from the default (an empty sslrootcert is no root
+		// certificate for pgx), the cross-check refuses.
+		v := given[k.key]
+		if v == "" {
+			v = defaults[k.key]
+		}
+		conn.settings[k.key] = v
+	}
+	if usesTLS(app) {
+		if err := refuseHomeDefaults(tool, given, homeOK); err != nil {
+			return nil, err
 		}
 	}
 	if err := conn.derivePgxMode(tool); err != nil {
@@ -138,6 +146,38 @@ func resolvePgToolConn(tool, databaseURL string, environ []string) (*pgToolConn,
 		return nil, fmt.Errorf("%s would connect differently from the app: %w; put the TLS settings into %s (%s)", tool, err, config.EnvDatabaseURL, pgToolDocs)
 	}
 	return conn, nil
+}
+
+// usesTLS reports whether any connection attempt of cfg uses TLS.
+func usesTLS(cfg *pgconn.Config) bool {
+	for _, a := range pgAttempts(cfg) {
+		if a.TLSConfig != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// refuseHomeDefaults refuses default certificate files that the tools
+// cannot be given exactly: without HOME pgx looks for none while libpq
+// looks in the account's home directory; and a client certificate under
+// HOME/.postgresql without its key (or the key without the certificate),
+// which pgx ignores and libpq refuses at connect time, after the audit
+// entry.
+func refuseHomeDefaults(tool string, given map[string]string, homeOK bool) error {
+	unset := func(key string) bool { return given[key] == "" }
+	if !homeOK && (unset("sslrootcert") || unset("sslcert") || unset("sslkey")) {
+		return fmt.Errorf("HOME is not set, so %s would look for its certificate files elsewhere than the app; set HOME or put sslrootcert, sslcert and sslkey into %s (%s)",
+			tool, config.EnvDatabaseURL, pgToolDocs)
+	}
+	if homeOK && unset("sslcert") && unset("sslkey") {
+		d, _ := libpqTLSDefaults()
+		if fileExists(d["sslcert"]) != fileExists(d["sslkey"]) {
+			return fmt.Errorf("HOME/.postgresql holds only one of postgresql.crt and postgresql.key, which %s refuses; add the other or remove it (%s)",
+				tool, pgToolDocs)
+		}
+	}
+	return nil
 }
 
 // derivePgxMode gives the tools the sslmode pgx derives from other keys,
@@ -224,13 +264,24 @@ func pgAttempts(cfg *pgconn.Config) []*pgconn.FallbackConfig {
 }
 
 // env is the whole environment of the tool: the allowlisted variables of
-// environ (config.ChildEnv), then the libpq variables of c, PGGSSENCMODE
-// included. A TLS key c does not hold is left out, so the tool takes
-// libpq's default.
+// environ (config.ChildEnv), then the libpq variables of c, every TLS key
+// and PGGSSENCMODE included, so no setting depends on the libpq version's
+// own defaults. Only an empty value is left out:
+//   - require_auth empty is no restriction, the same in every supported
+//     libpq (14 and 15 do not know the key, 16 and newer default to it);
+//   - a certificate file is empty only without HOME on a connection
+//     without TLS (with TLS, refuseHomeDefaults refuses), where libpq does
+//     not read it.
+//
+// The certificate files are named as paths whether they exist or not:
+// libpq of every supported version reads a named root or client
+// certificate that does not exist as none (and refuses verify-ca and
+// verify-full without a root certificate), as pgx reads the missing
+// default file; checkString spells such a path as empty.
 func (c *pgToolConn) env(environ []string) []string {
 	var libpq []string
 	for _, k := range append(append([]struct{ key, env string }{}, pgToolConnKeys...), pgToolTLSKeys...) {
-		if v, ok := c.settings[k.key]; ok {
+		if v, ok := c.settings[k.key]; ok && v != "" {
 			libpq = append(libpq, k.env+"="+v)
 		}
 	}
@@ -243,14 +294,13 @@ func (c *pgToolConn) env(environ []string) []string {
 }
 
 // checkString is c as a keyword/value connection string that names every
-// key the cross-check compares: a TLS key c does not hold gets the value
-// libpq takes by default (for the certificate files, the file under
-// HOME/.postgresql when it exists, as pgx and libpq both look there). As
+// key the cross-check compares, with the values env gives the tools; a
+// certificate file that does not exist is spelled empty, as pgx reads a
+// named missing file as an error but the missing default file as none. As
 // the connection string wins over the environment key by key, no variable
 // of the process can change its parse. The password is left out; the
 // cross-check does not compare it.
 func (c *pgToolConn) checkString() string {
-	defaults := libpqTLSDefaults()
 	var b strings.Builder
 	write := func(key, value string) {
 		if b.Len() > 0 {
@@ -264,36 +314,41 @@ func (c *pgToolConn) checkString() string {
 		}
 	}
 	for _, k := range pgToolTLSKeys {
-		v, ok := c.settings[k.key]
-		if !ok {
-			v = defaults[k.key]
-		}
-		write(k.key, v)
+		write(k.key, checkValue(k.key, c.settings[k.key]))
 	}
 	return b.String()
 }
 
-// libpqTLSDefaults are the values libpq takes for a TLS key without a
-// variable: the files under HOME/.postgresql where they exist (the client
-// certificate only together with its key, as pgx does), and the fixed
-// defaults.
-func libpqTLSDefaults() map[string]string {
-	d := map[string]string{
+// checkValue is the value of key in checkString for the value v the tools
+// get: a certificate file that does not exist is empty.
+func checkValue(key, v string) string {
+	switch key {
+	case "sslrootcert", "sslcert", "sslkey":
+		if v != "" && v != "system" && !fileExists(v) {
+			return ""
+		}
+	}
+	return v
+}
+
+// libpqTLSDefaults are the values pgx takes for a TLS key the connection
+// string does not set: the fixed defaults, and the certificate files under
+// HOME/.postgresql, where pgx looks (os.UserHomeDir), as paths whether
+// they exist or not. homeOK is false without HOME; the files are empty
+// then.
+func libpqTLSDefaults() (d map[string]string, homeOK bool) {
+	d = map[string]string{
 		"sslmode": "prefer", "sslrootcert": "", "sslcert": "", "sslkey": "", "sslsni": "1",
 		"sslnegotiation": "postgres", "target_session_attrs": "any", "channel_binding": "prefer", "require_auth": "",
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return d
+		return d, false
 	}
 	dir := filepath.Join(home, ".postgresql")
-	if fileExists(filepath.Join(dir, "postgresql.crt")) && fileExists(filepath.Join(dir, "postgresql.key")) {
-		d["sslcert"], d["sslkey"] = filepath.Join(dir, "postgresql.crt"), filepath.Join(dir, "postgresql.key")
-	}
-	if fileExists(filepath.Join(dir, "root.crt")) {
-		d["sslrootcert"] = filepath.Join(dir, "root.crt")
-	}
-	return d
+	d["sslrootcert"] = filepath.Join(dir, "root.crt")
+	d["sslcert"], d["sslkey"] = filepath.Join(dir, "postgresql.crt"), filepath.Join(dir, "postgresql.key")
+	return d, true
 }
 
 // quoteConnValue quotes a value of a keyword/value connection string.
