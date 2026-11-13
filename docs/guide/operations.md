@@ -1338,7 +1338,13 @@ things make it visible:
   [Syncing](./syncing#alerts) for what counts. The same goes for the runs of a
   [recurring fill](./journaling#keep-importing-recurring-fill) of an smtp
   account. Another alert reports mail deleted on the server in bulk; see
-  [Reconcile](./syncing#alert-for-mail-deleted-on-the-server).
+  [Reconcile](./syncing#alert-for-mail-deleted-on-the-server). Storage
+  alerts report the quota state of the instance and of each customer
+  group ([Storage alerts](#storage-alerts)). By default an alert names
+  accounts, fills and groups by ID only ([Detail](#detail-ids-or-full)).
+- **`/api/metrics`** gives admins and their monitoring the instance's
+  figures in the Prometheus text format, IDs and counts only; see
+  [Metrics](#metrics).
 - **`/healthz`** answers `ok` once the web server is ready, and `503` with
   `{"status":"starting"}` while it starts (it waits for a running
   `./ma migrate` or applies migrations): a monitor tells starting from down.
@@ -1367,9 +1373,10 @@ MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL=https://ntfy.sh/mail-archive-k3v9q2x7w1
 MAIL_ARCHIVE_NOTIFY_WEBHOOK_FORMAT=ntfy
 ```
 
-Anyone who knows a topic on the public ntfy.sh server can read it, and the
-alerts name the accounts and their owners. Use a long random topic, or
-better a protected topic with an access token:
+Anyone who knows a topic on the public ntfy.sh server can read it. Alerts
+carry IDs only by default, but they still tell when and how often syncs
+fail. Use a long random topic, or better a protected topic with an access
+token:
 
 ```sh
 MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION=Bearer tk_...
@@ -1387,7 +1394,25 @@ and the token travel unencrypted.
 with the format `json`. They show the `text` (Slack, Mattermost) or `content`
 (Discord) field.
 
-**How names and errors appear.** Account and owner names, mailboxes, sync
+### Detail: ids or full
+
+Webhook receivers are often services of third parties (ntfy.sh, Slack,
+Discord). So by default (`MAIL_ARCHIVE_NOTIFY_WEBHOOK_DETAIL=ids`) an alert
+names accounts, fills and customer groups by their ID only: no account or
+owner names, no IMAP user names (`mailbox`), no folder names and no error
+texts, and `title` and `message` are fixed text with IDs, for example
+"Mail archive: sync of account 3 keeps failing" and "Account 3 failed 3
+syncs in a row since 2026-10-01 12:00 UTC.". The entries in `accounts` have
+no `account`, `owner`, `lastError`, `mailbox`, `folders` or `moreFolders`
+field. `./ma status` shows which account an ID is, and `./ma usage --json`
+which account or group.
+
+`MAIL_ARCHIVE_NOTIFY_WEBHOOK_DETAIL=full` adds the names, mailboxes, folder
+names and the last error (up to 200 characters). That sends customer data
+to the webhook's operator: use it only for a receiver you run yourself, for
+example on a test instance. The examples below show `full`.
+
+**How names and errors appear** (with `full`). Account and owner names, mailboxes, sync
 errors and folder names come from users and mail servers, so alerts show
 them as literal text, never as formatting, links or mentions:
 
@@ -1426,7 +1451,7 @@ them as literal text, never as formatting, links or mentions:
 ```
 
 `event` is `failing`, `recovered`, `mixed` (alerts and recoveries in one
-message), `gone` (mail deleted on the server) or `test`.
+message), `gone` (mail deleted on the server), `storage` or `test`.
 
 A [recurring fill](./journaling#keep-importing-recurring-fill) whose runs
 keep failing, for example because the mailbox's password changed, is
@@ -1472,6 +1497,37 @@ never share a message. Several accounts that change at the same time go into
 one message (up to 50 per request). The `id` is also sent as the
 `X-Mail-Archive-Id` header.
 
+### Storage alerts
+
+When the quota state of the instance or of a customer group changes
+(`ok`, `warn`, `full`, `overflow`, and `disk_low` for the instance), one
+`storage` message is sent per change, in both detail modes with IDs and
+figures only:
+
+```json
+{
+  "id": "storage:4:2",
+  "event": "storage",
+  "title": "Mail archive: storage of group 4 at 82% of 50.0 GiB",
+  "message": "Storage of group 4: warn since 2026-10-01 12:00 UTC, 41.0 GiB used of 50.0 GiB (82%).",
+  "text": "…", "content": "…",
+  "accounts": [],
+  "storage": [{"id": "storage:4:2", "event": "storage", "level": "warn", "scope": "group", "groupId": 4,
+               "usedBytes": 44023414784, "quotaBytes": 53687091200, "percent": 82, "since": "2026-10-01T12:00:00Z"}]
+}
+```
+
+`scope` is `instance` (then `groupId` is `null`) or `group`. `usedBytes` is
+the scope's message bytes after deduplication when the alert is sent;
+`quotaBytes` and `percent` are `null` without a quota. The `id` names the
+scope (`instance` or the group ID) and counts its changes, so `warn`, `ok`
+and `warn` again are three messages with three IDs. Changes that follow
+each other faster than they can be sent go out once, with the latest
+state. A group that is deleted takes its pending alert with it. With ntfy a
+level other than `ok` has the priority `high` and the tag `warning`.
+`./ma usage --json` shows which group an ID is. The storage quota checks
+write the states; while every state stays `ok`, no storage alert is sent.
+
 Alerts are delivered **at least once**: if the server stops right after the
 receiver accepted a message, it is sent again with the same `id`. ntfy,
 Gotify and Slack do not drop such repeats; a receiver of your own can use
@@ -1482,8 +1538,67 @@ like `400` or `404` usually means a wrong URL, token or format: it is logged
 as an error and retried hourly. Redirects are not followed.
 
 The log records each alert (`alert sent`, `recovery sent`, `loss alert sent`)
-with the account and its owner. It never contains the webhook URL, the
-authorization or the message; failed attempts name only the scheme and host.
+with the account and its owner, also with the detail `ids`: logs are
+customer data ([Security](../reference/security#operator-admin-and-customer-groups)).
+`storage alert sent` names the scope by ID. The log never contains the
+webhook URL, the authorization or the message; failed attempts name only
+the scheme and host.
+
+### Metrics
+
+`GET /api/metrics` gives the instance's figures in the Prometheus text
+format (0.0.4) for a monitoring system. Only admins read it: with their
+session, or with an API key with the scope `metrics`, which only an admin
+can create (Profile → API keys, with the password and a 2FA code, like
+every key) and which has no other scope. Such a key opens no other route,
+and a `read` or `sync` key gets `403` here. The owner's role and lock are
+checked on every request: a key of an admin who is demoted gets `403`, of
+one who is locked `401`. Revoke it in the profile like any key.
+
+A Prometheus scrape job:
+
+```yaml
+scrape_configs:
+  - job_name: mail-archive
+    scheme: https
+    metrics_path: /api/metrics
+    authorization:
+      credentials_file: /etc/prometheus/mail-archive.key   # the ma_… key
+    static_configs:
+      - targets: ["archive.example.org"]
+```
+
+The answer is cached for 15 seconds, so a shorter scrape interval adds
+nothing. It holds IDs, counts, times and fixed values only, never a name,
+host, IMAP user name, address, folder, subject or error text, because
+scrapes often end in monitoring services of third parties:
+
+| Metric | Labels | Meaning |
+|---|---|---|
+| `mail_archive_build_info` | `version` | Always 1. |
+| `mail_archive_schema_version`, `mail_archive_schema_latest_version`, `mail_archive_migrations_pending` | | The database's migration, this binary's newest, and how many are not applied. |
+| `mail_archive_storage_messages`, `mail_archive_storage_bytes` | `scope` (`instance`, `group`, `ungrouped`), `group_id` | Unique messages and their bytes: exact for the instance, as of the last snapshot plus what was added since for a group, at the last snapshot for the accounts without a group. |
+| `mail_archive_storage_quota_bytes` | `scope`, `group_id` | The quota; absent without one. |
+| `mail_archive_storage_state` | `scope`, `group_id`, `state` | 1 for the current quota state, 0 for the others. |
+| `mail_archive_storage_state_since_timestamp_seconds` | `scope`, `group_id` | Since when. |
+| `mail_archive_storage_snapshot_timestamp_seconds`, `mail_archive_storage_counter_drift_bytes` | | The last usage snapshot and its check of the counters (0 is right). |
+| `mail_archive_account_messages`, `mail_archive_account_bytes` | `account_id`, `group_id`, `kind` | Per account that is not removed, at the last snapshot. A message in several accounts counts in each. |
+| `mail_archive_account_enabled` | `account_id` | 1 when enabled. |
+| `mail_archive_account_health` | `account_id`, `health` (`ok`, `failing`, `stale`) | 1 for the current health, as in `/healthz/sync`. |
+| `mail_archive_account_last_success_timestamp_seconds` | `account_id` | The last successful sync of an IMAP account. |
+| `mail_archive_disk_free_bytes`, `mail_archive_disk_total_bytes` | | The data directory's file system. The PostgreSQL volume is not measured. |
+| `mail_archive_database_bytes`, `mail_archive_database_relation_bytes` | `table` | The database and its largest tables, at the last snapshot. |
+| `mail_archive_jobs` | `job_kind`, `state` (`queued`, `retrying`, `running`, `failed`) | Background jobs with work that is not done. |
+| `mail_archive_job_oldest_due_seconds` | `job_kind` | How long the oldest due job has waited. |
+| `mail_archive_users` | `kind` (`admin`, `member`, `auditor`), `state` (`active`, `locked`) | Users. |
+| `mail_archive_encryption_state` | `state` (`off`, `on`, `encrypting`, `decrypting`, `rekeying`) | Encryption at rest: 1 for the current state. |
+| `mail_archive_last_backup_timestamp_seconds` | | The newest `./ma backup` in the audit log; 0 when none in the last 30 days. |
+| `mail_archive_smtp_storage_deferrals_total` | | SMTP recipients deferred with `452` for storage since the start. |
+
+Exclusive bytes per account (what a purge would free) are computed across
+customer groups and are not in the metrics; `./ma usage` shows them. A
+label value that does not match its fixed pattern is left out with its
+sample, so a name can never end up in a label.
 
 ### /healthz/sync
 
@@ -1543,3 +1658,9 @@ docker compose logs web --tail 100
 ```
 
 Set `MAIL_ARCHIVE_LOG_LEVEL=debug` in `.env` for more detail.
+
+Logs contain customer data: SMTP senders and recipients, account, user and
+folder names, and the texts of server errors. On a hosted instance, treat
+them like the archive: limit who reads them, keep them only as long as
+needed, and cover both in the data processing agreement
+([Security](../reference/security#operator-admin-and-customer-groups)).

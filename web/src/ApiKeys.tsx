@@ -26,6 +26,16 @@ import { t } from "./i18n";
 import { ViewFallback } from "./lazyView";
 import { FormError } from "./notices";
 
+/**
+ * The scopes after a checkbox changed: metrics stands alone, so choosing
+ * it clears read and sync, and choosing read or sync clears metrics.
+ */
+export function toggleScope(cur: ApiKeyScope[], s: ApiKeyScope, on: boolean): ApiKeyScope[] {
+  if (!on) return cur.filter((x) => x !== s);
+  if (s === "metrics") return ["metrics"];
+  return [...cur.filter((x) => x !== s && x !== "metrics"), s];
+}
+
 /** The expiry choices, in days; null is no expiry. */
 export const expiryChoices: (number | null)[] = [30, 90, 365, null];
 
@@ -195,9 +205,9 @@ export function NewKeyPanel({ created, done }: { created: NewApiKey; done: () =>
  * The user's API keys on the profile page: list, create, revoke.
  * twoFactorVersion changes when two-factor authentication was turned on or
  * off elsewhere on the page; the section then asks the server again whether
- * a code is needed.
+ * a code is needed. Admins also get the metrics scope.
  */
-export function ApiKeySection({ twoFactorVersion = 0 }: { twoFactorVersion?: number }) {
+export function ApiKeySection({ twoFactorVersion = 0, admin = false }: { twoFactorVersion?: number; admin?: boolean }) {
   const [list, setList] = useState<ApiKeyList | null>(null);
   const [twoFactor, setTwoFactor] = useState(false);
   const [name, setName] = useState("");
@@ -225,7 +235,7 @@ export function ApiKeySection({ twoFactorVersion = 0 }: { twoFactorVersion?: num
   if (!list) return error ? <FormError text={error} /> : <ViewFallback inline />;
 
   const active = list.keys.filter((k) => k.state === "active").length;
-  const toggle = (s: ApiKeyScope, on: boolean) => setScopes((cur) => (on ? [...cur.filter((x) => x !== s), s] : cur.filter((x) => x !== s)));
+  const toggle = (s: ApiKeyScope, on: boolean) => setScopes((cur) => toggleScope(cur, s, on));
 
   const create = async (e: FormEvent) => {
     e.preventDefault();
@@ -301,6 +311,14 @@ export function ApiKeySection({ twoFactorVersion = 0 }: { twoFactorVersion?: num
                 checked={scopes.includes("sync")}
                 onChange={(_, { checked }) => toggle("sync", checked)}
               />
+              {admin && (
+                <Checkbox
+                  id={`${id}-metrics`}
+                  labelText={t.apiKeyScopeMetrics}
+                  checked={scopes.includes("metrics")}
+                  onChange={(_, { checked }) => toggle("metrics", checked)}
+                />
+              )}
             </CheckboxGroup>
             <Select
               id={`${id}-expiry`}
