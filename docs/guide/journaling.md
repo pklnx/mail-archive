@@ -553,7 +553,11 @@ continues it where it stopped (the password is asked again), and so does a
 fill whose folders partly failed. `--cancel` stops a fill that another
 process runs. `./ma account fill journal` lists the fills with their counts:
 scanned, imported, after the cut-off, journaled, already there and deleted by
-retention; the account's page shows the same.
+retention; the account's page shows the same. *Deleted by retention* counts
+messages that retention or an account purge deleted from this account or
+another account of its customer group, and that would already be expired in
+`JOURNAL` (see [Deletion](../reference/cli#deletion)); what other groups
+deleted does not count.
 
 **From the web server.** A fill started in the web UI (or the
 [API](../reference/api#fills)) runs in the web server's background, one at a

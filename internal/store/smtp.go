@@ -341,7 +341,7 @@ func (s *Store) ReceiveMessage(ctx context.Context, accountID int64, meta Messag
 			return err
 		}
 		received := env.ReceivedAt
-		skip, err := skipDeleted(ctx, q, folder.ID, []MessageMeta{meta}, []Location{{InternalDate: received}})
+		skip, err := skipDeleted(ctx, q, group, folder.ID, []MessageMeta{meta}, []Location{{InternalDate: received}})
 		if err != nil {
 			return err
 		}

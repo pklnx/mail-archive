@@ -182,6 +182,36 @@ func (q *Queries) InsertPurgeDeletions(ctx context.Context, shas []string) (int6
 	return result.RowsAffected(), nil
 }
 
+const insertPurgeMarks = `-- name: InsertPurgeMarks :execrows
+INSERT INTO deletion_marks (sha256, archived_at, account_ids, group_ids, purge_id, tombstone_id)
+SELECT m.sha256, m.created_at, ARRAY[$1::bigint],
+       ARRAY[(SELECT coalesce(o.group_id, 0) FROM accounts a LEFT JOIN users o ON o.id = a.owner_id
+              WHERE a.id = $1::bigint)],
+       $2::bigint,
+       (SELECT max(d.id) FROM deleted_messages d WHERE d.purge_id = $2::bigint AND d.sha256 = m.sha256)
+FROM messages m
+WHERE m.sha256 = ANY ($3::bpchar[])
+ORDER BY m.sha256
+`
+
+type InsertPurgeMarksParams struct {
+	AccountID int64
+	PurgeID   int64
+	Shas      []string
+}
+
+// The deletion marks of a purge's batch (#539), after its tombstones and
+// before the account's locations go: every purged message, whether or not
+// it stays in other accounts, marked with the account and its customer
+// group (0: without an owner), and with its tombstone if it has one.
+func (q *Queries) InsertPurgeMarks(ctx context.Context, arg InsertPurgeMarksParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertPurgeMarks, arg.AccountID, arg.PurgeID, arg.Shas)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const insertPurgeTombstones = `-- name: InsertPurgeTombstones :execrows
 INSERT INTO deleted_messages (sha256, size, message_seq, archived_at, retain_until, locations, purge_id)
 SELECT m.sha256, m.size, m.seq, m.created_at, NULL,

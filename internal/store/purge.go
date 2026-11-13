@@ -580,8 +580,9 @@ type PurgeBatchResult struct {
 // rules and the holds naming or covering it (PurgeBlockedError; the caller
 // then cancels the purge with CancelPurge), and that it deletes no more
 // than confirmed (PurgeChangedError). For the messages without a location
-// elsewhere it writes the tombstones and the deletion records, deletes
-// the account's locations of all of them, deletes those messages and
+// elsewhere it writes the tombstones and the deletion records; for all of
+// them a deletion mark of the account and its customer group (#539). It
+// deletes the account's locations of all of them, deletes those messages and
 // schedules their files for removal after grace. The caller holds the
 // blob lock exclusively, so no writer adds a location meanwhile. An audit
 // entry from WithAudit in ctx is written with it.
@@ -632,6 +633,13 @@ func (s *Store) PurgeBatch(ctx context.Context, purgeID int64, limit int, grace 
 			if _, err := q.InsertPurgeDeletions(ctx, last); err != nil {
 				return fmt.Errorf("deletion records: %w", err)
 			}
+		}
+		// Every purged message gets a mark of the account and its group,
+		// also one that stays in other accounts and so gets no tombstone:
+		// whether it is archived again in this group then never depends on
+		// other groups (#539).
+		if _, err := q.InsertPurgeMarks(ctx, db.InsertPurgeMarksParams{AccountID: a.ID, PurgeID: purgeID, Shas: shas}); err != nil {
+			return fmt.Errorf("deletion marks: %w", err)
 		}
 		if err := q.SetPurgeAccount(ctx, strconv.FormatInt(a.ID, 10)); err != nil {
 			return err

@@ -131,6 +131,48 @@ The first import into a folder sets its `UIDVALIDITY` to the import's start
 time; UIDs continue from the folder's last UID. An import holds the account's
 lock with `TryLockSyncForWrite`, like a sync, and records a `sync_runs` row.
 
+### Deleted messages per customer group
+
+A save does not store a message that retention or a purge deleted from its
+account or its customer group, where it would already be expired
+(`skipDeleted`, used by `SaveBatch`, fills, journal imports and SMTP
+deliveries; #539, part 1). Every deletion writes a row of
+`deletion_marks` in its transaction, before the locations go: a retention
+run with every account and group that held the message, a purge with the
+purged account and its group for every purged message, also one that stays
+in other accounts. A group is the owner's `group_id`, 0 for accounts
+without an owner. A tombstone (`deleted_messages`) that no mark references
+(`tombstone_id`, unique) counts for every group: those written before
+1.6.0, or by an older process after the upgrade.
+
+The save first locks its account and owner `FOR KEY SHARE`
+(`lockAccountGroup`, the same as storage usage, #397), so a move to another
+group waits for it. `DeletionMarksOf` then returns the batch's hashes with
+a mark of the account or the group, or a tombstone without a mark. For
+those only, `GroupHasLocations` checks whether an account of the group, the
+saving one included, holds a location: one probe of
+`message_locations_folder_sha_idx` per folder of the group and hash, never
+a lookup by hash in `message_locations_sha_idx`, so its time depends on the
+group's folders and the batch, not on copies in other groups. The
+`LIMIT 1` of its `LATERAL` keeps the planner from flattening it, in the
+custom and the generic plan (`TestGroupHasLocationsPlan`).
+
+Measured on PostgreSQL 16 with server and client pinned to two cores,
+warm cache, pgx with its statement cache, 100 hashes the group does not
+hold (every folder probed for every hash; medians,
+`TestDeletionMarkLookupCost` with `MAIL_ARCHIVE_BENCH=1`):
+
+| Folders of the group | `GroupHasLocations` per batch | `SaveBatch` of 100 marked messages (all skipped) |
+|---|---|---|
+| 40 | 8 ms | 97 ms |
+| 400 | 55 ms | 140 ms |
+| 1,500 | 195 ms | 296 ms |
+| 1,500 (group 0, an import before adoption) | 208 ms | 295 ms |
+| 5,000 (group 0) | 613 ms | 731 ms |
+
+About 1.3 µs per probe. A batch without marks does no group lookup
+(`SaveBatch` of 100 new messages: 30 to 47 ms on the same data).
+
 ## Sync and concurrency
 
 `archive.Syncer` syncs one account: it takes the account's PostgreSQL
