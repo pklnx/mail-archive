@@ -71,3 +71,41 @@ JOIN LATERAL (
     WHERE ml.folder_id = f.id AND ml.message_sha256 = ANY (@shas::bpchar[])
 ) l ON true
 WHERE f.account_id = (SELECT a.account_id FROM folders a WHERE a.id = @folder_id);
+
+-- name: GroupFolderIDs :many
+-- The folders of a customer group (0: the accounts without an owner), for
+-- FoldersHoldMessages; read once per folder run of a sync or fill and per
+-- SMTP delivery, and again when the account's group changed.
+SELECT f.id FROM folders f
+JOIN accounts a ON a.id = f.account_id
+LEFT JOIN users o ON o.id = a.owner_id
+WHERE coalesce(o.group_id, 0) = @group_id::bigint
+ORDER BY f.id;
+
+-- name: FoldersHoldMessages :many
+-- The hashes of shas with a location (gone ones too) in one of the folders
+-- that still belongs to the group: GroupHasLocations with the group's
+-- folder list given (GroupFolderIDs, read once per run), so a message's
+-- lookup does not build it again (#539, part 3). One probe of
+-- message_locations_folder_sha_idx per folder and hash; the LATERAL's
+-- LIMIT 1 keeps the planner from turning the probes into a lookup by hash
+-- in message_locations_sha_idx, in the custom and the generic plan
+-- (TestFoldersHoldMessagesPlan). Only the folders that hold a hash are
+-- then checked against the group, so a folder whose account left the
+-- group since the list was read never counts.
+SELECT DISTINCT h.sha::text AS sha256
+FROM (
+    SELECT s.sha, gf.id
+    FROM unnest(@shas::bpchar[]) AS s (sha)
+    CROSS JOIN (SELECT unnest(@folder_ids::bigint[]) AS id OFFSET 0) gf
+    JOIN LATERAL (
+        SELECT 1 FROM message_locations ml
+        WHERE ml.folder_id = gf.id AND ml.message_sha256 = s.sha
+        LIMIT 1
+    ) held ON true
+    OFFSET 0
+) h
+JOIN folders f ON f.id = h.id
+JOIN accounts a ON a.id = f.account_id
+LEFT JOIN users o ON o.id = a.owner_id
+WHERE coalesce(o.group_id, 0) = @group_id::bigint;

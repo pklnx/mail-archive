@@ -101,7 +101,7 @@ func (w *shareWorld) put(key, folder, name, raw string) {
 	if err != nil {
 		w.t.Fatal(err)
 	}
-	meta, err := archive.BuildMeta(ctx, w.st, w.blobs, blob, true)
+	meta, err := archive.BuildMeta(ctx, w.st, w.blobs, blob, true, true)
 	if err != nil {
 		w.t.Fatal(err)
 	}

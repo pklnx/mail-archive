@@ -541,7 +541,7 @@ func TestReceiveRetentionBetweenPutAndCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	meta, err := archive.BuildMeta(ctx, f.st, f.srv.Blobs, blob, created)
+	meta, err := archive.BuildMeta(ctx, f.st, f.srv.Blobs, blob, created, true)
 	if err != nil {
 		t.Fatal(err)
 	}

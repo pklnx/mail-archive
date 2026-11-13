@@ -549,6 +549,7 @@ func (f *Filler) fillFolder(ctx context.Context, conn *imapsync.Conn, fill *stor
 	ff.Error = ""
 	ff.Counts.Waiting = 0 // a snapshot of this pass
 	var wm watermark
+	lookup := f.Store.NewGroupLookup(fill.AccountID) // once per folder run
 	batch := f.BatchSize
 	if batch <= 0 {
 		batch = DefaultBatchSize
@@ -563,7 +564,7 @@ func (f *Filler) fillFolder(ctx context.Context, conn *imapsync.Conn, fill *stor
 			return err
 		}
 		chunk := headers[start:min(start+batch, len(headers))]
-		err := f.fillBatch(ctx, conn, fill, group, ff, &wm, now, chunk, start+len(chunk) == len(headers), log)
+		err := f.fillBatch(ctx, conn, fill, group, ff, &wm, lookup, now, chunk, start+len(chunk) == len(headers), log)
 		var stuck *StuckError
 		if err == nil || errors.As(err, &stuck) || errors.Is(err, quota.ErrStorageFull) {
 			*committed++ // fillBatch committed what came before the large message or the pause
@@ -632,6 +633,7 @@ func (f *Filler) listHeaders(ctx context.Context, conn *imapsync.Conn, after uin
 // (same Message-ID, INTERNALDATE and size): moved or seen again after a
 // rescan.
 func (f *Filler) fillBatch(ctx context.Context, conn *imapsync.Conn, fill *store.Fill, group *int64, ff *store.FillFolder, wm *watermark,
+	lookup *store.GroupLookup,
 	now time.Time, chunk []fillHeader, last bool, log *slog.Logger) error {
 	ids := make([]string, len(chunk))
 	var keys []journalKey
@@ -693,23 +695,23 @@ func (f *Filler) fillBatch(ctx context.Context, conn *imapsync.Conn, fill *store
 	// runner's next check, a minute later.
 	pending := f.Storage.Pending(group)
 	defer pending.Settle()
-	sink := func(r io.Reader) (storedBody, error) {
+	sink := func(r io.Reader) (Stored, error) {
 		// Before each file: a full group or instance writes no more.
 		if err := f.Storage.Admit(group); err != nil {
-			return storedBody{}, imapsync.Stop(err)
+			return Stored{}, imapsync.Stop(err)
 		}
-		blob, created, err := f.Blobs.Put(r)
+		stored, err := PutFor(ctx, f.Blobs, r, lookup)
 		if err == nil {
-			pending.Add(blob.Size)
+			pending.Add(stored.Blob.Size)
 		}
-		return storedBody{blob, created}, err
+		return stored, err
 	}
-	fetchErr := imapsync.FetchUIDs(conn, fetch, sink, func(m imapsync.Message[storedBody]) error {
+	fetchErr := imapsync.FetchUIDs(conn, fetch, sink, func(m imapsync.Message[Stored]) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		fetched[m.UID] = true
-		sha := m.Body.blob.SHA256
+		sha := m.Body.Blob.SHA256
 		if seen[sha] {
 			next.Counts.Present++
 			return nil
@@ -723,10 +725,11 @@ func (f *Filler) fillBatch(ctx context.Context, conn *imapsync.Conn, fill *store
 			next.Counts.Present++
 			return nil
 		}
-		meta, err := BuildMeta(ctx, f.Store, f.Blobs, m.Body.blob, m.Body.created)
+		meta, err := BuildMeta(ctx, f.Store, f.Blobs, m.Body.Blob, m.Body.Created, m.Body.NewToGroup)
 		if err != nil {
 			return err
 		}
+		meta.LookupGroup = m.Body.Group
 		metas = append(metas, meta)
 		locs = append(locs, store.Location{FolderID: ff.FolderID, Flags: storedFlags(m.Flags), InternalDate: m.InternalDate})
 		next.Counts.Imported++
@@ -749,7 +752,15 @@ func (f *Filler) fillBatch(ctx context.Context, conn *imapsync.Conn, fill *store
 	}
 	wm.advanceBatch(&next.LastUID, chunk, waiting, requested, fetched)
 	next.Done = last
-	if _, err := f.Store.SaveFillBatch(ctx, &next, metas, locs); err != nil {
+	// SaveFillBatch resets next's counts when it fails; a redo saves the
+	// same counts again.
+	counted := next
+	err = saveRedoing(ctx, f.Store, f.Blobs, lookup, metas, func() error {
+		next = counted
+		_, err := f.Store.SaveFillBatch(ctx, &next, metas, locs)
+		return err
+	})
+	if err != nil {
 		return err
 	}
 	*ff = next

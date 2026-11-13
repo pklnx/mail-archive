@@ -676,11 +676,40 @@ type MessageMeta struct {
 	From       string
 	SentAt     *time.Time
 	StoredPath string
-	// Known is set when the metadata was not extracted because the
-	// database already had the message; only SHA256, Size and StoredPath
-	// are set then.
+	// Known is set when the database already had the message: its row is
+	// not written again (InsertMessage does nothing on the conflict). For
+	// a message new to the saving account's customer group the other
+	// fields are parsed all the same and passed to the insert, which then
+	// does the work of a new row up to the conflict (#539, part 3);
+	// otherwise only SHA256, Size and StoredPath are set.
 	Known bool
+	// LookupGroup is the customer group key whose holdings decided the
+	// work for this message (GroupLookup.Group), nil without a lookup
+	// (./ma import, tools/demo). A save into an account whose group is
+	// another one by now refuses the batch (ErrGroupChanged).
+	LookupGroup *int64
 	IndexData
+}
+
+// ErrGroupChanged is returned by a save whose account moved to another
+// customer group after the group lookup of one of its messages: the work
+// done for the message followed the old group's holdings. Nothing is
+// stored; sync and fill redo the lookup and the work (archive), an SMTP
+// delivery answers 451 and is retried (#539, part 3).
+var ErrGroupChanged = errors.New("the account moved to another customer group since its group lookup")
+
+// checkLookupGroups refuses a batch with a message whose group lookup ran
+// for another group than g, the account's group read under
+// lockAccountGroup: from there until the commit no move can change it, so
+// a batch that passes is stored with the work for the group it is stored
+// into.
+func checkLookupGroups(g accountGroup, metas []MessageMeta) error {
+	for i := range metas {
+		if k := metas[i].LookupGroup; k != nil && *k != g.key() {
+			return ErrGroupChanged
+		}
+	}
+	return nil
 }
 
 // Location is where a message was found on a server.
@@ -744,6 +773,9 @@ func (s *Store) saveBatch(ctx context.Context, folderID int64, lastUID uint32, m
 		}
 		group, err := lockAccountGroup(ctx, q, byFolder(folderID))
 		if err != nil {
+			return err
+		}
+		if err := checkLookupGroups(group, metas); err != nil {
 			return err
 		}
 		wrote.group = group.Group
@@ -879,6 +911,72 @@ func groupHasLocations(ctx context.Context, q *db.Queries, g accountGroup, shas 
 		held[sha] = true
 	}
 	return held, nil
+}
+
+// GroupLookup answers, before a save into one account, whether the
+// account's customer group, this account included, holds a message
+// (#539, part 3). Sync and fill make one per folder run, an SMTP delivery
+// one per recipient account; it is not safe for concurrent use.
+//
+// Every Holds reads the account's group (AccountGroupID, one primary key
+// probe) and probes the group's own folders (FoldersHoldMessages): one
+// probe of message_locations_folder_sha_idx per folder, never a lookup by
+// hash, so its time depends on the group's folders, never on copies in
+// other groups. The folder list (GroupFolderIDs) is read with the first
+// Holds and again when the account's group changed. A folder that left
+// the group meanwhile never counts, one that joined it counts from the
+// next folder run (more work, never less). Holds runs before the save's
+// transaction, without its lock; the save checks under lockAccountGroup
+// that the account is still in the group the lookup used
+// (MessageMeta.LookupGroup, ErrGroupChanged).
+type GroupLookup struct {
+	s       *Store
+	account int64
+	group   int64
+	folders []int64
+	loaded  bool // folders belong to group
+	last    int64
+	lastOK  bool
+}
+
+// Group returns the group key the last Holds looked up, for
+// MessageMeta.LookupGroup; ok is false when it found no account.
+func (l *GroupLookup) Group() (key int64, ok bool) {
+	return l.last, l.lastOK
+}
+
+// NewGroupLookup returns the lookup for saves into the account; it reads
+// nothing yet.
+func (s *Store) NewGroupLookup(accountID int64) *GroupLookup {
+	return &GroupLookup{s: s, account: accountID}
+}
+
+// Holds reports whether an account of the account's group, this one
+// included, has a location of the message (gone locations count). A gone
+// account holds nothing; the save then fails as without the lookup.
+func (l *GroupLookup) Holds(ctx context.Context, sha256 string) (bool, error) {
+	l.lastOK = false
+	owner, err := l.s.q.AccountGroupID(ctx, l.account)
+	if isNoRows(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("group of account %d: %w", l.account, err)
+	}
+	group := accountGroup{Account: l.account, Group: owner}.key()
+	l.last, l.lastOK = group, true
+	if !l.loaded || l.group != group {
+		folders, err := l.s.q.GroupFolderIDs(ctx, group)
+		if err != nil {
+			return false, fmt.Errorf("folders of group %d: %w", group, err)
+		}
+		l.group, l.folders, l.loaded = group, folders, true
+	}
+	held, err := l.s.q.FoldersHoldMessages(ctx, db.FoldersHoldMessagesParams{Shas: []string{sha256}, FolderIds: l.folders, GroupID: l.group})
+	if err != nil {
+		return false, fmt.Errorf("group holds message: %w", err)
+	}
+	return len(held) > 0, nil
 }
 
 // skipDeleted returns the hashes of a batch to skip: messages deleted from

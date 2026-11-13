@@ -61,7 +61,7 @@ func (e *reindexEnv) storeIn(folder int64, raw string) string {
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	meta, err := archive.BuildMeta(e.ctx, e.st, e.blobs, blob, created)
+	meta, err := archive.BuildMeta(e.ctx, e.st, e.blobs, blob, created, true)
 	if err != nil {
 		e.t.Fatal(err)
 	}
