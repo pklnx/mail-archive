@@ -60,9 +60,9 @@ func TestGroupsMigration(t *testing.T) {
 	if _, err := st.MigrateDown(ctx); err == nil || !strings.Contains(err.Error(), "several customer groups exist") {
 		t.Fatalf("down with two groups: %v", err)
 	}
-	if err := st.DeleteGroup(ctx, b.ID); err != nil {
-		t.Fatal(err)
-	}
+	// Raw SQL: the store's group queries need the current schema
+	// (customer_groups.quota_bytes, 00041).
+	exec(`DELETE FROM customer_groups WHERE id = $1`, b.ID)
 	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00034_customer_groups") {
 		t.Fatalf("down: %q %v", m, err)
 	}

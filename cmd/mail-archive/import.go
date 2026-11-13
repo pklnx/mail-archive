@@ -166,6 +166,7 @@ func runImport(cmd *cobra.Command, name string, o importOptions) error {
 	}
 	if res != nil {
 		printImportResult(cmd.OutOrStdout(), res, false)
+		requestUsageRefresh(ctx, a, log)
 	}
 	if err != nil {
 		return err
@@ -255,6 +256,7 @@ func runJournalImport(cmd *cobra.Command, name string, o importOptions) error {
 	}
 	if res != nil {
 		printImportResult(cmd.OutOrStdout(), res, true)
+		requestUsageRefresh(ctx, a, log)
 	}
 	if err != nil {
 		return err
@@ -451,4 +453,13 @@ func parseSize(s string) (int64, error) {
 		return 0, fmt.Errorf("invalid size %q", s)
 	}
 	return n * factor, nil
+}
+
+// requestUsageRefresh requests a usage snapshot at the end of an import
+// (#397, part 1): the groups' figures were kept as an upper bound while it
+// ran. A failure only warns: the hourly snapshot comes anyway.
+func requestUsageRefresh(ctx context.Context, a *app, log *slog.Logger) {
+	if err := a.store.RequestUsageRefresh(context.WithoutCancel(ctx)); err != nil {
+		log.Warn("cannot request a usage snapshot", "err", err)
+	}
 }

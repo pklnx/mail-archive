@@ -50,6 +50,12 @@ SELECT * FROM accounts WHERE owner_id = $1 ORDER BY name;
 -- name: SetAccountOwner :execrows
 UPDATE accounts SET owner_id = $2, version = version + 1, updated_at = now() WHERE id = $1;
 
+-- name: LockUnownedAccounts :many
+-- The accounts without an owner, which the first user adopts, locked in id
+-- order: the adoption waits for saves in flight into them (their FOR KEY
+-- SHARE, store.lockAccountGroup).
+SELECT id FROM accounts WHERE owner_id IS NULL ORDER BY id FOR UPDATE;
+
 -- name: AdoptUnownedAccounts :execrows
 UPDATE accounts SET owner_id = $1, version = version + 1, updated_at = now() WHERE owner_id IS NULL;
 

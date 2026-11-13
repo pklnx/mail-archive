@@ -211,9 +211,10 @@ type BlobRemoval struct {
 }
 
 type CustomerGroup struct {
-	ID        int64
-	Name      string
-	CreatedAt time.Time
+	ID         int64
+	Name       string
+	CreatedAt  time.Time
+	QuotaBytes *int64
 }
 
 type DeletedMessage struct {
@@ -506,6 +507,74 @@ type SmtpImport struct {
 	Format    string
 	Source    string
 	CreatedAt time.Time
+}
+
+type StorageCounterBase struct {
+	ID       bool
+	Messages int64
+	Bytes    int64
+}
+
+type StorageCounterDelta struct {
+	ID       int64
+	Messages int64
+	Bytes    int64
+}
+
+type StorageGroupDelta struct {
+	ID       int64
+	GroupID  int64
+	Messages int64
+	Bytes    int64
+}
+
+type StorageRefreshRequest struct {
+	ID  bool
+	Seq int64
+}
+
+type StorageSnapshot struct {
+	ID                bool
+	ComputedAt        *time.Time
+	UngroupedMessages *int64
+	UngroupedBytes    *int64
+	DatabaseBytes     *int64
+	RelationBytes     []byte
+	CounterDrift      *int64
+	CoveredSeq        int64
+}
+
+type StorageState struct {
+	ID                 int64
+	GroupID            *int64
+	State              string
+	StateSince         time.Time
+	EventSeq           int64
+	NotifiedSeq        int64
+	NotifyAttempts     int32
+	NotifyNextAt       *time.Time
+	NotifyError        *string
+	NotifyFirstErrorAt *time.Time
+	NotifyLease        []byte
+	NotifyLeaseUntil   *time.Time
+	MailEnqueuedEvent  *string
+}
+
+type StorageUsageAccount struct {
+	AccountID      int64
+	Messages       int64
+	Bytes          int64
+	ExclusiveBytes int64
+	ComputedAt     time.Time
+}
+
+type StorageUsageGroup struct {
+	GroupID       int64
+	Messages      int64
+	Bytes         int64
+	AddedMessages int64
+	AddedBytes    int64
+	ComputedAt    time.Time
 }
 
 type SyncRun struct {

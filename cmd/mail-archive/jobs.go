@@ -40,7 +40,8 @@ func attachmentIndexer(a *app, blobs *blobstore.Store, log *slog.Logger) *archiv
 	return &archive.AttachmentIndexer{Store: a.store, Blobs: blobs, Extractor: processExtractor(log), Logger: log}
 }
 
-// jobRegistry returns the job kinds that serve and worker run.
+// jobRegistry returns the job kinds that serve and worker run: the
+// attachment text kinds and those of storage usage.
 func jobRegistry(x *archive.AttachmentIndexer) (*jobs.Registry, error) {
 	r := &jobs.Registry{}
 	for _, k := range testJobKinds {
@@ -51,7 +52,84 @@ func jobRegistry(x *archive.AttachmentIndexer) (*jobs.Registry, error) {
 	if err := x.Register(r); err != nil {
 		return nil, err
 	}
+	for _, k := range jobs.StorageKinds(x.Store, x.Logger) {
+		if err := r.Register(k); err != nil {
+			return nil, err
+		}
+	}
 	return r, nil
+}
+
+// Intervals of the storage jobs (#397, part 1).
+const (
+	storageFoldEvery  = 5 * time.Minute
+	usageRefreshEvery = time.Hour
+)
+
+// storageSchedule enqueues the storage jobs in every process that runs a
+// job pool (serve with workers, worker): storage_fold at start and every
+// storageFoldEvery, usage_refresh every usageRefreshEvery. No job queues
+// itself again, so this is what keeps them going; several processes
+// enqueue the same singletons, which merge. Both pass retryFailed, so a
+// job that failed its attempts is queued again at the next tick.
+type storageSchedule struct {
+	store *store.Store
+	log   *slog.Logger
+	// fold and refresh deliver the ticks.
+	fold, refresh <-chan time.Time
+	// enqueued, if set, is called after each enqueue with the kind (tests).
+	enqueued func(kind string)
+}
+
+// startStorageSchedule runs the schedule with real tickers until the
+// returned stop is called.
+func startStorageSchedule(ctx context.Context, st *store.Store, log *slog.Logger) (stop func()) {
+	fold, refresh := time.NewTicker(storageFoldEvery), time.NewTicker(usageRefreshEvery)
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	s := &storageSchedule{store: st, log: log, fold: fold.C, refresh: refresh.C}
+	go func() {
+		defer close(done)
+		s.run(ctx)
+	}()
+	return func() {
+		cancel()
+		<-done
+		fold.Stop()
+		refresh.Stop()
+	}
+}
+
+// run enqueues storage_fold at once, and usage_refresh too as long as no
+// snapshot was taken (after the upgrade to 00041), and then both on their
+// ticks, until ctx ends. A failed enqueue is logged and waits for the next
+// tick.
+func (s *storageSchedule) run(ctx context.Context) {
+	s.enqueue(ctx, store.StorageFoldJob())
+	if at, err := s.store.UsageSnapshotAt(ctx); err != nil && ctx.Err() == nil {
+		s.log.Warn("cannot read the time of the last usage snapshot", "err", err)
+	} else if err == nil && at == nil {
+		s.enqueue(ctx, store.UsageRefreshJob())
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.fold:
+			s.enqueue(ctx, store.StorageFoldJob())
+		case <-s.refresh:
+			s.enqueue(ctx, store.UsageRefreshJob())
+		}
+	}
+}
+
+func (s *storageSchedule) enqueue(ctx context.Context, j store.NewJob) {
+	if _, err := s.store.EnqueueJobs(ctx, []store.NewJob{j}, true); err != nil && ctx.Err() == nil {
+		s.log.Warn("cannot queue a storage job", "kind", j.Kind, "err", err)
+	}
+	if s.enqueued != nil {
+		s.enqueued(j.Kind)
+	}
 }
 
 // attachmentsAtStart enqueues the attachment backfill (idempotent; a
@@ -91,9 +169,11 @@ func startJobs(ctx context.Context, a *app, blobs *blobstore.Store, log *slog.Lo
 			log.Error("jobs stopped", "err", err)
 		}
 	}()
+	stopSchedule := startStorageSchedule(ctx, a.store, log)
 	log.Info("jobs on", "workers", a.cfg.JobWorkers, "kinds", strings.Join(kinds.Names(), ","))
 	return func() {
 		cancel()
+		stopSchedule()
 		<-done
 	}, nil
 }
@@ -101,7 +181,7 @@ func startJobs(ctx context.Context, a *app, blobs *blobstore.Store, log *slog.Lo
 func newWorkerCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "worker",
-		Short: "Run only the background jobs (attachment text), without the web server",
+		Short: "Run only the background jobs (attachment text, storage usage), without the web server",
 		Long: `Run only the background jobs, such as extracting the text of attachments
 for search: no web server, SMTP, syncs, fills, attestations or retention.
 ` + config.EnvJobWorkers + ` (1 to 8, default 1) sets how many jobs run at a time.
@@ -144,6 +224,8 @@ codes 3 and 4).`,
 				return err
 			}
 			attachmentsAtStart(cmd.Context(), a.store, log)
+			stopSchedule := startStorageSchedule(cmd.Context(), a.store, log)
+			defer stopSchedule()
 			log.Info("worker on", "workers", a.cfg.JobWorkers, "kinds", strings.Join(kinds.Names(), ","))
 			return (&jobs.Pool{Store: a.store, Kinds: kinds, Workers: a.cfg.JobWorkers, Logger: log}).Run(cmd.Context())
 		},

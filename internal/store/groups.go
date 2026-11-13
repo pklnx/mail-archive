@@ -334,6 +334,11 @@ func (s *Store) SetUserGroup(ctx context.Context, userID, groupID int64) (GroupC
 			c.Ended = append(c.Ended, EndedShare{Account: r.Account, Owner: r.Owner, User: r.UserName})
 		}
 		c.Changed = true
+		// The user's accounts now count for the new group: a snapshot
+		// moves their bytes (locked last, after every row above).
+		if err := requestUsageRefresh(ctx, q); err != nil {
+			return err
+		}
 		if e := auditFrom(ctx); e != nil {
 			e.GroupID = &groupID
 			e.Detail("from_group", map[string]any{"id": from.ID, "name": from.Name})

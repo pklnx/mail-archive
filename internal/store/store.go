@@ -720,6 +720,10 @@ func (s *Store) saveBatch(ctx context.Context, folderID int64, lastUID uint32, m
 		if err := s.checkBlobGeneration(ctx, q); err != nil {
 			return err
 		}
+		group, err := lockAccountGroup(ctx, q, byFolder(folderID))
+		if err != nil {
+			return err
+		}
 		skip, err := skipDeleted(ctx, q, folderID, metas, locs)
 		if err != nil {
 			return err
@@ -728,6 +732,7 @@ func (s *Store) saveBatch(ctx context.Context, folderID int64, lastUID uint32, m
 		if err != nil {
 			return err
 		}
+		var added []*MessageMeta
 		for i := range metas {
 			m := &metas[i]
 			if skip[m.SHA256] {
@@ -741,6 +746,7 @@ func (s *Store) saveBatch(ctx context.Context, folderID int64, lastUID uint32, m
 			if !held[m.SHA256] {
 				held[m.SHA256] = true
 				res.Added++
+				added = append(added, m)
 			}
 			if err := enqueueAttachmentText(ctx, q, m, n); err != nil {
 				return err
@@ -763,6 +769,9 @@ func (s *Store) saveBatch(ctx context.Context, folderID int64, lastUID uint32, m
 			if err != nil {
 				return fmt.Errorf("insert location: %w", err)
 			}
+		}
+		if err := recordGroupUsage(ctx, q, group, added); err != nil {
+			return err
 		}
 		if err := q.AdvanceFolder(ctx, db.AdvanceFolderParams{ID: folderID, LastUid: int64(lastUID)}); err != nil {
 			return err

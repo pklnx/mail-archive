@@ -267,7 +267,8 @@ func (s *Store) DeleteBatch(ctx context.Context, runID int64, shas []string, gra
 	return deleted, kept, err
 }
 
-// FinishDeletionRun marks a confirmed run done.
+// FinishDeletionRun marks a confirmed run done and requests a usage
+// snapshot (requestUsageRefresh).
 func (s *Store) FinishDeletionRun(ctx context.Context, id int64) error {
 	return s.inTx(ctx, func(q *db.Queries) error {
 		n, err := q.FinishDeletionRun(ctx, id)
@@ -276,6 +277,10 @@ func (s *Store) FinishDeletionRun(ctx context.Context, id int64) error {
 		}
 		if n == 0 {
 			return runStateError(ctx, q, id, "finished")
+		}
+		// The groups' figures drop only at a snapshot.
+		if err := requestUsageRefresh(ctx, q); err != nil {
+			return err
 		}
 		if e := auditFrom(ctx); e != nil {
 			r, err := q.GetDeletionRun(ctx, id)

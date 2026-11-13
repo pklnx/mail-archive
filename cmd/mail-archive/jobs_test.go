@@ -139,7 +139,7 @@ func TestStartJobs(t *testing.T) {
 		t.Fatal("the job did not start")
 	}
 	stop()
-	if !strings.Contains(logs.String(), `msg="jobs on" workers=1 kinds=test,attachment_text,attachment_backfill`) {
+	if !strings.Contains(logs.String(), `msg="jobs on" workers=1 kinds=test,attachment_text,attachment_backfill,storage_fold,usage_refresh`) {
 		t.Errorf("log with 1 worker: %s", logs.String())
 	}
 	if state, attempts, leased := jobState(t, conn, "a"); state != store.JobQueued || attempts != 0 || leased {
