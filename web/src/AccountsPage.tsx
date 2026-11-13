@@ -18,7 +18,7 @@ import {
   Tag,
 } from "@carbon/react";
 import { Add } from "@carbon/icons-react";
-import { accountsApi, type Account, type AccountsResponse, type SharedAccount } from "./api";
+import { accountsApi, ownAccountSize, type Account, type AccountsResponse, type SharedAccount, type Usage } from "./api";
 import { AccountDetail } from "./AccountDetail";
 import { PurgeDialog, PurgeProgress } from "./AccountPurge";
 import { isPlainClick } from "./clicks";
@@ -36,6 +36,8 @@ import { formatState, parseState, useViewState, type ViewState } from "./urlStat
 
 interface Props {
   accounts: AccountsState;
+  /** Storage usage (#397, part 4): the account page shows the account's size. */
+  usage?: Usage | null;
   /** Admins can add smtp accounts and change their addresses. */
   admin: boolean;
   /** Called after an account got a new name, to update links to it. */
@@ -68,7 +70,7 @@ const hrefOf = (patch: Partial<ViewState> = {}) => formatState({ ...parseState("
  * is in the URL, so Back and reload work; a page for an account that does
  * not exist (any more) returns to the list.
  */
-export function AccountsPage({ accounts, admin, renamed, showGone, showAccount }: Props) {
+export function AccountsPage({ accounts, usage = null, admin, renamed, showGone, showAccount }: Props) {
   const { data, error, reload } = accounts;
   const [state, update] = useViewState();
   const page = pageOf(state);
@@ -246,6 +248,8 @@ export function AccountsPage({ accounts, admin, renamed, showGone, showAccount }
         key={aliases.current.get(page.name) ?? page.name}
         account={a}
         data={data}
+        size={ownAccountSize(usage, a.name)}
+        counting={usage !== null}
         admin={admin}
         heading={heading}
         renaming={renaming}

@@ -196,7 +196,7 @@ SELECT state, state_since FROM storage_states WHERE group_id IS NULL;
 SELECT g.id, g.name, g.quota_bytes,
        (coalesce(u.messages, 0) + coalesce(u.added_messages, 0) + coalesce(d.messages, 0))::bigint AS messages,
        (coalesce(u.bytes, 0) + coalesce(u.added_bytes, 0) + coalesce(d.bytes, 0))::bigint AS bytes,
-       u.computed_at, coalesce(st.state, 'ok')::text AS state
+       u.computed_at, coalesce(st.state, 'ok')::text AS state, st.state_since
 FROM customer_groups g
 LEFT JOIN storage_usage_groups u ON u.group_id = g.id
 LEFT JOIN (SELECT gd.group_id, sum(gd.messages) AS messages, sum(gd.bytes) AS bytes

@@ -108,15 +108,18 @@ operator creates the second group on the command line:
 With two or more groups, the users page has a **Group** column, a group
 filter above the table and **Change group** in each user's menu, and a
 user's page shows the group. Under the table, **Groups** lists every group
-with its users and accounts; **Add group** adds one, and each group's menu
-has **Rename** and **Remove**, which stays off while the group has users.
+with its users, accounts and storage quota; **Add group** adds one, and each
+group's menu has **Rename** and **Remove**, which stays off while the group
+has users.
 
 ![The customer groups under the users table](/screenshots/user-groups.png)
 
 ### Storage quota of a group
 
 The operator can limit how much a group stores, in message bytes counted
-once within the group, on the command line:
+once within the group: on the [Storage page](./web-ui#storage) with
+**Edit quota**, which shows each group's usage and state, or on the command
+line:
 
 ```sh
 ./ma group set-quota "Steuerbüro Meier" 50GiB
@@ -125,11 +128,15 @@ once within the group, on the command line:
 ```
 
 `group list` shows each group's quota, the storage it uses and its state
-(`ok`, `warn`, `full`, `overflow`). A group quota is never above the
-instance's (`MAIL_ARCHIVE_STORAGE_QUOTA`); the change is recorded in the
-audit log as `group.quota`. When a group is full, its syncs, fills and
-imports pause, and from the overflow on its journal mail is deferred; its
-users can still read and search everything. See
+(`ok`, `warn`, `full`, `overflow`); the **Groups** section of the users page
+shows each group's quota too. A group quota is never above the instance's
+(`MAIL_ARCHIVE_STORAGE_QUOTA`); the change is recorded in the audit log as
+`group.quota`. When a group is full, its syncs, fills and imports pause, and
+from the overflow on its journal mail is deferred; its users can still read
+and search everything, and see a banner that new mail is not archived, but
+not the group's usage or quota. While the instance has only one group, the
+Storage page offers no quota editing; a quota that group has from the command
+line shows on the instance's bar. See
 [Storage and quotas](./operations#storage-and-quotas).
 
 Groups separate customers logically, inside one database and one archive

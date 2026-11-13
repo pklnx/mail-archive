@@ -447,6 +447,13 @@ for (const scheme of ["light", "dark"]) {
   await groups.scrollIntoViewIfNeeded();
   await shot(p, "user-groups");
 
+  // The Storage page (#397, part 4): the instance quota of 1 GiB and the
+  // second group's 512 MiB from the demo.
+  await p.goto(base + "/?view=storage");
+  await main.getByRole("heading", { name: "Storage", level: 1 }).waitFor();
+  await main.getByRole("table", { name: "Customer groups" }).getByRole("rowheader", { name: "Lindqvist Design" }).waitFor();
+  await shot(p, "storage");
+
   // The rules: the table with Add rule above it.
   await p.goto(base + "/?view=retention");
   await main.getByRole("tab", { name: "Rules", selected: true }).waitFor();

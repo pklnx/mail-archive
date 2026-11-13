@@ -153,6 +153,46 @@ mail server sees an amber line "Alert mail to your address was refused"
 with **Open profile**: the address gets no alert mail until it is
 confirmed again on the profile's **Notifications** tab.
 
+## Storage
+
+When new mail of your customer group is not archived because a storage
+limit is reached, a red banner above the mail says so: *New mail is not
+being archived; mail deleted on the server meanwhile is not archived.* Your
+syncs and imports pause until an admin frees space or raises the quota;
+reading and searching go on. The banner does not say which limit was
+reached, and nobody but admins sees another group's usage or quota. Each of
+your accounts shows its **Size** on its [account page](./accounts): the
+bytes of its messages at the last count, each message once, where a message
+in several accounts counts for each.
+
+Admins see a banner for every limit that is nearly full (amber) or full
+(red): the instance, the disk reserve, or a customer group by name; while
+only one group exists, it counts as the instance. **Open storage** leads to
+the **Storage** page in the navigation, which shows:
+
+- **Instance:** the usage against the instance quota as a bar, the state
+  and since when, the free space of the data disk and the reserve, the
+  database, the last backup and encryption at rest. The instance quota is
+  set by the operator (`MAIL_ARCHIVE_STORAGE_QUOTA`).
+- **Customer groups** (with two or more): each group's usage against its
+  quota, its state, and **Edit quota**. The dialog takes a size in MiB, GiB
+  or TiB, or *No quota*; it refuses a quota above the instance quota or
+  above 1 EiB and says what the new quota means for the group now, for
+  example that its syncs pause at once. Group quotas may add up to more
+  than the instance quota; the page then says so. Accounts without an
+  owner show as *Without group*.
+- **Accounts:** every account with its owner, group, messages, size and
+  *Only here*, the bytes no other account holds: what deleting the account
+  completely would free.
+
+The accounts and groups are counted every hour, and after purges, deletion
+runs, imports and group moves; the page says when the last count ran, and
+**Count again** starts one. Between counts a group's figure includes what
+was added since and may be slightly too high. The instance figure is
+always exact. See [Storage and quotas](./operations#storage-and-quotas).
+
+![The Storage page](/screenshots/storage.png)
+
 ## Only in archive
 
 The [account page](./accounts) shows for each IMAP account how many of its

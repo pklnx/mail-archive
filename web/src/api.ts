@@ -817,6 +817,79 @@ export const usersApi = {
   list: async (signal?: AbortSignal) => (await getJSON<{ users: ManagedUser[] }>("/api/users", signal)).users,
 };
 
+/**
+ * A quota state (#397): warn from the warning share of the quota, full from
+ * 100 % (syncs, fills and imports pause), overflow from 100 % plus the SMTP
+ * overflow share (journal mail is deferred); disk_low, the instance's only,
+ * acts as overflow.
+ */
+export type StorageState = "ok" | "warn" | "full" | "overflow" | "disk_low";
+
+/** GET /api/usage for an admin (#397, part 4). */
+export interface UsageAdmin {
+  instance: {
+    messages: number;
+    bytes: number;
+    quotaBytes: number | null;
+    warnPercent: number;
+    overflowPercent: number;
+    minFreeDiskBytes: number;
+    state: StorageState;
+    stateSince: string;
+    disk: { freeBytes: number; totalBytes: number } | null;
+    databaseBytes: number;
+    relations: Record<string, number>;
+    lastBackupAt: string | null;
+    encryption: string;
+  };
+  groups: { id: number; name: string; messages: number; bytes: number; quotaBytes: number | null; state: StorageState; stateSince: string | null }[];
+  ungrouped: { messages: number; bytes: number };
+  accounts: {
+    id: number;
+    name: string;
+    kind: Account["kind"];
+    removed: boolean;
+    owner: string;
+    groupId: number | null;
+    own: boolean;
+    messages: number;
+    bytes: number;
+    exclusiveBytes: number;
+    counted: boolean;
+  }[];
+  computedAt: string | null;
+}
+
+/**
+ * GET /api/usage for everyone else: the own accounts' sizes (null before the
+ * first count) and whether new mail is archived, the same whichever limit
+ * was reached (#539).
+ */
+export interface UsageMember {
+  state: "ok" | "full" | "overflow";
+  accounts: { name: string; messages: number | null; bytes: number | null }[];
+}
+
+export type Usage = UsageAdmin | UsageMember;
+
+export const isAdminUsage = (u: Usage): u is UsageAdmin => "instance" in u;
+
+/** The size of an own account, from either view; null when not counted yet. */
+export function ownAccountSize(u: Usage | null, name: string): { messages: number; bytes: number } | null {
+  if (!u) return null;
+  if (isAdminUsage(u)) {
+    const a = u.accounts.find((x) => x.own && x.name === name);
+    return a?.counted ? { messages: a.messages, bytes: a.bytes } : null;
+  }
+  const a = u.accounts.find((x) => x.name === name);
+  return a && a.messages !== null && a.bytes !== null ? { messages: a.messages, bytes: a.bytes } : null;
+}
+
+export const usageApi = {
+  get: (signal?: AbortSignal) => getJSON<Usage>("/api/usage", signal),
+  refresh: () => send("POST", "/api/usage/refresh"),
+};
+
 /** A retention rule: an account's (or folder's) mail is kept for years after the end of its year. */
 export interface RetentionRule {
   id: number;

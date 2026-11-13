@@ -135,12 +135,14 @@ describe("entry texts", () => {
     expect(auditAction("data.export_done", "de")).toBe("Export beendet");
   });
   it("words the customer group actions in every language (#470)", () => {
-    for (const a of ["user.group_change", "group.add", "group.rename", "group.remove"]) {
+    for (const a of ["user.group_change", "group.add", "group.rename", "group.remove", "group.quota"]) {
       expect(auditAction(a)).not.toBe(a);
       expect(auditAction(a, "de")).not.toBe(a);
     }
     expect(auditAction("group.add")).toBe("Added group");
     expect(auditAction("user.group_change", "de")).toBe("Gruppe des Benutzers geändert");
+    expect(auditAction("group.quota")).toBe("Changed group's storage quota");
+    expect(auditAction("group.quota", "de")).toBe("Speicherkontingent der Gruppe geändert");
   });
   it("words the account purge actions in every language", () => {
     for (const a of ["account.purge", "account.purge_batch", "account.purge_finish", "account.purge_cancel"]) {

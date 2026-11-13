@@ -1557,17 +1557,28 @@ paths:
       - $ref: "#/components/parameters/numericID"
     patch:
       tags: [users]
-      operationId: renameGroup
-      summary: Rename a customer group
+      operationId: updateGroup
+      summary: Rename a customer group or set its storage quota
+      description: |
+        The body has exactly one field: `name` renames the group,
+        `quotaBytes` sets its storage quota in message bytes (deduplicated
+        within the group), or removes it with `null`. A quota above the
+        instance quota or above 1 EiB is refused with `400`. A quota change
+        is recorded in the audit log as `group.quota`, with the old and the
+        new value; the storage gate applies it at once in this process and
+        within 10 seconds in every other one. Users who are not admins get
+        `403` before the group is looked up.
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/GroupInput"
+              oneOf:
+                - $ref: "#/components/schemas/GroupInput"
+                - $ref: "#/components/schemas/GroupQuotaInput"
       responses:
         "204":
-          description: Renamed.
+          description: Renamed, or the quota set.
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -2480,6 +2491,63 @@ paths:
           $ref: "#/components/responses/APIKeyScope"
         "429":
           $ref: "#/components/responses/TooManyRequests"
+
+  /api/usage:
+    get:
+      tags: [health]
+      operationId: getUsage
+      summary: Storage usage, by role
+      description: |
+        With a session only. Admins get `UsageAdmin`: the instance (usage,
+        quota, quota state, disk, database, last snapshot, last backup,
+        encryption at rest), every customer group with its quota and state,
+        the accounts without a group, and every account with its owner,
+        group and exclusive bytes (bytes no other account holds, computed
+        across groups).
+
+        Everyone else gets `UsageMember`: the size of each of their own
+        accounts at the last snapshot, and `state`, whether new mail of
+        their group is archived (`ok`), paused (`full`) or also deferred at
+        the SMTP server (`overflow`). The answer is the same whichever limit
+        was reached, the group's, the instance's or the disk's, so it shows
+        no other group's usage, quota or state. Auditors get `403`.
+
+        Group figures are an upper bound between snapshots; account figures
+        are those of the last snapshot (`computedAt`).
+      responses:
+        "200":
+          description: The usage the user may see.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/UsageAdmin"
+                  - $ref: "#/components/schemas/UsageMember"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: An auditor, or an API key.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/usage/refresh:
+    post:
+      tags: [health]
+      operationId: refreshUsage
+      summary: Count the usage per account and group again (admins)
+      description: |
+        Queues the usage snapshot, which also runs every hour. It runs in
+        the background, usually within a minute; `computedAt` of
+        `GET /api/usage` shows when it ran.
+      responses:
+        "202":
+          description: Queued.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
 
   /api/accounts:
     get:
@@ -4412,8 +4480,18 @@ components:
           type: string
     Group:
       type: object
-      required: [id, name, users, accounts, createdAt]
+      required: [id, name, users, accounts, createdAt, quotaBytes, bytes, state]
       properties:
+        quotaBytes:
+          type: [integer, "null"]
+          format: int64
+          description: The group's storage quota in message bytes; null without one.
+        bytes:
+          type: integer
+          format: int64
+          description: The group's usage, deduplicated within the group; an upper bound between snapshots.
+        state:
+          $ref: "#/components/schemas/StorageState"
         id:
           type: integer
           format: int64
@@ -4437,6 +4515,207 @@ components:
           minLength: 1
           maxLength: 100
           description: Without control characters; spaces at either end are removed.
+    GroupQuotaInput:
+      type: object
+      required: [quotaBytes]
+      additionalProperties: false
+      properties:
+        quotaBytes:
+          type: [integer, "null"]
+          format: int64
+          minimum: 1
+          maximum: 1152921504606846976
+          description: The quota in message bytes, at most the instance quota and at most 1 EiB; null removes it.
+    StorageState:
+      type: string
+      enum: [ok, warn, full, overflow, disk_low]
+      description: >-
+        A quota state: `warn` from the warning share of the quota, `full`
+        from 100 % (syncs, fills and imports pause), `overflow` from 100 %
+        plus the SMTP overflow share (the SMTP server defers new mail with
+        452). `disk_low` (the instance only): the data disk has less free
+        space than the reserve, which acts as `overflow`.
+    UsageFigure:
+      type: object
+      required: [messages, bytes]
+      properties:
+        messages:
+          type: integer
+          format: int64
+        bytes:
+          type: integer
+          format: int64
+    UsageDisk:
+      type: object
+      required: [freeBytes, totalBytes]
+      properties:
+        freeBytes:
+          type: integer
+          format: int64
+        totalBytes:
+          type: integer
+          format: int64
+    UsageInstance:
+      type: object
+      required: [messages, bytes, quotaBytes, warnPercent, overflowPercent, minFreeDiskBytes, state, stateSince, disk,
+        databaseBytes, relations, lastBackupAt, encryption]
+      properties:
+        messages:
+          type: integer
+          format: int64
+          description: Unique messages in the archive (exact).
+        bytes:
+          type: integer
+          format: int64
+          description: Their bytes, deduplicated across the instance (exact).
+        quotaBytes:
+          type: [integer, "null"]
+          format: int64
+          description: The instance quota (`MAIL_ARCHIVE_STORAGE_QUOTA`); null without one.
+        warnPercent:
+          type: integer
+        overflowPercent:
+          type: integer
+        minFreeDiskBytes:
+          type: integer
+          format: int64
+          description: The disk reserve; 0 when it is off.
+        state:
+          $ref: "#/components/schemas/StorageState"
+        stateSince:
+          type: string
+          format: date-time
+        disk:
+          oneOf:
+            - $ref: "#/components/schemas/UsageDisk"
+            - type: "null"
+          description: The data directory's file system; null when it could not be measured.
+        databaseBytes:
+          type: integer
+          format: int64
+          description: The database's size at the last snapshot.
+        relations:
+          type: object
+          additionalProperties:
+            type: integer
+            format: int64
+          description: The largest tables with their indexes, at the last snapshot.
+        lastBackupAt:
+          type: [string, "null"]
+          format: date-time
+          description: The last backup within 30 days, from the audit log.
+        encryption:
+          type: string
+          description: Encryption at rest, `off`, `on`, or a conversion in progress.
+    UsageGroup:
+      type: object
+      required: [id, name, messages, bytes, quotaBytes, state, stateSince]
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        messages:
+          type: integer
+          format: int64
+        bytes:
+          type: integer
+          format: int64
+          description: Deduplicated within the group; an upper bound between snapshots.
+        quotaBytes:
+          type: [integer, "null"]
+          format: int64
+        state:
+          $ref: "#/components/schemas/StorageState"
+        stateSince:
+          type: [string, "null"]
+          format: date-time
+          description: Null before the group's first change of state.
+    UsageAccount:
+      type: object
+      required: [id, name, kind, removed, owner, groupId, own, messages, bytes, exclusiveBytes, counted]
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        kind:
+          $ref: "#/components/schemas/AccountKind"
+        removed:
+          type: boolean
+        owner:
+          type: string
+          description: Empty for an account without an owner.
+        groupId:
+          type: [integer, "null"]
+          format: int64
+        own:
+          type: boolean
+          description: The caller owns the account.
+        messages:
+          type: integer
+          format: int64
+        bytes:
+          type: integer
+          format: int64
+          description: The account's unique messages; shared with other accounts where they hold them too.
+        exclusiveBytes:
+          type: integer
+          format: int64
+          description: Bytes no other account holds, in any group; what a purge would free.
+        counted:
+          type: boolean
+          description: False before the first snapshot that saw the account; the figures are then 0.
+    UsageAdmin:
+      type: object
+      required: [instance, groups, ungrouped, accounts, computedAt]
+      properties:
+        instance:
+          $ref: "#/components/schemas/UsageInstance"
+        groups:
+          type: array
+          items:
+            $ref: "#/components/schemas/UsageGroup"
+        ungrouped:
+          $ref: "#/components/schemas/UsageFigure"
+        accounts:
+          type: array
+          items:
+            $ref: "#/components/schemas/UsageAccount"
+        computedAt:
+          type: [string, "null"]
+          format: date-time
+          description: When the last snapshot ran; null before the first.
+    UsageMember:
+      type: object
+      required: [state, accounts]
+      properties:
+        state:
+          type: string
+          enum: [ok, full, overflow]
+          description: >-
+            Whether new mail of the user's group is archived: `full`, syncs,
+            fills and imports pause; `overflow`, the SMTP server also defers
+            it. The same whichever limit was reached.
+        accounts:
+          type: array
+          items:
+            $ref: "#/components/schemas/UsageOwnAccount"
+    UsageOwnAccount:
+      type: object
+      required: [name, messages, bytes]
+      properties:
+        name:
+          type: string
+        messages:
+          type: [integer, "null"]
+          format: int64
+        bytes:
+          type: [integer, "null"]
+          format: int64
+          description: Null before the first snapshot that saw the account.
     GeneratedPassword:
       type: object
       required: [name, password]

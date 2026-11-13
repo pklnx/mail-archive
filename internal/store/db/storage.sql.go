@@ -226,7 +226,7 @@ const groupStorageUsage = `-- name: GroupStorageUsage :many
 SELECT g.id, g.name, g.quota_bytes,
        (coalesce(u.messages, 0) + coalesce(u.added_messages, 0) + coalesce(d.messages, 0))::bigint AS messages,
        (coalesce(u.bytes, 0) + coalesce(u.added_bytes, 0) + coalesce(d.bytes, 0))::bigint AS bytes,
-       u.computed_at, coalesce(st.state, 'ok')::text AS state
+       u.computed_at, coalesce(st.state, 'ok')::text AS state, st.state_since
 FROM customer_groups g
 LEFT JOIN storage_usage_groups u ON u.group_id = g.id
 LEFT JOIN (SELECT gd.group_id, sum(gd.messages) AS messages, sum(gd.bytes) AS bytes
@@ -243,6 +243,7 @@ type GroupStorageUsageRow struct {
 	Bytes      int64
 	ComputedAt *time.Time
 	State      string
+	StateSince *time.Time
 }
 
 // Each group's figure: its snapshot, the folded deltas and the deltas not
@@ -265,6 +266,7 @@ func (q *Queries) GroupStorageUsage(ctx context.Context) ([]GroupStorageUsageRow
 			&i.Bytes,
 			&i.ComputedAt,
 			&i.State,
+			&i.StateSince,
 		); err != nil {
 			return nil, err
 		}

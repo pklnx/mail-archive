@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ActionableNotification, FeatureFlags } from "@carbon/react";
-import type { AccountsResponse } from "./api";
+import { isAdminUsage, type AccountsResponse, type StorageState, type Usage } from "./api";
 import { t } from "./i18n";
 
 export interface BannerState {
@@ -32,13 +32,52 @@ export function bannerState(data: AccountsResponse | null): BannerState {
   };
 }
 
+/** The storage lines of the banner (#397, part 4): what is full and what nearly is. */
+export interface StorageBanner {
+  /** The text of the error line, "" without one. */
+  full: string;
+  /** The text of the warning line (admins only), "" without one. */
+  warn: string;
+}
+
+const stops = (s: StorageState) => s === "full" || s === "overflow" || s === "disk_low";
+
+/**
+ * The storage lines. A member learns only that new mail of their group is
+ * not archived (Q7), never which limit was reached. An admin sees every
+ * scope in warn, full, overflow or disk_low by name: the instance, the disk
+ * reserve, and the groups; while only one group exists, its name is not
+ * shown (#470 decision 10) and its limit counts as the instance's.
+ */
+export function storageBanner(usage: Usage | null): StorageBanner {
+  if (!usage) return { full: "", warn: "" };
+  if (!isAdminUsage(usage)) return { full: usage.state === "full" || usage.state === "overflow" ? t.bannerStorageFull : "", warn: "" };
+  const full = new Set<string>();
+  const warn = new Set<string>();
+  const add = (state: StorageState, name: string) => {
+    if (stops(state)) full.add(name);
+    else if (state === "warn") warn.add(name);
+  };
+  const inst = usage.instance.state;
+  add(inst === "disk_low" ? "full" : inst, inst === "disk_low" ? t.bannerStorageDisk : t.bannerStorageInstance);
+  const several = usage.groups.length > 1;
+  for (const g of usage.groups) add(g.state, several ? g.name : t.bannerStorageInstance);
+  for (const n of full) warn.delete(n);
+  return {
+    full: full.size ? t.bannerStorageFullAdmin([...full].join(", ")) : "",
+    warn: warn.size ? t.bannerStorageWarn([...warn].join(", ")) : "",
+  };
+}
+
 interface Props {
   data: AccountsResponse | null;
+  usage?: Usage | null;
   admin: boolean;
   openAccounts: () => void;
   openUsers: () => void;
   /** Opens the profile, for the line about a refused alert mail address. */
   openProfile?: () => void;
+  openStorage?: () => void;
 }
 
 /**
@@ -65,17 +104,20 @@ function Line({ kind, text, action, onAction }: { kind: "error" | "warning" | "i
 }
 
 /** A banner above the main view when syncs keep failing, for people without a monitoring stack. */
-export function HealthBanner({ data, admin, openAccounts, openUsers, openProfile }: Props) {
+export function HealthBanner({ data, usage = null, admin, openAccounts, openUsers, openProfile, openStorage }: Props) {
   const b = bannerState(data);
-  // Screen readers hear the failing accounts once per change, not on every poll.
+  const storage = storageBanner(usage);
+  // Screen readers hear the failing accounts and a full storage once per
+  // change, not on every poll.
   const failingText = b.failing.length ? t.bannerFailing(b.failing.join(", ")) : "";
+  const urgent = [storage.full, failingText].filter(Boolean).join(" ");
   const shown = useRef("");
   const [announce, setAnnounce] = useState("");
   useEffect(() => {
-    if (failingText === shown.current) return;
-    shown.current = failingText;
-    setAnnounce(failingText);
-  }, [failingText]);
+    if (urgent === shown.current) return;
+    shown.current = urgent;
+    setAnnounce(urgent);
+  }, [urgent]);
 
   const others = admin ? b.otherFailing : 0;
   const live = (
@@ -84,12 +126,16 @@ export function HealthBanner({ data, admin, openAccounts, openUsers, openProfile
     </span>
   );
   const bounced = admin && b.notifyBounced;
-  if (!b.failing.length && !b.stale.length && !others && !bounced) return live;
+  // Members have no Storage page: their line has no action.
+  const toStorage = admin ? { action: t.bannerOpenStorage, onAction: openStorage } : {};
+  if (!b.failing.length && !b.stale.length && !others && !bounced && !storage.full && !storage.warn) return live;
   return (
     // Without the flag, each notification adds two hidden "Focus sentinel" tab stops.
     <FeatureFlags enableFocusWrapWithoutSentinels>
       <div className="health-banner">
         {live}
+        {storage.full && <Line kind="error" text={storage.full} {...toStorage} />}
+        {storage.warn && <Line kind="warning" text={storage.warn} {...toStorage} />}
         {b.failing.length > 0 && <Line kind="error" text={failingText} action={t.bannerOpenAccounts} onAction={openAccounts} />}
         {b.stale.length > 0 && (
           <Line

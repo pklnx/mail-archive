@@ -100,7 +100,7 @@ func (s *Server) routes() []route {
 		// Customer groups (#470): admins only, with a session.
 		h("GET /api/groups", s.handleListGroups, accessSession),
 		h("POST /api/groups", s.handleCreateGroup, accessSession),
-		h("PATCH /api/groups/{id}", s.handleRenameGroup, accessSession),
+		h("PATCH /api/groups/{id}", s.handleUpdateGroup, accessSession),
 		h("DELETE /api/groups/{id}", s.handleDeleteGroup, accessSession),
 		h("GET /api/api-keys", s.handleListAllAPIKeys, accessSession),
 		h("DELETE /api/api-keys/{id}", s.handleRevokeAnyAPIKey, accessSession),
@@ -129,6 +129,10 @@ func (s *Server) routes() []route {
 		au("GET /api/audit", s.handleAudit, accessSession),
 
 		au("GET /api/status", s.handleStatus, accessRead),
+		// Storage usage (#397, part 4): admins see everything, members the
+		// size of their own accounts and whether new mail is archived.
+		h("GET /api/usage", s.handleUsage, accessSession),
+		h("POST /api/usage/refresh", s.handleRefreshUsage, accessSession),
 		// Instance metrics in Prometheus text: IDs and counts, no names.
 		h("GET /api/metrics", s.handleMetrics, accessMetrics),
 		au("GET /api/accounts", s.handleAccounts, accessRead),
