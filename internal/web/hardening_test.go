@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/store/storetest"
+	"github.com/pklnx/mail-archive/internal/testwait"
 )
 
 // hardeningServer is a server for mail.example whose requests are built
@@ -649,6 +651,222 @@ func TestSessionTokens(t *testing.T) {
 			plain("1"), plain("2"), plain("3"), secure("s1"), secure("s2"), secure("s3"))
 		if got := strings.Join(s.sessionTokens(r), ","); got != c.want {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// plainHTTPMsg is the start of warnPlainHTTP's line.
+const plainHTTPMsg = "the web UI is used over plain HTTP under a host name other than localhost or a loopback address"
+
+// browserAgent is a User-Agent of a current browser.
+const browserAgent = "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0"
+
+// plainBrowserRequest is a GET of /healthz from a browser that sends no
+// Fetch Metadata, over plain HTTP, with hostport as Host, from remote.
+func plainBrowserRequest(hostport, remote string) *http.Request {
+	req := httptest.NewRequest("GET", "http://"+hostport+"/healthz", nil)
+	req.RemoteAddr = remote
+	req.TLS = nil
+	req.Header.Set("User-Agent", browserAgent)
+	return req
+}
+
+// plainHTTPServer is a server with the given allowed hosts and trusted
+// proxies that logs to buf.
+func plainHTTPServer(buf *bytes.Buffer, hosts []string, trusted ...netip.Prefix) *Server {
+	return New(nil, nil, slog.New(slog.NewTextHandler(buf, nil)), Options{AllowedHosts: hosts, TrustedProxies: trusted})
+}
+
+// serveOK sends req through h and fails unless it is answered with want.
+func serveOK(t *testing.T, h http.Handler, req *http.Request, want int) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != want {
+		t.Fatalf("%s %s: status %d, want %d: %s", req.Method, req.Host, rec.Code, want, rec.Body)
+	}
+}
+
+// A browser over plain HTTP under a LAN name gets one warning per allowed
+// host, the public URL's included, whatever port or case the Host header or
+// the setting has. The line names the configured host and the fixes.
+func TestWarnPlainHTTPOncePerHost(t *testing.T) {
+	var buf bytes.Buffer
+	h := New(nil, nil, slog.New(slog.NewTextHandler(&buf, nil)), Options{
+		AllowedHosts: []string{" Mail.LAN", "192.168.1.10"}, PublicURL: "https://archive.example",
+	}).Handler()
+	for _, host := range []string{"mail.lan:8080", "MAIL.LAN", "192.168.1.10", "192.168.1.10:80", "archive.example", "archive.example:443"} {
+		serveOK(t, h, plainBrowserRequest(host, "192.168.1.20:5000"), 200)
+	}
+	logged := buf.String()
+	lines := strings.Split(strings.TrimSpace(logged), "\n")
+	if strings.Count(logged, plainHTTPMsg) != 3 || len(lines) != 3 {
+		t.Fatalf("want three warnings, got: %s", logged)
+	}
+	for i, host := range []string{"mail.lan", "192.168.1.10", "archive.example"} {
+		line := lines[i]
+		if !strings.Contains(line, "level=WARN") || !strings.Contains(line, plainHTTPMsg) || !strings.HasSuffix(line, " host="+host) {
+			t.Errorf("line %d: %s, want a warning for %s", i, line, host)
+		}
+		for _, s := range []string{"use HTTPS", "http://localhost", config.EnvTrustedProxies, "Plain LAN access"} {
+			if !strings.Contains(line, s) {
+				t.Errorf("line %d does not name %q: %s", i, s, line)
+			}
+		}
+	}
+	for _, s := range []string{"8080", "MAIL.LAN", "Mail.LAN", ":443", "192.168.1.20", "Firefox"} {
+		if strings.Contains(logged, s) {
+			t.Errorf("the log contains %q from the request: %s", s, logged)
+		}
+	}
+}
+
+// Hosts reached only with a port, an IPv6 one in brackets, still warn once
+// each, under the configured name.
+func TestWarnPlainHTTPHostWithPortOnly(t *testing.T) {
+	var buf bytes.Buffer
+	h := plainHTTPServer(&buf, []string{"mail.lan", "fd00::10"}).Handler()
+	for range 2 {
+		for _, host := range []string{"mail.lan:8080", "[fd00::10]:8080"} {
+			serveOK(t, h, plainBrowserRequest(host, "192.168.1.20:5000"), 200)
+		}
+	}
+	logged := buf.String()
+	if strings.Count(logged, plainHTTPMsg) != 2 || strings.Count(logged, "host=mail.lan\n") != 1 ||
+		strings.Count(logged, "host=fd00::10\n") != 1 || strings.Contains(logged, "8080") {
+		t.Fatalf("want one warning each for mail.lan and fd00::10: %s", logged)
+	}
+}
+
+// No warning where the guard works: under a loopback name, over HTTPS
+// (directly or through a proxy that counts), for a browser that sends Fetch
+// Metadata, and for a client that is no browser. X-Forwarded-Proto: https
+// from a peer that does not count gets only its own warning.
+func TestWarnPlainHTTPNot(t *testing.T) {
+	const forwardedMsg = "X-Forwarded-Proto from a peer that is neither loopback nor a trusted proxy is ignored"
+	trusted := netip.MustParsePrefix("192.0.2.0/24")
+	hosts := []string{"localhost", "app.localhost", "127.0.0.1", "127.0.0.2", "::1", "mail.lan"}
+	for _, c := range []struct {
+		name, host, remote string
+		tls                bool
+		header             map[string]string
+		forwarded          bool
+	}{
+		{"localhost", "localhost:8080", "127.0.0.1:5000", false, nil, false},
+		{"name under localhost", "app.localhost", "127.0.0.1:5000", false, nil, false},
+		{"127.0.0.1", "127.0.0.1:8080", "127.0.0.1:5000", false, nil, false},
+		{"127.0.0.2", "127.0.0.2", "127.0.0.1:5000", false, nil, false},
+		{"::1", "[::1]:8080", "[::1]:5000", false, nil, false},
+		{"tls", "mail.lan", "198.51.100.7:5000", true, nil, false},
+		{"https from a loopback proxy", "mail.lan", "127.0.0.1:5000", false, map[string]string{"X-Forwarded-Proto": "https"}, false},
+		{"https from a trusted proxy", "mail.lan", "192.0.2.1:5000", false, map[string]string{"X-Forwarded-Proto": "https"}, false},
+		{"https from an untrusted peer", "mail.lan", "198.51.100.7:5000", false, map[string]string{"X-Forwarded-Proto": "https"}, true},
+		{"fetch metadata", "mail.lan", "198.51.100.7:5000", false, map[string]string{"Sec-Fetch-Site": "same-origin"}, false},
+		{"fetch mode only", "mail.lan", "198.51.100.7:5000", false, map[string]string{"Sec-Fetch-Mode": "navigate"}, false},
+		{"api key", "mail.lan", "198.51.100.7:5000", false, map[string]string{"Authorization": "Bearer " + auth.APIKeyPrefix + "abc"}, false},
+		{"curl", "mail.lan", "198.51.100.7:5000", false, map[string]string{"User-Agent": "curl/8.5.0"}, false},
+		{"no user agent", "mail.lan", "198.51.100.7:5000", false, map[string]string{"User-Agent": ""}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			h := plainHTTPServer(&buf, hosts, trusted).Handler()
+			for range 2 {
+				req := plainBrowserRequest(c.host, c.remote)
+				if c.tls {
+					req.TLS = &tls.ConnectionState{}
+				}
+				for k, v := range c.header {
+					if v == "" {
+						req.Header.Del(k)
+					} else {
+						req.Header.Set(k, v)
+					}
+				}
+				serveOK(t, h, req, 200)
+			}
+			logged := buf.String()
+			if strings.Contains(logged, plainHTTPMsg) {
+				t.Errorf("warned: %s", logged)
+			}
+			if c.forwarded != strings.Contains(logged, forwardedMsg) {
+				t.Errorf("X-Forwarded-Proto warning %v, want %v: %s", !c.forwarded, c.forwarded, logged)
+			}
+		})
+	}
+}
+
+// X-Forwarded-Proto: http from a trusted proxy means the browser used plain
+// HTTP to the proxy: that warns too.
+func TestWarnPlainHTTPThroughTrustedProxy(t *testing.T) {
+	var buf bytes.Buffer
+	h := plainHTTPServer(&buf, []string{"mail.lan"}, netip.MustParsePrefix("192.0.2.0/24")).Handler()
+	for range 2 {
+		req := plainBrowserRequest("mail.lan", "192.0.2.1:5000")
+		req.Header.Set("X-Forwarded-Proto", "http")
+		serveOK(t, h, req, 200)
+	}
+	if logged := buf.String(); strings.Count(logged, plainHTTPMsg) != 1 || !strings.Contains(logged, "host=mail.lan") {
+		t.Fatalf("want one warning for mail.lan: %s", logged)
+	}
+}
+
+// A request with a Host that is not allowed gets its 403 and neither warns
+// nor adds a host: the warnings stay one per configured host, however many
+// names clients send. The allowed host still warns afterwards.
+func TestWarnPlainHTTPAfterHostCheck(t *testing.T) {
+	var buf bytes.Buffer
+	s := plainHTTPServer(&buf, []string{"localhost", "mail.lan"})
+	h := s.Handler()
+	serveOK(t, h, plainBrowserRequest("scanner.example", "198.51.100.9:5000"), 403)
+	for i := range 1000 {
+		serveOK(t, h, plainBrowserRequest(fmt.Sprintf("h%d.example", i), "198.51.100.9:5000"), 403)
+	}
+	if strings.Contains(buf.String(), plainHTTPMsg) || len(s.plainHTTPWarned) != 1 {
+		t.Fatalf("%d hosts after the refused requests, log: %s", len(s.plainHTTPWarned), buf.String())
+	}
+	serveOK(t, h, plainBrowserRequest("mail.lan", "198.51.100.9:5000"), 200)
+	if logged := buf.String(); strings.Count(logged, plainHTTPMsg) != 1 || !strings.Contains(logged, "host=mail.lan\n") {
+		t.Fatalf("want one warning for mail.lan: %s", logged)
+	}
+}
+
+// Concurrent first requests to one host log one line.
+func TestWarnPlainHTTPConcurrent(t *testing.T) {
+	for round := range 100 {
+		var buf bytes.Buffer
+		h := plainHTTPServer(&buf, []string{"mail.lan"}).Handler()
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for range 50 {
+			wg.Go(func() {
+				<-start
+				rec := httptest.NewRecorder()
+				h.ServeHTTP(rec, plainBrowserRequest("mail.lan", "198.51.100.9:5000"))
+			})
+		}
+		close(start)
+		done := make(chan struct{})
+		go func() { wg.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(testwait.Limit(t)):
+			t.Fatal("the requests did not finish")
+		}
+		if n := strings.Count(buf.String(), plainHTTPMsg); n != 1 {
+			t.Fatalf("round %d: %d warnings: %s", round, n, buf.String())
+		}
+	}
+}
+
+func TestIsLoopbackName(t *testing.T) {
+	for host, want := range map[string]bool{
+		"localhost": true, "localhost.": true, "app.localhost": true, "a.b.localhost": true, "a.b.localhost.": true,
+		"127.0.0.1": true, "127.0.0.2": true, "::1": true, "::ffff:127.0.0.1": true,
+		"localhost.example": false, "notlocalhost": false, "192.168.1.1": false, "10.0.0.1": false, "::": false,
+		"fe80::1": false, "mail.lan": false, "": false,
+	} {
+		if got := isLoopbackName(host); got != want {
+			t.Errorf("isLoopbackName(%q) = %v, want %v", host, got, want)
 		}
 	}
 }
