@@ -25,6 +25,16 @@ type Config struct {
 	MinFreeDisk int64
 	// Interval between reads (default DefaultInterval).
 	Interval time.Duration
+	// Persist makes this gate write the transitions its figures call for
+	// (serve). A gate without it (the commands) decides the same states
+	// from the persisted ones and the figures, in memory only: processes
+	// whose limits differ (a command run with a newer .env before the web
+	// server restarts) then never flip the persisted state back and forth,
+	// and every alert comes from one process.
+	Persist bool
+	// OnTransition, if set, is called after this gate persisted a
+	// transition (the notifier's Wake).
+	OnTransition func()
 }
 
 // Source is where a gate reads figures and persists transitions: the
@@ -42,12 +52,13 @@ type Source interface {
 // import cannot overshoot between reads; the next read contains them.
 //
 // When a scope's figures call for another state than the persisted one,
-// the gate persists the transition from the database figures alone (and
-// statfs, for disk_low): under the row lock of the scope's state, with the
-// figures read again (store.TransitionStorageState). So every process
-// persists the same states, and two gates that see a crossing at once
-// make one transition. The local bytes only make this process pause
-// earlier; they are never persisted.
+// a gate with Persist (serve) persists the transition from the database
+// figures alone (and statfs, for disk_low): under the row lock of the
+// scope's state, with the figures read again (store.TransitionStorageState).
+// Two gates that see a crossing at once make one transition. Gates without
+// Persist (the commands) decide the same states in memory. The local and
+// pending bytes only make this process pause earlier; they are never
+// persisted.
 //
 // The checks themselves (State, Admit) are lookups in memory: their time
 // does not depend on other groups' figures.
@@ -78,6 +89,11 @@ type Gate struct {
 	// and per group.
 	localInstance int64
 	localGroups   map[int64]int64
+	// pending are the bytes of message files written whose batch has not
+	// committed yet (Pending), so that a sync, fill or import stops within
+	// one message of a limit, not one batch.
+	pendingInstance int64
+	pendingGroups   map[int64]int64
 	// diskErr is set while statfs fails, so it is logged once.
 	diskErr bool
 }
@@ -103,7 +119,7 @@ func New(cfg Config, src Source, free func() (int64, error), now func() time.Tim
 		log = slog.Default()
 	}
 	return &Gate{cfg: cfg, src: src, free: free, now: now, log: log, freeDisk: -1,
-		groups: map[int64]scope{}, localGroups: map[int64]int64{}}
+		groups: map[int64]scope{}, localGroups: map[int64]int64{}, pendingGroups: map[int64]int64{}}
 }
 
 // Config returns the gate's limits.
@@ -130,7 +146,9 @@ func (g *Gate) Run(ctx context.Context) {
 	t := time.NewTicker(g.cfg.Interval)
 	defer t.Stop()
 	for {
-		g.Refresh(ctx)
+		rctx, cancel := context.WithTimeout(ctx, readTimeout)
+		g.Refresh(rctx)
+		cancel()
 		select {
 		case <-ctx.Done():
 			return
@@ -201,13 +219,13 @@ func (g *Gate) refreshLocked(ctx context.Context) {
 	}
 	free := g.statfs()
 	inst := scope{state: parseOr(figs.Instance.State, g.log), bytes: figs.Instance.Bytes, quota: g.cfg.InstanceQuota}
-	if next := g.decideInstance(inst.state, inst.bytes, free); next != inst.state {
+	if next := g.decideInstance(inst.state, inst.bytes, free); next != inst.state && g.cfg.Persist {
 		inst = g.transition(ctx, nil, inst)
 	}
 	groups := make(map[int64]scope, len(figs.Groups))
 	for _, fg := range figs.Groups {
 		sc := scope{state: parseOr(fg.State, g.log), bytes: fg.Bytes, quota: deref(fg.Quota)}
-		if next := g.decideGroup(sc.state, sc.bytes, sc.quota, figs.Counted); next != sc.state {
+		if next := g.decideGroup(sc.state, sc.bytes, sc.quota, figs.Counted); next != sc.state && g.cfg.Persist {
 			sc = g.transition(ctx, fg.Group, sc)
 		}
 		groups[*fg.Group] = sc
@@ -264,6 +282,9 @@ func (g *Gate) transition(ctx context.Context, group *int64, sc scope) scope {
 			g.log.Warn("storage state changed", attrs...)
 		} else {
 			g.log.Info("storage state changed", attrs...)
+		}
+		if g.cfg.OnTransition != nil {
+			g.cfg.OnTransition()
 		}
 	}
 	return sc
@@ -342,7 +363,7 @@ func (g *Gate) effective(group *int64) (State, Scope) {
 	worst, why := OK, Scope("")
 	if group != nil && g.counted {
 		if sc, ok := g.groups[*group]; ok {
-			worst = g.cfg.Next(min(sc.state, Overflow), sc.quota, sc.bytes+g.localGroups[*group])
+			worst = g.cfg.Next(min(sc.state, Overflow), sc.quota, sc.bytes+g.localGroups[*group]+g.pendingGroups[*group])
 			why = ScopeGroup
 		}
 	}
@@ -350,16 +371,79 @@ func (g *Gate) effective(group *int64) (State, Scope) {
 	if base == DiskLow {
 		base = OK
 	}
-	if st := g.cfg.Next(base, g.cfg.InstanceQuota, g.instance.bytes+g.localInstance); st > worst {
+	added := g.localInstance + g.pendingInstance
+	if st := g.cfg.Next(base, g.cfg.InstanceQuota, g.instance.bytes+added); st > worst {
 		worst, why = st, ScopeInstance
 	}
-	if g.freeDisk >= 0 && diskLow(g.instance.state, g.cfg.MinFreeDisk, g.freeDisk-g.localInstance) {
+	if g.freeDisk >= 0 && diskLow(g.instance.state, g.cfg.MinFreeDisk, g.freeDisk-added) {
 		worst, why = DiskLow, ScopeDisk
 	}
 	if worst == OK {
 		why = ""
 	}
 	return worst, why
+}
+
+// Pending counts the message files one writer (a sync's folder, a fill's
+// batch, an import) has written for a group whose batch has not committed
+// yet. The gate adds them to the group's and the instance's figures, so
+// that the writer's next check sees them: a running sync, fill or import
+// stops within one message of a limit. When the batch commits, the store
+// tells the gate what it really added (Wrote) and the writer settles its
+// pending bytes; a batch that fails or is dropped settles them too. Not
+// safe for concurrent use; one per writer.
+type Pending struct {
+	g     *Gate
+	group *int64
+	bytes int64
+}
+
+// Pending returns a writer's pending counter for the group (nil: an
+// account without an owner). A nil gate gives a counter that counts
+// nothing.
+func (g *Gate) Pending(group *int64) *Pending {
+	return &Pending{g: g, group: group}
+}
+
+// Add counts a message file of n bytes that was written.
+func (p *Pending) Add(n int64) {
+	if p == nil || p.g == nil || n <= 0 {
+		return
+	}
+	g := p.g
+	g.mu.Lock()
+	g.pendingInstance += n
+	if p.group != nil {
+		g.pendingGroups[*p.group] += n
+	}
+	g.mu.Unlock()
+	p.bytes += n
+}
+
+// Bytes returns what is pending.
+func (p *Pending) Bytes() int64 {
+	if p == nil {
+		return 0
+	}
+	return p.bytes
+}
+
+// Settle drops the pending bytes: the batch committed (the store told the
+// gate what it added) or was dropped.
+func (p *Pending) Settle() {
+	if p == nil || p.g == nil || p.bytes == 0 {
+		return
+	}
+	g := p.g
+	g.mu.Lock()
+	g.pendingInstance -= p.bytes
+	if p.group != nil {
+		if g.pendingGroups[*p.group] -= p.bytes; g.pendingGroups[*p.group] <= 0 {
+			delete(g.pendingGroups, *p.group)
+		}
+	}
+	g.mu.Unlock()
+	p.bytes = 0
 }
 
 func parseOr(name string, log *slog.Logger) State {

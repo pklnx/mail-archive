@@ -81,14 +81,14 @@ func (p *pauseFixture) later() {
 // gate is a gate on the fixture's store; every save tells it what it
 // stored.
 func (p *pauseFixture) gate(instanceQuota int64) *quota.Gate {
-	g := quota.New(quota.Config{InstanceQuota: instanceQuota, Thresholds: quota.Thresholds{WarnPercent: 80, OverflowPercent: 10},
+	g := quota.New(quota.Config{Persist: true, InstanceQuota: instanceQuota, Thresholds: quota.Thresholds{WarnPercent: 80, OverflowPercent: 10},
 		Interval: time.Minute}, p.store, nil, p.clock, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	p.store.SetWriteObserver(g.Wrote)
 	return g
 }
 
-// setQuota sets group A's quota: 1 byte makes it full after the first
-// batch that stores anything (the gate counts the batch's bytes at once).
+// setQuota sets a group's quota: 1 byte makes it full with the first
+// message written (the gate counts a batch's files at once, as pending).
 func (p *pauseFixture) setQuota(group int64, q *int64) {
 	p.t.Helper()
 	if _, err := p.store.SetGroupQuota(p.ctx, group, q); err != nil {
@@ -148,7 +148,7 @@ func TestSyncPausesPerGroup(t *testing.T) {
 	p.syncer.Storage = p.gate(0)
 
 	res := p.sync()
-	if !res["a"].IsPaused() || res["a"].Fetched != 2 {
+	if !res["a"].IsPaused() || res["a"].Fetched != 1 {
 		t.Fatalf("a: %+v", res["a"])
 	}
 	var fe *quota.FullError
@@ -158,10 +158,10 @@ func TestSyncPausesPerGroup(t *testing.T) {
 	if res["b"].Err != nil || res["b"].Fetched != 3 {
 		t.Fatalf("b: %+v", res["b"])
 	}
-	if n := p.locations(accA.ID); n != 2 {
-		t.Fatalf("a: %d locations, want the first batch", n)
+	if n := p.locations(accA.ID); n != 1 {
+		t.Fatalf("a: %d locations, want the one that reached the quota", n)
 	}
-	if last := p.int(`SELECT last_uid FROM folders WHERE account_id = $1 AND name = 'INBOX'`, accA.ID); last != 2 {
+	if last := p.int(`SELECT last_uid FROM folders WHERE account_id = $1 AND name = 'INBOX'`, accA.ID); last != 1 {
 		t.Fatalf("a: INBOX last UID %d", last)
 	}
 	if n := p.int(`SELECT count(*) FROM folders WHERE account_id = $1 AND name = 'Later'`, accA.ID); n != 0 {
@@ -202,7 +202,7 @@ func TestSyncPausesPerGroup(t *testing.T) {
 	p.setQuota(p.groupA, nil)
 	p.later()
 	res = p.sync()
-	if res["a"].Err != nil || res["a"].Fetched != 4 {
+	if res["a"].Err != nil || res["a"].Fetched != 5 {
 		t.Fatalf("a after the quota was raised: %+v", res["a"])
 	}
 	if n := p.locations(accA.ID); n != 6 {
@@ -257,10 +257,10 @@ func TestImportPauses(t *testing.T) {
 		t.Fatal(err)
 	}
 	res, err := im.Import(p.ctx, acc, folders)
-	if !errors.Is(err, quota.ErrStorageFull) || res == nil || res.Status != "partial" || res.Total().Added != 2 {
+	if !errors.Is(err, quota.ErrStorageFull) || res == nil || res.Status != "partial" || res.Total().Added != 1 {
 		t.Fatalf("import: %+v, %v", res, err)
 	}
-	if n := p.locations(acc.ID); n != 2 {
+	if n := p.locations(acc.ID); n != 1 {
 		t.Fatalf("%d locations after the pause", n)
 	}
 	runs, _ := p.store.LastRuns(p.ctx)
@@ -274,7 +274,7 @@ func TestImportPauses(t *testing.T) {
 	p.setQuota(p.groupA, nil)
 	p.later()
 	res, err = im.Import(p.ctx, acc, folders)
-	if err != nil || res.Status != "ok" || res.Total().Added != 3 || res.Total().Present != 2 {
+	if err != nil || res.Status != "ok" || res.Total().Added != 4 || res.Total().Present != 1 {
 		t.Fatalf("rerun: %+v, %v", res, err)
 	}
 	if n := p.locations(acc.ID); n != 5 {
@@ -304,13 +304,13 @@ func TestJournalImportPauses(t *testing.T) {
 		return im.ImportJournal(p.ctx, acc, imp, folders)
 	}
 	res, err := importRun()
-	if !errors.Is(err, quota.ErrStorageFull) || res.Status != "partial" || res.Total().Added != 2 {
+	if !errors.Is(err, quota.ErrStorageFull) || res.Status != "partial" || res.Total().Added != 1 {
 		t.Fatalf("import: %+v, %v", res, err)
 	}
 	p.setQuota(p.groupA, nil)
 	p.later()
 	res, err = importRun()
-	if err != nil || res.Total().Added != 3 || res.Total().Present != 2 {
+	if err != nil || res.Total().Added != 4 || res.Total().Present != 1 {
 		t.Fatalf("rerun: %+v, %v", res, err)
 	}
 	if n := p.locations(acc.ID); n != 5 {
@@ -337,8 +337,19 @@ func TestFillPauses(t *testing.T) {
 	if !errors.Is(err, quota.ErrStorageFull) || got.Status != store.FillRunning {
 		t.Fatalf("paused fill: %+v, %v", got, err)
 	}
-	if n := p.locations(acc.ID); n != 2 {
-		t.Fatalf("%d locations after the pause, want the first batch's two", n)
+	if n := p.locations(acc.ID); n != 1 {
+		t.Fatalf("%d locations after the pause, want the one that reached the quota", n)
+	}
+	// A pause is not a folder's error: that text reaches the account's
+	// users through the fills API and would name the limit (#539).
+	paused, err := p.store.GetFill(p.ctx, fill.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ff := range paused.Folders {
+		if ff.Error != "" {
+			t.Fatalf("folder %s error after the pause: %q", ff.SourceName, ff.Error)
+		}
 	}
 	if got, err := filler.Run(p.ctx, fill.ID); !errors.Is(err, quota.ErrStorageFull) || got.Status != store.FillRunning {
 		t.Fatalf("run while paused: %+v, %v", got, err)
@@ -408,7 +419,7 @@ func (p *pauseFixture) diskGate(n int) *quota.Gate {
 		}
 		return 1 << 40, nil
 	}
-	g := quota.New(quota.Config{Thresholds: quota.Thresholds{WarnPercent: 80, OverflowPercent: 10}, MinFreeDisk: 1 << 30,
+	g := quota.New(quota.Config{Persist: true, Thresholds: quota.Thresholds{WarnPercent: 80, OverflowPercent: 10}, MinFreeDisk: 1 << 30,
 		Interval: time.Minute}, p.store, free, clock, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	p.store.SetWriteObserver(g.Wrote)
 	return g
@@ -459,5 +470,62 @@ func TestImportPauseSavesTheBatch(t *testing.T) {
 	}
 	if n := p.locations(jnl.ID); n != 2 {
 		t.Fatalf("journal import: %d locations", n)
+	}
+}
+
+// A sync with the default batch of 100 stops within one message of the
+// limit, not one batch: the files of the batch count as pending at once
+// (review of #573). With a quota of 1 byte, the first message reaches it.
+func TestSyncPausesWithinOneMessage(t *testing.T) {
+	ua := imapmemserver.NewUser("a", "pw")
+	createMailboxes(t, ua, "INBOX")
+	for i := range 150 {
+		appendMsg(t, ua, "INBOX", rawMessage(fmt.Sprintf("w%d@example.com", i), "w"))
+	}
+	p := newPauseFixture(t, ua)
+	acc := p.ownedAccount("a", "a", p.ann)
+	p.syncer.BatchSize = 0 // the default, 100
+	p.setQuota(p.groupA, one(1))
+	p.syncer.Storage = p.gate(0)
+	res := p.sync()
+	if !res["a"].IsPaused() || res["a"].New != 1 {
+		t.Fatalf("a: %+v", res["a"])
+	}
+	if n := p.locations(acc.ID); n != 1 {
+		t.Fatalf("%d messages stored past a quota of 1 byte, want 1", n)
+	}
+	if last := p.int(`SELECT last_uid FROM folders WHERE account_id = $1 AND name = 'INBOX'`, acc.ID); last != 1 {
+		t.Fatalf("INBOX last UID %d", last)
+	}
+}
+
+// Messages the group holds already count as pending while their batch
+// is open, but the refusal they cause commits the batch and asks again:
+// a near-full group syncing known mail is not paused.
+func TestSyncKnownMailDoesNotPause(t *testing.T) {
+	ua := imapmemserver.NewUser("a", "pw")
+	ub := imapmemserver.NewUser("b", "pw")
+	createMailboxes(t, ua, "INBOX")
+	createMailboxes(t, ub, "INBOX")
+	for i := range 20 {
+		raw := rawMessage(fmt.Sprintf("k%d@example.com", i), "k")
+		appendMsg(t, ua, "INBOX", raw)
+		appendMsg(t, ub, "INBOX", raw)
+	}
+	p := newPauseFixture(t, ua, ub)
+	p.ownedAccount("a", "a", p.ann)
+	p.syncer.BatchSize = 0
+	p.syncer.Storage = p.gate(0)
+	if res := p.sync(); res["a"].Err != nil || res["a"].New != 20 {
+		t.Fatalf("first account: %+v", res["a"])
+	}
+	// The group holds exactly what is stored now: one byte more is free.
+	used := p.int(`SELECT coalesce(sum(bytes), 0) FROM storage_group_deltas WHERE group_id = $1`, p.groupA)
+	p.setQuota(p.groupA, one(used+1))
+	accB := p.ownedAccount("b", "b", p.ann) // same group, the same 20 messages
+	p.later()
+	res := p.sync()
+	if res["b"].Err != nil || res["b"].New != 20 || p.locations(accB.ID) != 20 {
+		t.Fatalf("known mail: %+v, %d locations", res["b"], p.locations(accB.ID))
 	}
 }

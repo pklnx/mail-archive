@@ -199,6 +199,7 @@ func testGate(cfg Config, src Source, free func() (int64, error), c *clock) *Gat
 	if cfg.Thresholds == (Thresholds{}) {
 		cfg.Thresholds = th
 	}
+	cfg.Persist = true
 	return New(cfg, src, free, c.now, quiet())
 }
 

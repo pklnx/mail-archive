@@ -84,7 +84,7 @@ func (im *Importer) ImportJournal(ctx context.Context, acc *store.Account, imp *
 		res.Folders = append(res.Folders, ImportFolderResult{Folder: sf.Name})
 		fr := &res.Folders[len(res.Folders)-1]
 		j := &journalImport{im: im, accountID: fresh.ID, group: fresh.GroupID, folderID: folderID, importID: imp.ID, fr: fr,
-			log: log.With("folder", sf.Name)}
+			log: log.With("folder", sf.Name), pending: im.Storage.Pending(fresh.GroupID)}
 		if err := j.run(ctx, sf); err != nil {
 			runErr = fmt.Errorf("%s: %w", sf.Name, err)
 			break
@@ -111,9 +111,12 @@ type journalImport struct {
 	im                            *Importer
 	accountID, folderID, importID int64
 	group                         *int64 // the account owner's, for the storage gate
-	fr                            *ImportFolderResult
-	log                           *slog.Logger
-	batch                         []journalPending
+	// pending counts the files of the batch for the storage gate; every
+	// flush settles it.
+	pending *quota.Pending
+	fr      *ImportFolderResult
+	log     *slog.Logger
+	batch   []journalPending
 }
 
 // journalPending is a message waiting for the journaled check.
@@ -130,11 +133,12 @@ func (j *journalImport) run(ctx context.Context, sf mailbox.SourceFolder) error 
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := j.im.Storage.Admit(j.group); err != nil {
+		if err := j.admit(ctx); err != nil {
 			return err
 		}
 		return j.add(ctx, body, m)
 	})
+	defer j.pending.Settle() // files of messages that were not saved
 	if errors.Is(err, quota.ErrStorageFull) {
 		// Paused: save what was read, so a rerun goes on from there.
 		if ferr := j.flush(ctx); ferr != nil {
@@ -153,6 +157,7 @@ func (j *journalImport) add(ctx context.Context, body io.Reader, m sourceMessage
 	if !ok || err != nil {
 		return err
 	}
+	j.pending.Add(blob.Size)
 	present, err := j.im.Store.LocationInFolder(ctx, j.folderID, blob.SHA256)
 	if err != nil {
 		return err
@@ -189,8 +194,23 @@ func (j *journalImport) add(ctx context.Context, body io.Reader, m sourceMessage
 	return nil
 }
 
+// admit is folderWriter.admit for the journal import: a refusal while
+// files of the batch are pending commits the batch first and asks again.
+func (j *journalImport) admit(ctx context.Context) error {
+	err := j.im.Storage.Admit(j.group)
+	if err == nil || j.pending.Bytes() == 0 {
+		return err
+	}
+	if ferr := j.flush(ctx); ferr != nil {
+		return ferr
+	}
+	return j.im.Storage.Admit(j.group)
+}
+
 // flush leaves out the journaled messages of the batch and stores the rest.
 func (j *journalImport) flush(ctx context.Context) error {
+	// Committed or failed: these files are no longer pending.
+	defer j.pending.Settle()
 	if len(j.batch) == 0 {
 		return nil
 	}

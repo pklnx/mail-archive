@@ -687,12 +687,21 @@ func (f *Filler) fillBatch(ctx context.Context, conn *imapsync.Conn, fill *store
 		locs  []store.Location
 		seen  = map[string]bool{}
 	)
+	// The files of this batch count for the storage gate until the batch
+	// is saved: the fill stops within one message of a limit. A refusal
+	// caused by duplicates in the batch only pauses the fill until the
+	// runner's next check, a minute later.
+	pending := f.Storage.Pending(group)
+	defer pending.Settle()
 	sink := func(r io.Reader) (storedBody, error) {
 		// Before each file: a full group or instance writes no more.
 		if err := f.Storage.Admit(group); err != nil {
 			return storedBody{}, imapsync.Stop(err)
 		}
 		blob, created, err := f.Blobs.Put(r)
+		if err == nil {
+			pending.Add(blob.Size)
+		}
 		return storedBody{blob, created}, err
 	}
 	fetchErr := imapsync.FetchUIDs(conn, fetch, sink, func(m imapsync.Message[storedBody]) error {

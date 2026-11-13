@@ -57,7 +57,7 @@ func (g *gateFigures) set(gate *quota.Gate, aBytes, instBytes int64) {
 // full instance; group B's is queued.
 func TestStoragePausedSyncs(t *testing.T) {
 	db := &gateFigures{aState: "ok", instState: "ok"}
-	gate := quota.New(quota.Config{InstanceQuota: 100, Thresholds: quota.Thresholds{WarnPercent: 80, OverflowPercent: 10},
+	gate := quota.New(quota.Config{Persist: true, InstanceQuota: 100, Thresholds: quota.Thresholds{WarnPercent: 80, OverflowPercent: 10},
 		Interval: 24 * time.Hour}, db, nil, nil, nil)
 	f := newAuthFixtureOpts(t, Options{
 		Syncer: &archive.Syncer{Storage: gate},

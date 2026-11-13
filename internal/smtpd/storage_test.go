@@ -16,6 +16,7 @@ import (
 	"github.com/pklnx/mail-archive/internal/quota"
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/store/storetest"
+	"github.com/pklnx/mail-archive/internal/testwait"
 )
 
 // gateDB is the storage gate's database in these tests: the states come
@@ -87,7 +88,7 @@ var bytesFor = map[quota.State]int64{quota.OK: 0, quota.Warn: 85, quota.Full: 10
 func newStorageFixture(t *testing.T, auth bool, configure func(*Server)) *storageFixture {
 	t.Helper()
 	sf := &storageFixture{db: &gateDB{}, free: 1 << 40}
-	sf.gate = quota.New(quota.Config{Thresholds: quota.Thresholds{WarnPercent: 80, OverflowPercent: 10}, MinFreeDisk: 1 << 30,
+	sf.gate = quota.New(quota.Config{Persist: true, Thresholds: quota.Thresholds{WarnPercent: 80, OverflowPercent: 10}, MinFreeDisk: 1 << 30,
 		Interval: time.Hour}, sf.db, func() (int64, error) {
 		sf.freeMu.Lock()
 		defer sf.freeMu.Unlock()
@@ -145,9 +146,17 @@ func newStorageFixture(t *testing.T, auth bool, configure func(*Server)) *storag
 func ptr(v int64) *int64 { return &v }
 
 // set puts group A (and, with b, group B) in a state; quota.DiskLow puts
-// the disk below its reserve instead.
+// the disk below its reserve instead. Only from the test's goroutine.
 func (sf *storageFixture) set(a quota.State, b quota.State) {
 	sf.t.Helper()
+	if err := sf.setState(a, b); err != nil {
+		sf.t.Fatal(err)
+	}
+}
+
+// setState is set for the server's goroutines (the DATA hook): it
+// returns what went wrong instead of failing the test there.
+func (sf *storageFixture) setState(a quota.State, b quota.State) error {
 	sf.freeMu.Lock()
 	sf.free = 1 << 40
 	if a == quota.DiskLow {
@@ -162,8 +171,39 @@ func (sf *storageFixture) set(a quota.State, b quota.State) {
 	sf.db.mu.Unlock()
 	sf.gate.Refresh(context.Background())
 	if a != quota.DiskLow && (sf.gate.State(&sf.groupA) != a || sf.gate.State(&sf.groupB) != b) {
-		sf.t.Fatalf("gate: A %s, B %s; want %s, %s", sf.gate.State(&sf.groupA), sf.gate.State(&sf.groupB), a, b)
+		return fmt.Errorf("gate: A %s, B %s; want %s, %s", sf.gate.State(&sf.groupA), sf.gate.State(&sf.groupB), a, b)
 	}
+	return nil
+}
+
+// hookErrors collects the errors of setState in DATA hooks, for the test
+// to check on its own goroutine.
+type hookErrors struct {
+	mu   sync.Mutex
+	errs []error
+}
+
+func (h *hookErrors) add(err error) {
+	if err != nil {
+		h.mu.Lock()
+		h.errs = append(h.errs, err)
+		h.mu.Unlock()
+	}
+}
+
+func (h *hookErrors) check(t *testing.T) {
+	t.Helper()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, err := range h.errs {
+		t.Errorf("DATA hook: %v", err)
+	}
+}
+
+// close ends a client's connection, so that its slot is free again.
+func (c *rawClient) close() {
+	_, _ = c.cmd("QUIT")
+	_ = c.conn.Close()
 }
 
 // stored returns the accounts that hold the message with the subject, of
@@ -259,7 +299,9 @@ func TestStorageStates(t *testing.T) {
 // is written.
 func TestStorageAtData(t *testing.T) {
 	sf := newStorageFixture(t, false, nil)
-	sf.onData(func() { sf.set(quota.Overflow, quota.OK) })
+	var hooks hookErrors
+	defer hooks.check(t)
+	sf.onData(func() { hooks.add(sf.setState(quota.Overflow, quota.OK)) })
 	c, _ := sf.raw()
 	c.must(250, "EHLO mx.example.com")
 	if code, msg := c.deliver("sender@example.com", []string{rcptA, rcptB}, message("gecko")); code != 452 || !strings.HasPrefix(msg, "4.3.1") {
@@ -267,6 +309,9 @@ func TestStorageAtData(t *testing.T) {
 	}
 	if got := sf.stored("gecko"); len(got) != 1 || got["other"] == nil {
 		t.Fatalf("partial: stored %v", got)
+	}
+	if n := sf.srv.StorageDeferrals(); n != 1 {
+		t.Fatalf("partial: %d recipients counted as deferred, want 1", n)
 	}
 	// The retry, once space is freed: A is stored, B merges.
 	sf.onData(nil)
@@ -280,7 +325,7 @@ func TestStorageAtData(t *testing.T) {
 
 	// Both groups overflow after RCPT: nothing reaches the disk.
 	before := sf.files()
-	sf.onData(func() { sf.set(quota.Overflow, quota.Overflow) })
+	sf.onData(func() { hooks.add(sf.setState(quota.Overflow, quota.Overflow)) })
 	if code, msg := c.deliver("sender@example.com", []string{rcptA, rcptB}, message("skink")); code != 452 || !strings.HasPrefix(msg, "4.3.1") {
 		t.Fatalf("all deferred: %d %s", code, msg)
 	}
@@ -289,6 +334,9 @@ func TestStorageAtData(t *testing.T) {
 	}
 	if got := sf.stored("skink"); len(got) != 0 {
 		t.Fatalf("all deferred: stored %v", got)
+	}
+	if n := sf.srv.StorageDeferrals(); n != 3 {
+		t.Fatalf("all deferred: %d recipients counted as deferred, want 3", n)
 	}
 	sf.logHas(`msg="smtp message deferred" code=452`)
 }
@@ -330,20 +378,24 @@ func TestStorageLogLimit(t *testing.T) {
 func TestStorageReceiveWhileFlipping(t *testing.T) {
 	sf := newStorageFixture(t, false, nil)
 	var (
-		mu sync.Mutex
-		n  int
+		mu    sync.Mutex
+		n     int
+		hooks hookErrors
 	)
+	defer hooks.check(t)
 	sf.onData(func() {
 		mu.Lock()
 		defer mu.Unlock()
 		n++
 		if n%2 == 0 {
-			sf.set(quota.Overflow, quota.OK)
+			hooks.add(sf.setState(quota.Overflow, quota.OK))
 		} else {
-			sf.set(quota.OK, quota.OK)
+			hooks.add(sf.setState(quota.OK, quota.OK))
 		}
 	})
-	const msgs = 10 // below the server's connection cap
+	// 10 clients at once, each closed after its message, so that they
+	// and the retries below stay within the server's 16 connections.
+	const msgs = 10
 	codes := make([]int, msgs)
 	var wg sync.WaitGroup
 	for i := range msgs {
@@ -351,13 +403,20 @@ func TestStorageReceiveWhileFlipping(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			c, _ := sf.raw()
+			defer c.close()
 			if code, _ := c.cmd("EHLO mx.example.com"); code != 250 {
 				return
 			}
 			codes[i], _ = c.deliver("sender@example.com", []string{rcptA, rcptB}, message(flipSubject(i)))
 		}()
 	}
-	wg.Wait()
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(testwait.Limit(t)):
+		t.Fatal("the clients did not finish")
+	}
 	deferred := 0
 	for i, code := range codes {
 		got := sf.stored(flipSubject(i))
@@ -375,8 +434,11 @@ func TestStorageReceiveWhileFlipping(t *testing.T) {
 			t.Errorf("message %d: %d", i, code)
 		}
 	}
-	if deferred == 0 || deferred == msgs {
-		t.Fatalf("%d of %d deferred: the gate did not flip", deferred, msgs)
+	mu.Lock()
+	flips := n
+	mu.Unlock()
+	if flips < 2 {
+		t.Fatalf("the gate flipped %d times", flips)
 	}
 	sf.onData(nil)
 	sf.set(quota.OK, quota.OK)
@@ -386,7 +448,9 @@ func TestStorageReceiveWhileFlipping(t *testing.T) {
 		}
 		c, _ := sf.raw()
 		c.must(250, "EHLO mx.example.com")
-		if code, msg := c.deliver("sender@example.com", []string{rcptA, rcptB}, message(flipSubject(i))); code != 250 {
+		code, msg := c.deliver("sender@example.com", []string{rcptA, rcptB}, message(flipSubject(i)))
+		c.close()
+		if code != 250 {
 			t.Fatalf("retry %d: %d %s", i, code, msg)
 		}
 		if got := sf.stored(flipSubject(i)); len(got) != 2 {

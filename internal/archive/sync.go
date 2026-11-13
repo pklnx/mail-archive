@@ -465,13 +465,21 @@ func (s *Syncer) syncFolder(ctx context.Context, conn *imapsync.Conn, a *store.A
 
 	var w *folderWriter
 	w = newFolderWriter(s.Store, folder.ID, s.BatchSize, func(int) { progress(fetched, w.added) })
+	w.pending = s.Storage.Pending(a.GroupID)
+	defer w.pending.Settle() // files of messages that were not saved
 
 	sink := func(r io.Reader) (storedBody, error) {
 		// Before each file: a full group or instance writes no more.
-		if err := s.Storage.Admit(a.GroupID); err != nil {
-			return storedBody{}, imapsync.Stop(err)
+		if err := w.admit(ctx, s.Storage, a.GroupID); err != nil {
+			if errors.Is(err, quota.ErrStorageFull) {
+				return storedBody{}, imapsync.Stop(err)
+			}
+			return storedBody{}, err
 		}
 		blob, created, err := s.Blobs.Put(r)
+		if err == nil {
+			w.pending.Add(blob.Size)
+		}
 		return storedBody{blob, created}, err
 	}
 	err = imapsync.FetchAfter(conn, folder.LastUID, sink, func(m imapsync.Message[storedBody]) error {

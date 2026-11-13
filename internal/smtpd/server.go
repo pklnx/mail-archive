@@ -27,6 +27,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/emersion/go-smtp"
@@ -122,6 +123,8 @@ type Server struct {
 	inflight sync.WaitGroup
 	// storageLog rate-limits the log lines of storage deferrals.
 	storageLog storageLog
+	// storageDeferrals counts the recipients deferred for storage.
+	storageDeferrals atomic.Uint64
 	// beforeData, if set, is called at the start of Data; tests set it.
 	beforeData func()
 }
@@ -415,6 +418,7 @@ func (ss *session) checkRcpt(to string) (recipient, error) {
 	// lookup.
 	switch st := ss.s.Storage.State(route.GroupID); {
 	case st.Deferred():
+		ss.s.storageDeferrals.Add(1)
 		ss.s.storageLog.note(ss.s.Logger, ss.s.Now(), "deferred", route.GroupID, st, "smtp recipient deferred",
 			"code", 452, "client_ip", ss.ip.String(), "sender", ss.from, "recipient", to,
 			"account_id", route.AccountID, "group_id", route.GroupID, "reason", "storage", "state", st.String())
@@ -426,6 +430,19 @@ func (ss *session) checkRcpt(to string) (recipient, error) {
 		ss.s.storageLog.reset(route.GroupID)
 	}
 	return recipient{account: route.AccountID, original: original, group: route.GroupID}, nil
+}
+
+// StorageDeferrals returns how many recipients the server deferred for
+// storage since it started (/api/metrics).
+func (s *Server) StorageDeferrals() uint64 { return s.storageDeferrals.Load() }
+
+// deferRecipients counts the recipients of an account deferred at DATA.
+func (ss *session) deferRecipients(account int64) {
+	for _, rc := range ss.rcpts {
+		if rc.account == account {
+			ss.s.storageDeferrals.Add(1)
+		}
+	}
 }
 
 // errStorage defers a recipient or a message at a storage limit.
@@ -470,6 +487,7 @@ func (ss *session) Data(r io.Reader) error {
 	deferred := ss.storageDeferred(accounts)
 	if len(deferred) > 0 && len(deferred) == len(accounts) {
 		for _, a := range accounts {
+			ss.deferRecipients(a)
 			g := ss.groupOf(a)
 			st := ss.s.Storage.State(g)
 			ss.s.storageLog.note(ss.s.Logger, ss.s.Now(), "deferred", g, st, "smtp message deferred",
@@ -514,6 +532,7 @@ func (ss *session) Data(r io.Reader) error {
 	// makes the mail server retry, and the retry merges as well.
 	for _, account := range accounts {
 		if deferred[account] {
+			ss.deferRecipients(account)
 			g := ss.groupOf(account)
 			st := ss.s.Storage.State(g)
 			ss.s.storageLog.note(ss.s.Logger, ss.s.Now(), "deferred", g, st, "smtp message deferred",

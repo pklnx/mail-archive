@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -59,6 +60,7 @@ func waitForLockWaits(t *testing.T, conn *pgx.Conn, n int, done <-chan struct{})
 
 func newGate(st *store.Store, cfg quota.Config) *quota.Gate {
 	cfg.Thresholds = quota.Thresholds{WarnPercent: 80, OverflowPercent: 10}
+	cfg.Persist = true
 	return quota.New(cfg, st, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
@@ -94,7 +96,11 @@ func TestTwoGatesCrossAtOnce(t *testing.T) {
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	<-done
+	select {
+	case <-done:
+	case <-time.After(testwait.Limit(t)):
+		t.Fatal("the gates did not finish after the lock was released")
+	}
 	var state string
 	var seq int64
 	if err := admin.QueryRow(ctx, `SELECT state, event_seq FROM storage_states WHERE group_id IS NULL`).Scan(&state, &seq); err != nil {
@@ -163,3 +169,32 @@ func TestGroupTransitions(t *testing.T) {
 }
 
 func ptr(v int64) *int64 { return &v }
+
+// Two processes with different limits (a command run with a newer .env
+// before the web server restarts): only serve's gate persists, so the
+// persisted state follows serve's limits and is never flipped back and
+// forth, while the command's gate decides with its own limits in memory.
+func TestGatesWithDifferentLimits(t *testing.T) {
+	st, url := storetest.NewWithURL(t)
+	ctx := context.Background()
+	admin := connect(t, url)
+	exec(t, admin, `UPDATE storage_counter_base SET bytes = 1500`)
+	serve := newGate(st, quota.Config{InstanceQuota: 1000})
+	cfg := quota.Config{InstanceQuota: 4000, Thresholds: quota.Thresholds{WarnPercent: 80, OverflowPercent: 10}}
+	command := quota.New(cfg, st, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	for range 5 {
+		serve.Refresh(ctx)
+		command.Refresh(ctx)
+	}
+	var state string
+	var seq int64
+	if err := admin.QueryRow(ctx, `SELECT state, event_seq FROM storage_states WHERE group_id IS NULL`).Scan(&state, &seq); err != nil {
+		t.Fatal(err)
+	}
+	if state != "overflow" || seq != 1 {
+		t.Fatalf("persisted %s with event_seq %d, want overflow after one transition", state, seq)
+	}
+	if serve.State(nil) != quota.Overflow || command.State(nil) != quota.OK {
+		t.Fatalf("serve %s, command %s", serve.State(nil), command.State(nil))
+	}
+}

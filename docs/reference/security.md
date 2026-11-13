@@ -527,7 +527,12 @@ In both modes:
   written. The answer is the same whichever limit was reached; with `off`,
   a client in the allowed networks can learn from it which addresses'
   groups are full, as it can learn which addresses exist (`550`). The
-  check is a lookup in memory, so its time says nothing about other groups.
+  check is a lookup in memory, the same for every group. At most once per
+  10 seconds per process, the first check after that time reads the figures
+  itself (in `serve` the background read usually comes first): that read
+  covers every group, so its time grows with the number of groups and of
+  their changes not yet folded, instance-wide, and never depends on which
+  group is asked or on any one group's state.
 - **The MIME parser sees mail nobody filtered.** Display and search read at
   most 1000 parts, 20 levels of nesting, 1 MiB of top-level header and 256
   MiB of decoded content per message; a message beyond that is stored whole,

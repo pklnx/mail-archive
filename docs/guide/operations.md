@@ -1170,10 +1170,20 @@ scheduled run, a manual sync at once.
 
 Every process that stores mail (`serve`, `./ma sync`, `./ma import`,
 `./ma account fill`) reads the figures of the instance and of every group
-every 10 seconds, in one statement, and adds what it stored since. The
-states are persisted from the database figures alone, under a row lock, so
-every process sees the same transitions; they are logged as
-`storage state changed`.
+every 10 seconds, in one statement, and adds what it stored since. A sync,
+fill or import counts each message as soon as it is written, before its
+batch is saved, so it stops within one message of a limit. Messages the
+group already holds count only until their batch is saved, and a refusal
+they cause saves the batch and asks again, so known mail never pauses a
+sync or an import (a fill waits for the next check, a minute later).
+
+Only `serve` persists the states, from the database figures alone, under a
+row lock; they are logged as `storage state changed`, and each transition
+is a [storage alert](#monitoring-and-alerts). The commands decide the same
+states in memory from the persisted ones and the figures, with their own
+settings. So a command run with a changed `.env` before `serve` restarts
+pauses by its own limits but never changes the persisted state or sends
+an alert.
 
 - **The instance** figure is exact at all times. A process stops at most
   one message past the quota, plus what other processes stored in the last
@@ -1208,7 +1218,9 @@ group deltas not folded yet, and about 6 ms with 200 groups and 20,000 (more
 than a busy instance writes between two folds), once per process every 10
 seconds. A transition costs one short transaction of a few milliseconds,
 only when a state changes. The check before each message or recipient is a
-lookup in memory (about 0.2 µs, no allocation), the same for every group.
+lookup in memory (about 0.2 µs, no allocation), the same for every group;
+at most once per 10 seconds per process the first check after that time
+does the read itself.
 The gate keeps about 100 bytes per group in memory.
 
 ## IMAP limits

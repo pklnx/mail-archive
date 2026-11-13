@@ -52,7 +52,7 @@ func (f *figures) TransitionStorageState(_ context.Context, group *int64,
 func TestScheduleSkipsPausedAccounts(t *testing.T) {
 	db := &figures{bytes: 100, state: "ok"}
 	now := time.Date(2026, 11, 13, 9, 0, 0, 0, time.UTC)
-	gate := quota.New(quota.Config{Thresholds: quota.Thresholds{WarnPercent: 80, OverflowPercent: 10}}, db, nil,
+	gate := quota.New(quota.Config{Persist: true, Thresholds: quota.Thresholds{WarnPercent: 80, OverflowPercent: 10}}, db, nil,
 		func() time.Time { return now }, nil)
 	var logs bytes.Buffer
 	r := &Runner{Syncer: &Syncer{Storage: gate, Logger: slog.New(slog.NewTextHandler(&logs, nil))}}

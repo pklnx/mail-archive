@@ -107,7 +107,9 @@ func runServe(parent context.Context, cfg *config.Config, log *slog.Logger, ln n
 	// that transitions are persisted also while nothing is stored. Syncs,
 	// fills and the SMTP server ask it before each message.
 	warnStorageConfig(ctx, a, log)
-	storage := newStorageGate(a, log)
+	// After a transition, the notifier's Wake (afterSync) sends the
+	// storage alert at once.
+	storage := serveStorageGate(a, log, afterSync)
 	gateDone := make(chan struct{})
 	go func() {
 		storage.Run(ctx)
@@ -181,10 +183,11 @@ func runServe(parent context.Context, cfg *config.Config, log *slog.Logger, ln n
 	defer stopRetention()
 	opts.Retention = retention
 	if a.cfg.SMTP != nil {
-		stop, err := startSMTP(ctx, a, blobs, storage, log)
+		stop, deferrals, err := startSMTP(ctx, a, blobs, storage, log)
 		if err != nil {
 			return err
 		}
+		opts.SMTPStorageDeferrals = deferrals
 		defer stop()
 		opts.SMTPListen = a.cfg.SMTP.Listen
 		opts.SMTPAuth = a.cfg.SMTP.Auth
@@ -210,7 +213,8 @@ func webOptions(cfg *config.Config) web.Options {
 	return web.Options{
 		AllowedHosts: cfg.AllowedHosts, Require2FA: cfg.Require2FA, SecretKey: cfg.SecretKey, PublicURL: cfg.PublicURL,
 		AlertAfterFailures: cfg.AlertAfterFailures, TrustedProxies: cfg.TrustedProxies,
-		Version:   version,
-		DiskUsage: func() (uint64, uint64, error) { return archive.DiskUsage(dataDir) },
+		Version:           version,
+		DiskUsage:         func() (uint64, uint64, error) { return archive.DiskUsage(dataDir) },
+		StorageQuotaBytes: cfg.Storage.Quota,
 	}
 }

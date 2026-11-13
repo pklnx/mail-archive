@@ -284,6 +284,7 @@ func (im *Importer) importFolder(ctx context.Context, acc *store.Account, sf mai
 	nextUID := int64(folder.LastUID) + 1
 	inBatch := map[string]bool{}
 	var w *folderWriter
+	defer func() { w.pending.Settle() }() // files of messages that were not saved
 	w = newFolderWriter(im.Store, folder.ID, im.BatchSize, func(int) {
 		clear(inBatch)
 		fr.Added -= w.skipped - fr.Deleted
@@ -294,17 +295,19 @@ func (im *Importer) importFolder(ctx context.Context, acc *store.Account, sf mai
 		}
 		log.Info("import progress", "read", fr.Read, "added", fr.Added)
 	})
+	w.pending = im.Storage.Pending(acc.GroupID)
 	store1 := func(body io.Reader, m sourceMessage) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := im.Storage.Admit(acc.GroupID); err != nil {
+		if err := w.admit(ctx, im.Storage, acc.GroupID); err != nil {
 			return err
 		}
 		blob, created, ok, err := im.put(body, m, fr, log)
 		if !ok || err != nil {
 			return err
 		}
+		w.pending.Add(blob.Size)
 		// A copy within one batch counts as present, even when retention
 		// leaves out the first copy; ImportJournal counts each copy (#306).
 		if inBatch[blob.SHA256] {

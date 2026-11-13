@@ -1421,13 +1421,23 @@ are `customer_groups.quota_bytes`, the states `storage_states` (00041).
   gate after every committed save what it added (`SetWriteObserver`;
   `recordGroupUsage` returns the bytes new to the group, an upper bound for
   the instance too); the gate adds these local bytes until its next read.
+  Before that, each writer counts the files of its open batch as pending
+  (`Gate.Pending`: `Add` at `Blobs.Put`, `Settle` when the batch is saved,
+  fails or is dropped), so a sync, fill or import stops within one message
+  of a limit. A refusal while files are pending saves the batch and asks
+  again (`folderWriter.admit`, `journalImport.admit`), so duplicates never
+  pause a sync or an import.
 - **States.** `quota.Thresholds.Next` is the state machine: up to the level
   a figure reached, down only 1 % of the quota below a threshold.
   `disk_low` is the instance's, entered below the reserve and left 1 % of
   it above. The effective state of a group's account is the worst of the
   group's (only with a quota and after the first snapshot), the
   instance's and the disk's.
-- **Transitions** come from the database figures alone: under
+- **Transitions** are written only by `serve`'s gate (`Config.Persist`;
+  the commands' gates decide in memory, so a command with other limits
+  cannot flip the persisted state), and wake the notifier
+  (`Config.OnTransition`), which claims them as `storage` alerts (part 3).
+  They come from the database figures alone: under
   `SELECT … FROM storage_states … FOR UPDATE` the scope's figures are read
   again (and `statfs` for the instance), and the row is updated with
   `state_since` and `event_seq + 1` only if the state changes. Event IDs are

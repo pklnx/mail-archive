@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/pklnx/mail-archive/internal/archive"
 	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/quota"
 	"github.com/pklnx/mail-archive/internal/store"
@@ -22,15 +24,33 @@ import (
 // failure.
 const exitPaused = 75
 
-// newStorageGate returns this process's storage gate and makes every save
-// of the store tell it what it stored.
+// newStorageGate returns a command's storage gate and makes every save of
+// the store tell it what it stored. It decides the states in memory and
+// never persists a transition: serve does (serveStorageGate), so that a
+// command run with other limits (a newer .env before the web server
+// restarts) cannot flip the persisted state and send an alert each time.
 func newStorageGate(a *app, log *slog.Logger) *quota.Gate {
+	return storageGate(a, log, false, nil)
+}
+
+// serveStorageGate is serve's gate: it persists the transitions and calls
+// onTransition (the notifier's Wake) after each.
+func serveStorageGate(a *app, log *slog.Logger, onTransition func()) *quota.Gate {
+	return storageGate(a, log, true, onTransition)
+}
+
+func storageGate(a *app, log *slog.Logger, persist bool, onTransition func()) *quota.Gate {
 	s := a.cfg.Storage
 	dir := a.cfg.DataDir
+	free := func() (int64, error) {
+		n, _, err := archive.DiskUsage(dir)
+		return int64(min(n, math.MaxInt64)), err //nolint:gosec // clamped
+	}
 	g := quota.New(quota.Config{
 		InstanceQuota: s.Quota, MinFreeDisk: s.MinFreeDisk,
 		Thresholds: quota.Thresholds{WarnPercent: s.WarnPercent, OverflowPercent: s.OverflowPercent},
-	}, a.store, func() (int64, error) { return quota.FreeSpace(dir) }, nil, log)
+		Persist:    persist, OnTransition: onTransition,
+	}, a.store, free, nil, log)
 	a.store.SetWriteObserver(g.Wrote)
 	return g
 }
