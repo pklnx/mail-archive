@@ -4,15 +4,17 @@ import (
 	"context"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
 // The same work for a message new to the customer group (#539, part 3): a
-// delivery of bytes that another group already archived is parsed, and the
-// parsed fields go to every recipient account's save; when every
-// recipient's group holds the message, nothing is parsed (residual).
+// delivery of bytes that another group already archived is parsed, its
+// temporary file synchronized, and the parsed fields go to every
+// recipient account's save; when every recipient's group holds the
+// message, nothing is parsed or synchronized (residual).
 func TestReceiveNewToGroup(t *testing.T) {
 	type got struct {
 		account    int64
@@ -51,6 +53,8 @@ func TestReceiveNewToGroup(t *testing.T) {
 		return a
 	}
 	bob, dave := inGroup("bob"), inGroup("dave")
+	var synced atomic.Int64 // temporary files synchronized
+	f.srv.Blobs.OnTempSync(func(string) { synced.Add(1) })
 
 	const raw = "From: sender@example.com\r\nTo: alice@example.com\r\nSubject: Foerderbescheid\r\n" +
 		"Message-ID: <grant@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n" +
@@ -78,6 +82,11 @@ func TestReceiveNewToGroup(t *testing.T) {
 		mu.Unlock()
 		if !slices.Equal(have, step.want) {
 			t.Errorf("%s: saves %+v, want %+v", step.name, have, step.want)
+		}
+		// The temporary file is synchronized exactly when the message is
+		// parsed: new to the archive or to a recipient's group.
+		if n, want := synced.Swap(0), map[bool]int64{true: 1, false: 0}[step.want[0].subject != ""]; n != want {
+			t.Errorf("%s: temporary file synchronized %d times, want %d", step.name, n, want)
 		}
 	}
 }

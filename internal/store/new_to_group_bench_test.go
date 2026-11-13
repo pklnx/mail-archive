@@ -12,17 +12,23 @@ import (
 )
 
 // TestGroupLookupCost measures the group lookups of the save path per
-// batch of 100 messages (#539, part 3; numbers in
-// docs/development/architecture.md): the 100 GroupLookup.Holds calls that
-// sync, fill and SMTP make before the save, one per message, with the
-// group's folders read once per batch here (a folder run reads them once
-// for all its batches) (part 3), next
-// to GroupHeldMessages of the save (storage usage, #397) and
-// GroupHasLocations of skipDeleted for a batch whose messages all have a
-// deletion mark (part 1's worst case; without marks it does not run).
+// batch of 100 messages (#539; numbers in docs/development/architecture.md,
+// "Messages new to the customer group"):
+//
+//   - part 3: the 100 GroupLookup.Holds calls that sync, fill and SMTP make
+//     before the save, one per message, with the group's folders read once
+//     per batch here (a folder run reads them once for all its batches);
+//   - part 2: MessagesWithAttachment and GroupAttachmentTextOK of the save,
+//     for a batch of known messages with attachments (the worst case;
+//     messages new to the archive need no probe);
+//   - #397/#446: GroupHeldMessages of the save (not for group 0);
+//   - part 1: GroupHasLocations of skipDeleted for a batch whose messages
+//     all have a deletion mark (the worst case; without marks it does not
+//     run).
+//
 // Hashes the group does not hold: every folder of the group is probed for
-// every hash. It measures and asserts nothing about time; it runs only
-// with MAIL_ARCHIVE_BENCH=1.
+// every hash. It asserts nothing about time and runs only with
+// MAIL_ARCHIVE_BENCH=1.
 func TestGroupLookupCost(t *testing.T) {
 	if os.Getenv("MAIL_ARCHIVE_BENCH") != "1" {
 		t.Skip("set MAIL_ARCHIVE_BENCH=1 to run")
@@ -37,8 +43,8 @@ func TestGroupLookupCost(t *testing.T) {
 		{"group, 400 folders", 4, 10, 10, 40, false},
 		{"group, 1500 folders", 10, 15, 10, 40, false},
 		{"group 0, 1500 folders", 2, 2, 10, 1500, true},
+		{"group 0 the only group, 1500 folders", 0, 0, 10, 1500, true},
 		{"group 0, 5000 folders", 2, 2, 10, 5000, true},
-		{"group 0 only, 5000 folders (no lookup)", 0, 0, 10, 5000, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			st, url := storetest.NewWithURL(t)
@@ -63,22 +69,36 @@ func TestGroupLookupCost(t *testing.T) {
 			for i := range batch {
 				batch[i] = seedHash(1000000 + i)
 			}
+			// Known to the archive with an attachment, held by nobody: part
+			// 2's worst case.
+			if _, err := conn.Exec(ctx, `INSERT INTO messages (sha256, size, stored_path, has_attachment)
+				SELECT encode(sha256(i::text::bytea), 'hex'), 1000, 'x', true FROM generate_series(1000000, 1000099) i; ANALYZE messages`); err != nil {
+				t.Fatal(err)
+			}
 			q := db.New(conn)
 			timed := func(fn func()) time.Duration {
 				start := time.Now()
 				fn()
 				return time.Since(start)
 			}
-			var part3, usage, marks, state []time.Duration
+			var part3, part2, usage, marks []time.Duration
 			for i := range 25 { // the first 5 warm the cache and the statement cache
 				d3 := timed(func() {
-					lookup := st.NewGroupLookup(account) // as a folder run: folders read once
+					lookup := st.NewGroupLookup(account)
 					for _, sha := range batch {
 						held, err := lookup.Holds(ctx, sha)
-						// With group 0 alone there is no lookup: held.
-						if err != nil || held != (c.users == 0) {
+						if err != nil || held {
 							t.Fatalf("lookup: %v %v", held, err)
 						}
+					}
+				})
+				d2 := timed(func() {
+					rows, err := q.MessagesWithAttachment(ctx, batch)
+					if err != nil || len(rows) != len(batch) {
+						t.Fatalf("messages with attachment: %d %v", len(rows), err)
+					}
+					if _, err := q.GroupAttachmentTextOK(ctx, db.GroupAttachmentTextOKParams{Shas: batch, GroupID: group}); err != nil {
+						t.Fatal(err)
 					}
 				})
 				du := timed(func() {
@@ -93,23 +113,18 @@ func TestGroupLookupCost(t *testing.T) {
 						t.Fatal(err)
 					}
 				})
-				ds := timed(func() {
-					for range batch {
-						if _, err := q.AccountGroupState(ctx, account); err != nil {
-							t.Fatal(err)
-						}
-					}
-				})
 				if i >= 5 {
-					part3, usage, marks, state = append(part3, d3), append(usage, du), append(marks, dm), append(state, ds)
+					part3, part2, usage, marks = append(part3, d3), append(part2, d2), append(usage, du), append(marks, dm)
 				}
 			}
-			sum := make([]time.Duration, len(part3))
-			for i := range sum {
-				sum[i] = part3[i] + usage[i] + marks[i]
+			without, with := make([]time.Duration, len(part3)), make([]time.Duration, len(part3))
+			for i := range without {
+				without[i] = part3[i] + part2[i] + usage[i]
+				with[i] = without[i] + marks[i]
 			}
-			t.Logf("%s: %d folders; per batch of 100: GroupLookup.Holds ×100 median %v (min %v, max %v), of which AccountGroupState ×100 median %v; GroupHeldMessages median %v; GroupHasLocations (all marked) median %v; sum median %v (max %v)",
-				c.name, folders, medianOf(part3), slices.Min(part3), slices.Max(part3), medianOf(state), medianOf(usage), medianOf(marks), medianOf(sum), slices.Max(sum))
+			t.Logf("%s: %d folders; per batch of 100, medians: part 3 Holds ×100 %v; part 2 %v; GroupHeldMessages %v; part 1 (all marked) %v; sum without marks %v (max %v); sum with marks %v (max %v)",
+				c.name, folders, medianOf(part3), medianOf(part2), medianOf(usage), medianOf(marks),
+				medianOf(without), slices.Max(without), medianOf(with), slices.Max(with))
 		})
 	}
 }

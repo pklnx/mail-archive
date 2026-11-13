@@ -867,26 +867,23 @@ func groupHasLocations(ctx context.Context, q *db.Queries, g accountGroup, shas 
 // (#539, part 3). Sync and fill make one per folder run, an SMTP delivery
 // one per recipient account; it is not safe for concurrent use.
 //
-// Every Holds first reads AccountGroupState (accounts and users only):
-// while accounts of one group exist and of no other (accounts without an
-// owner count as group 0), there is no other group whose mail the work of
-// a save could tell anything about, so Holds answers true without a
-// lookup and the save does the work it did before 1.6.0. Otherwise it
-// probes the group's own folders (FoldersHoldMessages): one probe of
-// message_locations_folder_sha_idx per folder, never a lookup by hash, so
-// its time depends on the group's folders, never on copies in other
-// groups. The folder list is read when the first lookup is needed and
-// again when the account's group changed or another group appeared since;
-// a folder that left the group meanwhile never counts, one that joined it
-// counts from the next folder run. Holds runs before the save's
-// transaction, without its lock: what changes in between changes only how
-// much work the save does, never what it stores.
+// Every Holds reads the account's group (AccountGroupID, one primary key
+// probe) and probes the group's own folders (FoldersHoldMessages): one
+// probe of message_locations_folder_sha_idx per folder, never a lookup by
+// hash, so its time depends on the group's folders, never on copies in
+// other groups. The folder list (GroupFolderIDs) is read with the first
+// Holds and again when the account's group changed. A folder that left
+// the group meanwhile never counts, one that joined it counts from the
+// next folder run (more work, never less). Holds runs before the save's
+// transaction, without its lock: when the account moves to another group
+// between the lookup and the save, the save does the work for the group
+// it belonged to at the lookup, never for a group it was never in.
 type GroupLookup struct {
 	s       *Store
 	account int64
 	group   int64
 	folders []int64
-	loaded  bool // folders belong to group and were read while other groups existed
+	loaded  bool // folders belong to group
 }
 
 // NewGroupLookup returns the lookup for saves into the account; it reads
@@ -895,30 +892,24 @@ func (s *Store) NewGroupLookup(accountID int64) *GroupLookup {
 	return &GroupLookup{s: s, account: accountID}
 }
 
-// Holds reports whether the message counts as held by the account's
-// group: true when an account of the group, this one included, has a
-// location of it (gone locations count), and when no account of another
-// group exists. A gone account holds nothing; the save then fails as
-// without the lookup.
+// Holds reports whether an account of the account's group, this one
+// included, has a location of the message (gone locations count). A gone
+// account holds nothing; the save then fails as without the lookup.
 func (l *GroupLookup) Holds(ctx context.Context, sha256 string) (bool, error) {
-	st, err := l.s.q.AccountGroupState(ctx, l.account)
+	owner, err := l.s.q.AccountGroupID(ctx, l.account)
 	if isNoRows(err) {
-		l.loaded = false
 		return false, nil
 	}
 	if err != nil {
 		return false, fmt.Errorf("group of account %d: %w", l.account, err)
 	}
-	if !st.OtherGroups {
-		l.loaded = false // read the folders again once another group appears
-		return true, nil
-	}
-	if !l.loaded || l.group != st.GroupKey {
-		folders, err := l.s.q.GroupFolderIDs(ctx, st.GroupKey)
+	group := accountGroup{Account: l.account, Group: owner}.key()
+	if !l.loaded || l.group != group {
+		folders, err := l.s.q.GroupFolderIDs(ctx, group)
 		if err != nil {
-			return false, fmt.Errorf("folders of group %d: %w", st.GroupKey, err)
+			return false, fmt.Errorf("folders of group %d: %w", group, err)
 		}
-		l.group, l.folders, l.loaded = st.GroupKey, folders, true
+		l.group, l.folders, l.loaded = group, folders, true
 	}
 	held, err := l.s.q.FoldersHoldMessages(ctx, db.FoldersHoldMessagesParams{Shas: []string{sha256}, FolderIds: l.folders, GroupID: l.group})
 	if err != nil {

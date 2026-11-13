@@ -4,8 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/pklnx/mail-archive/internal/archive"
+	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/imaptest"
 	"github.com/pklnx/mail-archive/internal/store"
 )
@@ -88,10 +89,43 @@ func (p *insertProbe) take() []probed {
 	return got
 }
 
+// tempSyncs records the hashes whose temporary file a blob store
+// synchronized (blobstore.OnTempSync).
+type tempSyncs struct {
+	mu     sync.Mutex
+	hashes []string
+}
+
+func recordTempSyncs(t *testing.T, blobs *blobstore.Store) *tempSyncs {
+	r := &tempSyncs{}
+	blobs.OnTempSync(func(hash string) {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		r.hashes = append(r.hashes, hash)
+	})
+	t.Cleanup(func() { blobs.OnTempSync(nil) })
+	return r
+}
+
+// take returns the hashes recorded since the last call.
+func (r *tempSyncs) take() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	got := r.hashes
+	r.hashes = nil
+	return got
+}
+
 // expect checks that exactly one insert of groupRaw was recorded, parsed
-// or not.
-func (p *insertProbe) expect(step string, parsed bool) {
+// or not, and, with syncs, that its temporary file was synchronized
+// exactly when it was parsed.
+func (p *insertProbe) expect(step string, parsed bool, syncs ...*tempSyncs) {
 	p.t.Helper()
+	for _, r := range syncs {
+		if got := r.take(); len(got) != map[bool]int{true: 1, false: 0}[parsed] {
+			p.t.Errorf("%s: temporary file synchronized for %v, want parsed=%v", step, got, parsed)
+		}
+	}
 	want := probed{sha: groupSHA()}
 	if parsed {
 		want.subject, want.attachment = "Foerderbescheid", true
@@ -103,8 +137,9 @@ func (p *insertProbe) expect(step string, parsed bool) {
 
 // TestNewToGroupWork: alice (group A) syncs M first, new to the archive.
 // Carol's sync (group B) and a fill into dave's journal (group C) then
-// parse M and pass the fields to the insert, as for a new message; on
-// main they pass none. Bob's sync and fill (group A) parse nothing.
+// parse M, synchronize the temporary file and pass the fields to the
+// insert, as for a new message; on main they do neither. Bob's sync and
+// fill (group A) parse and synchronize nothing.
 func TestNewToGroupWork(t *testing.T) {
 	at := time.Date(2010, 3, 5, 10, 0, 0, 0, time.UTC)
 	alice := imapmemserver.NewUser("alice@example.com", "secret")
@@ -112,6 +147,7 @@ func TestNewToGroupWork(t *testing.T) {
 	imaptest.AppendAt(t, alice, "INBOX", []byte(groupRaw), at)
 	f := newFixture(t, alice)
 	probe := newInsertProbe(t, f.dbURL)
+	synced := recordTempSyncs(t, f.blobs)
 
 	user := func(name string, group bool) *store.User {
 		t.Helper()
@@ -160,15 +196,15 @@ func TestNewToGroupWork(t *testing.T) {
 	}
 
 	sync("work", userA)
-	probe.expect("alice's sync, new to the archive", true)
+	probe.expect("alice's sync, new to the archive", true, synced)
 	sync("bob", bob)
-	probe.expect("bob's sync, the group holds M", false)
+	probe.expect("bob's sync, the group holds M", false, synced)
 	sync("carol", carol)
-	probe.expect("carol's sync, new to group B", true)
+	probe.expect("carol's sync, new to group B", true, synced)
 	fill(bob, "bob@archive.local")
-	probe.expect("bob's fill, the group holds M", false)
+	probe.expect("bob's fill, the group holds M", false, synced)
 	fill(dave, "dave@archive.local")
-	probe.expect("dave's fill, new to group C", true)
+	probe.expect("dave's fill, new to group C", true, synced)
 }
 
 // TestImportAlwaysFullWork: ./ma import does the full work without a
@@ -271,66 +307,83 @@ func TestBuildMetaNewToGroup(t *testing.T) {
 	}
 }
 
-// TestNewToGroupOneGroup: while accounts of one customer group only exist,
-// a save does the work it did before 1.6.0 (no lookup, a known message is
-// not parsed). The condition is read for every message: when the save of
-// the first message of a sync creates an account of a second group (a
-// trigger stands in for an admin), the second message of the same run is
-// looked up and parsed. Both messages are known to the archive (rows
-// without locations) and new to the group.
-func TestNewToGroupOneGroup(t *testing.T) {
-	at := time.Date(2010, 3, 5, 10, 0, 0, 0, time.UTC)
-	first := groupRaw
-	second := strings.Replace(groupRaw, "Message-ID: <grant@", "Message-ID: <second@", 1)
-	alice := imapmemserver.NewUser("alice@example.com", "secret")
-	imaptest.CreateMailboxes(t, alice, "INBOX")
-	imaptest.AppendAt(t, alice, "INBOX", []byte(first), at)
-	imaptest.AppendAt(t, alice, "INBOX", []byte(second), at)
-	f := newFixture(t, alice)
-	f.syncer.BatchSize = 1 // the first message commits before the second is fetched
-	probe := newInsertProbe(t, f.dbURL)
-	var shas []string
-	for _, raw := range []string{first, second} {
-		blob, _, err := f.blobs.Put(strings.NewReader(raw))
-		if err != nil {
-			t.Fatal(err)
-		}
-		shas = append(shas, blob.SHA256)
-		if _, err := probe.conn.Exec(f.ctx, `INSERT INTO messages (sha256, size, stored_path) VALUES ($1, $2, $3)`, blob.SHA256, blob.Size, blob.Path); err != nil {
-			t.Fatal(err)
-		}
-	}
-	probe.take()
-	if _, err := probe.conn.Exec(f.ctx, `
-CREATE FUNCTION test_second_group() RETURNS trigger LANGUAGE plpgsql AS $$
-BEGIN
-    IF NEW.sha256 = '`+shas[0]+`' THEN
-        INSERT INTO customer_groups (name) VALUES ('second');
-        INSERT INTO users (name, password_hash, group_id) SELECT 'carol', 'x', id FROM customer_groups WHERE name = 'second';
-        INSERT INTO accounts (name, host, port, tls_mode, username, password_enc, owner_id)
-        SELECT 'carol', 'h', 993, 'tls', 'u', '\x00', id FROM users WHERE name = 'carol';
-    END IF;
-    RETURN NEW;
-END $$;
-CREATE TRIGGER test_second_group BEFORE INSERT ON messages FOR EACH ROW EXECUTE FUNCTION test_second_group();`); err != nil {
-		t.Fatal(err)
-	}
-	owner, err := f.store.CreateUser(f.ctx, "alice", "h", false)
+// TestNewToGroupAfterGroupPurged (review 6853087249): group H archived M,
+// then H's only account was purged; M's row and location are gone and its
+// file waits out the grace period. A save of M into alice's account
+// (group A, now the only group with accounts) finds the file, but counts M
+// as new to A: the temporary file is synchronized and M is parsed, as
+// while H existed. A shortcut for one-group instances answered "held"
+// here, so the work depended on what H held.
+func TestNewToGroupAfterGroupPurged(t *testing.T) {
+	f := newFixture(t)
+	alice, err := f.store.CreateUser(f.ctx, "alice", "h", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := &store.Account{Name: "work", Host: f.host, Port: f.port, TLSMode: store.TLSModeNone, Username: "alice@example.com", Enabled: true, OwnerID: &owner.ID}
-	seal := func(id int64) ([]byte, error) { return archive.SealPassword(f.sealer, id, "secret") }
-	if err := f.store.CreateAccountSealed(f.ctx, a, seal); err != nil {
+	h, err := f.store.CreateGroup(f.ctx, "H")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if r := f.syncer.SyncAccount(f.ctx, a); r.Err != nil || r.New != 2 {
-		t.Fatalf("sync: %+v", r)
+	carol, err := f.store.CreateUserInGroup(f.ctx, store.NewUser{Name: "carol", PasswordHash: "h", GroupID: h.ID})
+	if err != nil {
+		t.Fatal(err)
 	}
-	got := probe.take()
-	want := []probed{{sha: shas[0]}, {sha: shas[1], subject: "Foerderbescheid", attachment: true}}
-	slices.SortFunc(got, func(x, y probed) int { return slices.Index(shas, x.sha) - slices.Index(shas, y.sha) })
-	if !slices.Equal(got, want) {
-		t.Errorf("inserts %+v, want %+v (one group: main's work; then the second group's account exists)", got, want)
+	account := func(owner *store.User, name string) (*store.Account, *store.Folder) {
+		t.Helper()
+		a := &store.Account{Name: name, Host: "h", Port: 993, TLSMode: store.TLSModeTLS, Username: "u", PasswordEnc: []byte{1}, OwnerID: &owner.ID}
+		if err := f.store.CreateAccount(f.ctx, a); err != nil {
+			t.Fatal(err)
+		}
+		fo, err := f.store.GetOrCreateFolder(f.ctx, a.ID, "INBOX")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a, fo
+	}
+	aliceAcc, _ := account(alice, "work")
+	carolAcc, carolInbox := account(carol, "old")
+	put := func(a *store.Account) archive.Stored {
+		t.Helper()
+		s, err := archive.PutFor(f.ctx, f.blobs, strings.NewReader(groupRaw), f.store.NewGroupLookup(a.ID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	stored := put(carolAcc)
+	meta, err := archive.BuildMeta(f.ctx, f.store, f.blobs, stored.Blob, stored.Created, stored.NewToGroup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.store.SaveBatch(f.ctx, carolInbox.ID, 1, []store.MessageMeta{meta}, []store.Location{{FolderID: carolInbox.ID, UID: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	synced := recordTempSyncs(t, f.blobs)
+	if s := put(aliceAcc); s.Created || !s.NewToGroup || len(synced.take()) != 1 {
+		t.Fatalf("while H holds M: %+v", s)
+	}
+
+	if _, err := f.store.DeleteOrRemoveAccount(f.ctx, carolAcc.Ref()); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := f.store.GetAccount(f.ctx, carolAcc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := f.store.ConfirmPurge(f.ctx, removed.Ref(), 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done, err := archive.ExecutePurge(f.ctx, f.store, p.ID, archive.PurgeOptions{}); err != nil || done.State != store.PurgeDone {
+		t.Fatalf("purge %+v %v", done, err)
+	}
+	if exists, err := f.store.MessageExists(f.ctx, stored.Blob.SHA256); err != nil || exists || !f.blobs.Exists(stored.Blob.SHA256) {
+		t.Fatalf("after the purge: row %v (%v), file %v; want no row and the file in its grace period", exists, err, f.blobs.Exists(stored.Blob.SHA256))
+	}
+	if s := put(aliceAcc); s.Created || !s.NewToGroup {
+		t.Errorf("after H's purge: %+v, want an existing file new to the group", s)
+	}
+	if got := synced.take(); len(got) != 1 {
+		t.Errorf("after H's purge: temporary file synchronized %d times, want 1", len(got))
 	}
 }

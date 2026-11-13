@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/pklnx/mail-archive/internal/blobcrypt"
@@ -44,6 +45,21 @@ type Store struct {
 
 	// beforeOpen, for tests, runs before a message file is opened.
 	beforeOpen func(path string)
+	// tempSynced, for tests of callers (OnTempSync), runs after Put
+	// synchronized its temporary file.
+	tempSynced atomic.Pointer[func(hash string)]
+}
+
+// OnTempSync sets fn, for tests of Put's callers: Put calls it with the
+// hash after it synchronized its temporary file, so a test can tell
+// whether a caller's SyncTempIf predicate asked for the sync (#539, part
+// 3). nil removes it.
+func (s *Store) OnTempSync(fn func(hash string)) {
+	if fn == nil {
+		s.tempSynced.Store(nil)
+		return
+	}
+	s.tempSynced.Store(&fn)
 }
 
 // syncCloser is an open file or directory that can be synchronized.
@@ -295,6 +311,9 @@ func (s *Store) Put(r io.Reader, opts ...PutOption) (blob Blob, created bool, er
 			return err
 		}
 		synced = true
+		if fn := s.tempSynced.Load(); fn != nil {
+			(*fn)(hash)
+		}
 		return nil
 	}
 	if o.syncTemp != nil {

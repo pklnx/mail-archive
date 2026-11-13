@@ -182,37 +182,35 @@ A message new to the saving account's customer group gets the work of a
 message new to the archive, whether or not another group archived the same
 bytes before (#539, part 3):
 
-- **Lookup.** Sync, fill and SMTP deliveries pass `blobstore.SyncTempIf`
-  to `Put` (`archive.PutFor`). As soon as the hash is known, for a new and
-  an existing file alike, it asks `store.GroupLookup.Holds` whether an
-  account of the account's group, this one included, holds a location of
-  the message. A sync or fill makes one `GroupLookup` per folder run, an
-  SMTP delivery one per recipient account; the delivery counts as new to
-  the group when one of their groups does not hold the message.
-  - For every message, `AccountGroupState` reads the account's group and
-    whether an account of another group exists (index probes of
-    `accounts_owner_name_key` and a scan of `users`, about 0.1 ms). While
-    accounts of one group only exist (accounts without an owner count as
-    group 0), there is no other group a save could tell anything about:
-    `Holds` answers "held" without a lookup, and the save does the work it
-    did before 1.6.0. Read per message, the condition leaves only a race
-    within one message's processing, when the first account of a second
-    group is created at that moment.
-  - Otherwise the group's folder list (`GroupFolderIDs`) is read once, and
-    again when the account's group changed or a second group appeared
-    since, and `FoldersHoldMessages` probes it: one probe of
-    `message_locations_folder_sha_idx` per folder, never a lookup by hash in
-    `message_locations_sha_idx` (the `LIMIT 1` of its `LATERAL`, checked
-    in the custom and the generic plan by `TestFoldersHoldMessagesPlan`).
-    Only folders that hold the message are then checked against the group,
-    so a folder whose account left the group since the list was read never
-    counts; one that joined it counts from the next folder run (more work,
-    never less).
-  - The lookup runs before the save's transaction, without its lock: a
-    move or a save of the group in between changes how much work the save
-    does, never what it stores. For the same reason `skipDeleted` does not
-    reuse the answer: it decides what is stored, under `lockAccountGroup`,
-    and looks up only hashes with a deletion mark.
+- **Lookup.** Sync and fill pass `blobstore.SyncTempIf` to `Put` through
+  `archive.PutFor`; an SMTP delivery passes its own closure around
+  `archive.NewToGroup`. As soon as the hash is known, for a new and an
+  existing file alike, the predicate asks `store.GroupLookup.Holds`
+  whether an account of the account's group, this one included, holds a
+  location of the message. A sync or fill makes one `GroupLookup` per
+  folder run, an SMTP delivery one per recipient account; the delivery
+  counts as new to the group when one of their groups does not hold the
+  message. Every instance pays the lookup, also one with a single group.
+  - For every message, `Holds` reads the account's group
+    (`AccountGroupID`, one primary key probe). The group's folder list
+    (`GroupFolderIDs`) is read with the first message and again when the
+    account's group changed, and `FoldersHoldMessages` probes it: one
+    probe of `message_locations_folder_sha_idx` per folder, never a lookup
+    by hash in `message_locations_sha_idx` (the `LIMIT 1` of its
+    `LATERAL`, checked in the custom and the generic plan by
+    `TestFoldersHoldMessagesPlan`). Only folders that hold the message are
+    then checked against the group, so a folder whose account left the
+    group since the list was read never counts; one that joined it counts
+    from the next folder run (more work, never less).
+  - The lookup runs before the save's transaction, without its lock. A
+    save or deletion of the group in between changes how much work the
+    save does, never what it stores. When the saving account moves to
+    another group between its lookup and its save, the save does the work
+    for the group the account belonged to at the lookup: what that group
+    holds decides, never what a group the account was never in holds
+    (accepted in `security.md`). For the same reason `skipDeleted` does
+    not reuse the answer: it decides what is stored, under
+    `lockAccountGroup`, and looks up only hashes with a deletion mark.
 - **File.** For a message new to the group, `Put` synchronizes and closes
   its temporary file before it uses an existing file, as it does before it
   links a new one.
@@ -235,24 +233,29 @@ bytes before (#539, part 3):
 
 Measured like the table above (`TestGroupLookupCost` with
 `MAIL_ARCHIVE_BENCH=1`), per batch of 100 messages the group does not
-hold, next to the other group lookups of the save path. The folder list is
-read once per batch here; a folder run reads it once for all its batches.
+hold, with all the group lookups of the save path. The folder list is read
+once per batch here; a folder run reads it once for all its batches. Part
+2's lookups (`MessagesWithAttachment`, `GroupAttachmentTextOK`) are
+measured for known messages that all have an attachment, part 1's for
+messages that all have a deletion mark: the worst case.
 
-| Folders of the group | 100 × `Holds` (of which `AccountGroupState`) | `GroupHeldMessages` (#397) | `GroupHasLocations`, all marked (part 1) | Sum |
-|---|---|---|---|---|
-| 40 | 91–98 ms (7–9 ms) | 7–8 ms | 9–10 ms | 112–117 ms |
-| 400 | 121–142 ms (7–9 ms) | 51–58 ms | 52–59 ms | 224–300 ms |
-| 1,500 | 319–432 ms (11–14 ms) | 179–231 ms | 172–215 ms | 717–900 ms |
-| 1,500 (group 0) | 295–347 ms (6 ms) | none | 175–215 ms | 494–547 ms |
-| 5,000 (group 0) | 901–1,167 ms (6–11 ms) | none | 604–659 ms | 1,532–1,876 ms |
-| 5,000 (group 0, the only group) | 5–8 ms, no lookup | none | 603–621 ms | 609–628 ms |
+| Folders of the group | Part 3: 100 × `Holds` | Part 2 | `GroupHeldMessages` (#397) | Part 1, all marked | Sum without marks | Sum with marks |
+|---|---|---|---|---|---|---|
+| 40 | 85–86 ms | 8–9 ms | 6 ms | 7 ms | 100–101 ms | 108–109 ms |
+| 400 | 121–136 ms | 53–54 ms | 51 ms | 52 ms | 236–254 ms | 289–303 ms |
+| 1,500 | 338–349 ms | 176–186 ms | 180–187 ms | 171–173 ms | 692–722 ms | 868–897 ms |
+| 1,500 (group 0) | 297–301 ms | 175–176 ms | none | 169–172 ms | 469–478 ms | 643–656 ms |
+| 1,500 (group 0, the only group) | 288–291 ms | 172–180 ms | none | 169–173 ms | 466–470 ms | 645–651 ms |
+| 5,000 (group 0) | 845–900 ms | 565–600 ms | none | 555–567 ms | 1.39–1.48 s | 1.99–2.03 s |
 
-Each range spans the medians of three runs, on PostgreSQL 16 with server
-and client pinned to two cores, warm cache, pgx with its statement cache,
-20 batches per run; the machine also ran other test suites (load average 3
-to 6 on four cores), so the figures are on the high side. A batch without
-deletion marks skips the fourth column: 0.50 to 0.66 s at 1,500 folders.
-`GroupHeldMessages` does not run for accounts without an owner.
+Each range spans the medians of two runs, on PostgreSQL 16 with server and
+client pinned to two cores, warm cache, pgx with its statement cache, 20
+batches per run, load average 1.7 to 4.8 on the four-core machine from
+other test suites. The slowest batch with marks at 1,500 folders took
+0.95 to 1.01 s; a third run under a load average of up to 11 measured
+1.10 s (median) for that sum. `GroupHeldMessages` does not run for
+accounts without an owner. A one-group instance pays the lookup like any
+other.
 
 ## Sync and concurrency
 

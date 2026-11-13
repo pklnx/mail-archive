@@ -18,7 +18,8 @@ import (
 // counts every account of the saving account's group, this account
 // included, and group 0 (accounts without an owner) as a group of its own;
 // copies in other groups never count, also not in a folder whose account
-// left the group after the lookup read the group's folders.
+// left the group after the lookup read the group's folders, and not for
+// an account that moved to another group during its folder run.
 func TestGroupLookup(t *testing.T) {
 	f := newMarksFixture(t)
 	unowned := func(name string) *store.Folder {
@@ -88,6 +89,14 @@ func TestGroupLookup(t *testing.T) {
 	if holds(aliceInbox, k) {
 		t.Error("a folder that left the group still counts")
 	}
+	// Bob's own lookup, opened while his account was in A, follows the
+	// account into B: A's copy of m no longer counts, his own k does.
+	if holds(bobInbox, m) {
+		t.Error("after bob's account moved to group B, group A's copy still counts")
+	}
+	if !holds(bobInbox, k) {
+		t.Error("after the move, bob's own copy does not count")
+	}
 	if holds(carolInbox, k) {
 		t.Error("a folder that joined the group counts before the next folder run")
 	}
@@ -99,60 +108,6 @@ func TestGroupLookup(t *testing.T) {
 	// lookup.
 	if held, err := f.st.NewGroupLookup(1<<40).Holds(f.ctx, m); err != nil || held {
 		t.Errorf("gone account: %v %v", held, err)
-	}
-}
-
-// TestGroupLookupOneGroup: while accounts of one group only exist, the
-// lookup answers "held" without probing, so a save does the work it did
-// before 1.6.0. The condition is read for every message: once an account
-// of a second group exists, the same lookup (one folder run) probes from
-// the next message on.
-func TestGroupLookupOneGroup(t *testing.T) {
-	f := newRetentionFixture(t)
-	aliceInbox := f.folder(f.alice, "work", "INBOX")
-	bobInbox := f.folder(f.bob, "bob", "INBOX")
-	m := hashOf('m')
-	f.save(bobInbox, m, "m", old, old)
-	l := f.st.NewGroupLookup(aliceInbox.AccountID)
-	held := func(sha string) bool {
-		t.Helper()
-		h, err := l.Holds(f.ctx, sha)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return h
-	}
-	if !held(hashOf('x')) || !held(m) {
-		t.Error("one group: a message counts as new to it")
-	}
-	// An account without an owner is group 0: a second group.
-	other := &store.Account{Name: "import", Host: "h", Port: 993, TLSMode: store.TLSModeTLS, Username: "u", PasswordEnc: []byte{1}}
-	if err := f.st.CreateAccount(f.ctx, other); err != nil {
-		t.Fatal(err)
-	}
-	if held(hashOf('x')) {
-		t.Error("two groups: a message nobody holds counts as held")
-	}
-	if !held(m) {
-		t.Error("two groups: bob's message does not count for the group")
-	}
-	// Bob takes the account over: one group again, no probe. Bob's new
-	// folder then holds k; when a second group appears again, the lookup
-	// reads the group's folders anew and finds it.
-	if err := f.st.SetAccountOwner(f.ctx, other.Ref(), f.bob.ID, false); err != nil {
-		t.Fatal(err)
-	}
-	k := hashOf('k')
-	if !held(hashOf('x')) {
-		t.Error("one group again: a message counts as new to it")
-	}
-	f.save(f.folder(f.bob, "bob", "Archive"), k, "k", old, old)
-	again := &store.Account{Name: "import-2", Host: "h", Port: 993, TLSMode: store.TLSModeTLS, Username: "u", PasswordEnc: []byte{1}}
-	if err := f.st.CreateAccount(f.ctx, again); err != nil {
-		t.Fatal(err)
-	}
-	if !held(k) {
-		t.Error("two groups again: a folder created while there was one group does not count")
 	}
 }
 
@@ -260,60 +215,5 @@ CREATE TEMP TABLE probe (k int PRIMARY KEY, body text,
 	var body string
 	if err := conn.QueryRow(ctx, `SELECT body FROM probe WHERE k = 1`).Scan(&body); err != nil || body != "first" {
 		t.Errorf("row after the conflict: %q %v", body, err)
-	}
-}
-
-// TestGroupLookupOnlyGroupZero: an instance whose accounts have no owner
-// (group 0 only, as one used from the command line) does no lookup until
-// an account with an owner exists.
-func TestGroupLookupOnlyGroupZero(t *testing.T) {
-	st := storetest.New(t)
-	ctx := context.Background()
-	// The first user adopts the accounts without an owner that exist then:
-	// create it first.
-	u, err := st.CreateUser(ctx, "alice", "h", false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	unowned := &store.Account{Name: "cli", Host: "h", Port: 993, TLSMode: store.TLSModeTLS, Username: "u", PasswordEnc: []byte{1}}
-	if err := st.CreateAccount(ctx, unowned); err != nil {
-		t.Fatal(err)
-	}
-	l := st.NewGroupLookup(unowned.ID)
-	if held, err := l.Holds(ctx, hashOf('x')); err != nil || !held {
-		t.Errorf("group 0 only: %v %v, want held without a lookup", held, err)
-	}
-	owned := &store.Account{Name: "work", Host: "h", Port: 993, TLSMode: store.TLSModeTLS, Username: "u", PasswordEnc: []byte{1}, OwnerID: &u.ID}
-	if err := st.CreateAccount(ctx, owned); err != nil {
-		t.Fatal(err)
-	}
-	if held, err := l.Holds(ctx, hashOf('x')); err != nil || held {
-		t.Errorf("an owned account exists: %v %v, want a lookup", held, err)
-	}
-}
-
-// TestGroupLookupSecondOwnedGroup: the first account of a second customer
-// group (with an owner) turns the lookup on for the next message.
-func TestGroupLookupSecondOwnedGroup(t *testing.T) {
-	f := newRetentionFixture(t)
-	aliceInbox := f.folder(f.alice, "work", "INBOX")
-	l := f.st.NewGroupLookup(aliceInbox.AccountID)
-	if held, err := l.Holds(f.ctx, hashOf('x')); err != nil || !held {
-		t.Errorf("one group: %v %v, want held without a lookup", held, err)
-	}
-	g, err := f.st.CreateGroup(f.ctx, "B")
-	if err != nil {
-		t.Fatal(err)
-	}
-	carol, err := f.st.CreateUserInGroup(f.ctx, store.NewUser{Name: "carol", PasswordHash: "h", GroupID: g.ID})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if held, err := l.Holds(f.ctx, hashOf('x')); err != nil || !held {
-		t.Errorf("a user of B without an account: %v %v, want held without a lookup", held, err)
-	}
-	f.folder(carol, "carol", "INBOX")
-	if held, err := l.Holds(f.ctx, hashOf('x')); err != nil || held {
-		t.Errorf("an account of B exists: %v %v, want a lookup", held, err)
 	}
 }

@@ -336,6 +336,8 @@ func TestPutBarrierOrder(t *testing.T) {
 func TestPutSyncTempIf(t *testing.T) {
 	const content = "Subject: group\r\n\r\nbody\r\n"
 	s, rec, root := newRecorded(t)
+	var hooked []string // OnTempSync, for the callers' tests
+	s.OnTempSync(func(hash string) { hooked = append(hooked, hash) })
 	var asked []string
 	ask := func(answer bool, err error) PutOption {
 		return SyncTempIf(func(hash string) (bool, error) {
@@ -384,6 +386,7 @@ func TestPutSyncTempIf(t *testing.T) {
 	equal(t, "new blob, true", rec.take(), append([]string{"sync:TEMP", "close:TEMP", "link:" + otherFinal}, barrier(shardDirs(root, other.SHA256)...)...))
 
 	equal(t, "predicate calls", asked, []string{blob.SHA256, blob.SHA256, blob.SHA256, other.SHA256})
+	equal(t, "OnTempSync calls", hooked, []string{blob.SHA256, blob.SHA256, blob.SHA256, other.SHA256})
 
 	// A failing predicate fails the Put: nothing is published or synchronized.
 	third := content + "third\r\n"

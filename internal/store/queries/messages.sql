@@ -72,30 +72,10 @@ JOIN LATERAL (
 ) l ON true
 WHERE f.account_id = (SELECT a.account_id FROM folders a WHERE a.id = @folder_id);
 
--- name: AccountGroupState :one
--- The group lookup before a save (#539, part 3), read for every message:
--- the account's group key (its owner's group, 0 without an owner) and
--- whether an account of another group exists (accounts without an owner
--- count as group 0). Index probes of accounts_owner_name_key and a scan of
--- users, whatever the messages; no row for a gone account.
-WITH me AS (
-    SELECT coalesce(o.group_id, 0)::bigint AS group_key
-    FROM accounts a LEFT JOIN users o ON o.id = a.owner_id
-    WHERE a.id = @account_id
-)
-SELECT me.group_key,
-       (CASE WHEN me.group_key = 0
-             THEN EXISTS (SELECT 1 FROM accounts a WHERE a.owner_id IS NOT NULL)
-             ELSE EXISTS (SELECT 1 FROM accounts a WHERE a.owner_id IS NULL)
-                  OR EXISTS (SELECT 1 FROM users u WHERE u.group_id <> me.group_key
-                                 AND EXISTS (SELECT 1 FROM accounts a WHERE a.owner_id = u.id))
-        END)::boolean AS other_groups
-FROM me;
-
 -- name: GroupFolderIDs :many
 -- The folders of a customer group (0: the accounts without an owner), for
 -- FoldersHoldMessages; read once per folder run of a sync or fill and per
--- SMTP delivery.
+-- SMTP delivery, and again when the account's group changed.
 SELECT f.id FROM folders f
 JOIN accounts a ON a.id = f.account_id
 LEFT JOIN users o ON o.id = a.owner_id
