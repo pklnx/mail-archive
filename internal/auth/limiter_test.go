@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/testwait"
+	"github.com/keepia/archive/internal/testwait"
 )
 
 // spinUntil returns once cond holds: Waiting is a state that nothing

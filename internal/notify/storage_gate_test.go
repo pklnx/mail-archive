@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/pklnx/mail-archive/internal/quota"
+	"github.com/keepia/archive/internal/quota"
 )
 
 // TestStorageGateToWebhook: a transition the storage gate persists (part

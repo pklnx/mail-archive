@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/store"
 )
 
 func auditEntries(t *testing.T, out map[string]any) []map[string]any {

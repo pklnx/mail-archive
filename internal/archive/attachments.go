@@ -10,10 +10,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/attachtext"
-	"github.com/pklnx/mail-archive/internal/blobstore"
-	"github.com/pklnx/mail-archive/internal/jobs"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/attachtext"
+	"github.com/keepia/archive/internal/blobstore"
+	"github.com/keepia/archive/internal/jobs"
+	"github.com/keepia/archive/internal/store"
 )
 
 // CodeExtractorUnavailable is the job error of a message whose PDF could

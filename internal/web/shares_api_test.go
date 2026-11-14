@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/store"
 )
 
 // PUT and DELETE /api/accounts/{name}/shares/{user} (#389): only the

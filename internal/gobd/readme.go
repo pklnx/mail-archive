@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/attest"
+	"github.com/keepia/archive/internal/attest"
 )
 
 // Readme is README.txt of an export: German, then English, with CRLF line

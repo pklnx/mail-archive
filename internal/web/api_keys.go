@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/auth"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/auth"
+	"github.com/keepia/archive/internal/store"
 )
 
 // API keys let scripts call the read and sync routes with

@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/blobcrypt"
-	"github.com/pklnx/mail-archive/internal/blobstore"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/blobcrypt"
+	"github.com/keepia/archive/internal/blobstore"
+	"github.com/keepia/archive/internal/store"
 )
 
 // Batch limits of an offline conversion (#392, part 3): a batch ends after

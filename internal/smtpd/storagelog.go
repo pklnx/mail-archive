@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/quota"
+	"github.com/keepia/archive/internal/quota"
 )
 
 // storageSummaryEvery is how often the deferrals of a group are summed up

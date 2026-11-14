@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	uipkg "github.com/pklnx/mail-archive/internal/web/ui"
+	uipkg "github.com/keepia/archive/internal/web/ui"
 )
 
 // specMethods are the operations of a path item that can match a route.

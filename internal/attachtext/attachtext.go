@@ -17,7 +17,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/pklnx/mail-archive/internal/mime"
+	"github.com/keepia/archive/internal/mime"
 )
 
 // Limits. They are fixed and documented in docs/reference/security.md.

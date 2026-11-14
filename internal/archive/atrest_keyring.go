@@ -8,8 +8,8 @@ import (
 	"io/fs"
 	"os"
 
-	"github.com/pklnx/mail-archive/internal/blobcrypt"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/blobcrypt"
+	"github.com/keepia/archive/internal/store"
 )
 
 // readKeyringBytes reads the keyring file of dataDir; a missing file wraps

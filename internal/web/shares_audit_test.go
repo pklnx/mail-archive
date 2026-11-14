@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/store"
 )
 
 // auditWorld is the seed of the shared-read audit tests (#389, test 10 and

@@ -16,10 +16,10 @@ import (
 
 	"github.com/emersion/go-imap/v2/imapserver/imapmemserver"
 
-	"github.com/pklnx/mail-archive/internal/archive"
-	"github.com/pklnx/mail-archive/internal/blobstore"
-	"github.com/pklnx/mail-archive/internal/mailbox"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/archive"
+	"github.com/keepia/archive/internal/blobstore"
+	"github.com/keepia/archive/internal/mailbox"
+	"github.com/keepia/archive/internal/store"
 )
 
 var importStart = time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)

@@ -10,9 +10,9 @@ import (
 
 	"github.com/emersion/go-imap/v2"
 
-	"github.com/pklnx/mail-archive/internal/config"
-	"github.com/pklnx/mail-archive/internal/imapsync"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/config"
+	"github.com/keepia/archive/internal/imapsync"
+	"github.com/keepia/archive/internal/store"
 )
 
 // DefaultMaxReconcileMessages caps the folders a reconcile lists. Listing

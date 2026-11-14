@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/alertmail"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/alertmail"
+	"github.com/keepia/archive/internal/store"
 )
 
 var since = time.Date(2026, 11, 12, 8, 30, 0, 0, time.UTC)

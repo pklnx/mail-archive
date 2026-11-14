@@ -20,7 +20,7 @@ import (
 
 	"golang.org/x/text/unicode/norm"
 
-	"github.com/pklnx/mail-archive/internal/attest"
+	"github.com/keepia/archive/internal/attest"
 )
 
 // Finding kinds of Verify.

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/store"
-	"github.com/pklnx/mail-archive/internal/store/storetest"
+	"github.com/keepia/archive/internal/store"
+	"github.com/keepia/archive/internal/store/storetest"
 )
 
 var testKeyring = store.KeyringCopy{Keyring: []byte(`{"format":"x"}`), ID: strings.Repeat("ab", 16), Generation: 1, CurrentKey: 0xdeadbeef}

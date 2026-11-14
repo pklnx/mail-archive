@@ -9,8 +9,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/pklnx/mail-archive/internal/auth"
-	"github.com/pklnx/mail-archive/internal/store/db"
+	"github.com/keepia/archive/internal/auth"
+	"github.com/keepia/archive/internal/store/db"
 )
 
 // Passkeys (WebAuthn). The store keeps the library's credential records and

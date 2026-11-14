@@ -8,7 +8,7 @@ import (
 
 	"github.com/emersion/go-imap/v2/imapserver/imapmemserver"
 
-	"github.com/pklnx/mail-archive/internal/archive"
+	"github.com/keepia/archive/internal/archive"
 )
 
 // runRunner runs r until the test ends; stop cancels it and waits.

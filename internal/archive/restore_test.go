@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pklnx/mail-archive/internal/archive"
-	"github.com/pklnx/mail-archive/internal/blobcrypt"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/archive"
+	"github.com/keepia/archive/internal/blobcrypt"
+	"github.com/keepia/archive/internal/store"
 )
 
 func (e *archiveEnv) reconcileRestored(kek []byte) (*archive.RestoreReport, error) {

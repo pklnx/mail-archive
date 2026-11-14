@@ -11,8 +11,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/pklnx/mail-archive/internal/attest"
-	"github.com/pklnx/mail-archive/internal/store/db"
+	"github.com/keepia/archive/internal/attest"
+	"github.com/keepia/archive/internal/store/db"
 )
 
 // GoBD export (#394, part 2): the export reads everything in one

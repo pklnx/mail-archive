@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/auth"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/auth"
+	"github.com/keepia/archive/internal/store"
 )
 
 // Auditor access (#393). An auditor is a user with a fixed role who reads

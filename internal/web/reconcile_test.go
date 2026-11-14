@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/store"
 )
 
 // Gone is per user: Alice's and Bob's accounts hold the same invoice. Only

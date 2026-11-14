@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/store/db"
+	"github.com/keepia/archive/internal/store/db"
 )
 
 // Storage alerts (#397, part 3): storage_states is the outbox of the

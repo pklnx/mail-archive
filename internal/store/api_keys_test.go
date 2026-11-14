@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/auth"
-	"github.com/pklnx/mail-archive/internal/store"
-	"github.com/pklnx/mail-archive/internal/store/storetest"
+	"github.com/keepia/archive/internal/auth"
+	"github.com/keepia/archive/internal/store"
+	"github.com/keepia/archive/internal/store/storetest"
 )
 
 func newKey(t *testing.T, st *store.Store, userID int64, name string, scopes []string, expires *time.Time) (string, *store.APIKey) {

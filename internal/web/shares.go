@@ -8,8 +8,8 @@ import (
 	"slices"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/auth"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/auth"
+	"github.com/keepia/archive/internal/store"
 )
 
 // Shared accounts (#389). The owner shares an account with another user

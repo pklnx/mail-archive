@@ -8,10 +8,10 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/blobstore"
-	"github.com/pklnx/mail-archive/internal/mailbox"
-	"github.com/pklnx/mail-archive/internal/quota"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/blobstore"
+	"github.com/keepia/archive/internal/mailbox"
+	"github.com/keepia/archive/internal/quota"
+	"github.com/keepia/archive/internal/store"
 )
 
 // ImportJournal stores the messages of the folders in the journal folder of

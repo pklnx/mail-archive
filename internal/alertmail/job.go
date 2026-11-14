@@ -7,8 +7,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/jobs"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/jobs"
+	"github.com/keepia/archive/internal/store"
 )
 
 // Retry of an alert mail: 1 minute after the first failed attempt,

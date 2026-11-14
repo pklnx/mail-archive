@@ -10,8 +10,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/pklnx/mail-archive/internal/store/db"
-	"github.com/pklnx/mail-archive/internal/store/storetest"
+	"github.com/keepia/archive/internal/store/db"
+	"github.com/keepia/archive/internal/store/storetest"
 )
 
 // TestFoldersHoldMessagesPlan: the per-message lookup before a save

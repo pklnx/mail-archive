@@ -7,8 +7,8 @@ import (
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapserver/imapmemserver"
 
-	"github.com/pklnx/mail-archive/internal/imapsync"
-	"github.com/pklnx/mail-archive/internal/imaptest"
+	"github.com/keepia/archive/internal/imapsync"
+	"github.com/keepia/archive/internal/imaptest"
 )
 
 func TestListFoldersDelimiter(t *testing.T) {

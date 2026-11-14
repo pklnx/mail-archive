@@ -1,7 +1,7 @@
 package notify
 
 import (
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/store"
 )
 
 // Alert mail (#397, part 5): in its mail pass the notifier hands the store

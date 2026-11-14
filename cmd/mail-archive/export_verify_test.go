@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/attest"
-	"github.com/pklnx/mail-archive/internal/gobd"
+	"github.com/keepia/archive/internal/attest"
+	"github.com/keepia/archive/internal/gobd"
 )
 
 // writeTestExport writes a one-message export signed with key into a new

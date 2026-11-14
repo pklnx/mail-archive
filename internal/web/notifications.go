@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/config"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/config"
+	"github.com/keepia/archive/internal/store"
 )
 
 // Profile → Notifications (#397, part 5): each admin may set one address

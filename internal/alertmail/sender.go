@@ -20,7 +20,7 @@ import (
 	"github.com/emersion/go-sasl"
 	"github.com/emersion/go-smtp"
 
-	"github.com/pklnx/mail-archive/internal/config"
+	"github.com/keepia/archive/internal/config"
 )
 
 // Timeouts of one delivery, all below the job lease (jobs.LeaseDuration,

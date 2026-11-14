@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/attachtext/pdftest"
-	"github.com/pklnx/mail-archive/internal/mime"
-	"github.com/pklnx/mail-archive/internal/testwait"
+	"github.com/keepia/archive/internal/attachtext/pdftest"
+	"github.com/keepia/archive/internal/mime"
+	"github.com/keepia/archive/internal/testwait"
 )
 
 // part is one MIME part of a test message.

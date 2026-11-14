@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pklnx/mail-archive/internal/jobs"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/jobs"
+	"github.com/keepia/archive/internal/store"
 )
 
 func (f *authFixture) jobsHealth() (int, string) {

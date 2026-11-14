@@ -15,7 +15,7 @@ import (
 	"time"
 	_ "time/tzdata" // the tests need Europe/Berlin on any machine
 
-	"github.com/pklnx/mail-archive/internal/attest"
+	"github.com/keepia/archive/internal/attest"
 )
 
 func testKey() ed25519.PrivateKey {

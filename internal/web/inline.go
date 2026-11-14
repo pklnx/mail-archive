@@ -7,7 +7,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/pklnx/mail-archive/internal/mime"
+	"github.com/keepia/archive/internal/mime"
 )
 
 // maxInlineBytes bounds the data: URLs that one HTML view adds for inline

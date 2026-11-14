@@ -13,7 +13,7 @@ import (
 	"golang.org/x/net/html"
 	"golang.org/x/net/idna"
 
-	"github.com/pklnx/mail-archive/internal/mime"
+	"github.com/keepia/archive/internal/mime"
 )
 
 // neutralizeCase is one input of neutralizeHTML and its exact output.

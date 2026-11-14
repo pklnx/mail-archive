@@ -18,8 +18,8 @@ import (
 	"github.com/klippa-app/go-pdfium/requests"
 	"github.com/tetratelabs/wazero/sys"
 
-	"github.com/pklnx/mail-archive/internal/attachtext/pdftest"
-	"github.com/pklnx/mail-archive/internal/testwait"
+	"github.com/keepia/archive/internal/attachtext/pdftest"
+	"github.com/keepia/archive/internal/testwait"
 )
 
 // shared is the Extractor of the whole test binary: the module is compiled

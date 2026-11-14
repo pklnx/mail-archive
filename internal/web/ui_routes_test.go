@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pklnx/mail-archive/internal/web/ui"
+	"github.com/keepia/archive/internal/web/ui"
 )
 
 // TestUIAssetsStayInTheirFolder sends the escaped spellings of ".." to

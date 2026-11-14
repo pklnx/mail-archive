@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/store"
 )
 
 // msgShared is M of the route matrix: HTML with an attachment, so every

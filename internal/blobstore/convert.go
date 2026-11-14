@@ -14,7 +14,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/pklnx/mail-archive/internal/blobcrypt"
+	"github.com/keepia/archive/internal/blobcrypt"
 )
 
 // ConvertOutcome is what Conversion did with one file.

@@ -7,9 +7,9 @@ import (
 	"io/fs"
 	"os"
 
-	"github.com/pklnx/mail-archive/internal/blobcrypt"
-	"github.com/pklnx/mail-archive/internal/blobstore"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/blobcrypt"
+	"github.com/keepia/archive/internal/blobstore"
+	"github.com/keepia/archive/internal/store"
 )
 
 // keyringLabelArchiveKey is the label of the archive key's slot in a

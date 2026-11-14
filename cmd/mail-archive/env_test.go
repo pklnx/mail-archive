@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pklnx/mail-archive/internal/config"
-	"github.com/pklnx/mail-archive/internal/testwait"
+	"github.com/keepia/archive/internal/config"
+	"github.com/keepia/archive/internal/testwait"
 )
 
 // TestCheckEnv (#585): old variable names in use give one WARN line that

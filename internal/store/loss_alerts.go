@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/store/db"
+	"github.com/keepia/archive/internal/store/db"
 )
 
 // Thresholds of a loss alert, per account and sync run.

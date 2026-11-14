@@ -7,7 +7,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/pklnx/mail-archive/internal/attachtext/pdftest"
+	"github.com/keepia/archive/internal/attachtext/pdftest"
 )
 
 // FuzzExtract feeds arbitrary bytes to PDFium. Every input returns, with a

@@ -10,7 +10,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/pklnx/mail-archive/internal/config"
+	"github.com/keepia/archive/internal/config"
 )
 
 // A login alone does not protect the server: any web page open in the

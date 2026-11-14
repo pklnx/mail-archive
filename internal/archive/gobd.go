@@ -18,10 +18,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/attest"
-	"github.com/pklnx/mail-archive/internal/blobstore"
-	"github.com/pklnx/mail-archive/internal/gobd"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/attest"
+	"github.com/keepia/archive/internal/blobstore"
+	"github.com/keepia/archive/internal/gobd"
+	"github.com/keepia/archive/internal/store"
 )
 
 // GoBD export (#394, part 2): the selection of one customer group, read in

@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/store/db"
-	"github.com/pklnx/mail-archive/internal/store/storetest"
+	"github.com/keepia/archive/internal/store/db"
+	"github.com/keepia/archive/internal/store/storetest"
 )
 
 // TestGroupLookupCost measures the group lookups of the save path per

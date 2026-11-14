@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pklnx/mail-archive/internal/blobcrypt"
-	"github.com/pklnx/mail-archive/internal/crypto"
+	"github.com/keepia/archive/internal/blobcrypt"
+	"github.com/keepia/archive/internal/crypto"
 )
 
 // newSecretKey returns a random secret key and its base64 form.

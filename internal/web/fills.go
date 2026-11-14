@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/archive"
-	"github.com/pklnx/mail-archive/internal/imapsync"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/archive"
+	"github.com/keepia/archive/internal/imapsync"
+	"github.com/keepia/archive/internal/store"
 )
 
 // Fills: a copy of an IMAP mailbox into an smtp account (#89), into its

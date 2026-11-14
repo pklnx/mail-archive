@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/store"
 )
 
 // Runner syncs accounts in the background for the web server: on request

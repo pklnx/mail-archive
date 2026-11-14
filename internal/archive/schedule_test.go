@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/store"
 )
 
 func dur(d time.Duration) *time.Duration { return &d }

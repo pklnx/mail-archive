@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pklnx/mail-archive/internal/attest"
+	"github.com/keepia/archive/internal/attest"
 )
 
 // A clean export verifies without findings, as a directory and as a ZIP,

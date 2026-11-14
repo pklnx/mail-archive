@@ -6,8 +6,8 @@ import (
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapserver/imapmemserver"
 
-	"github.com/pklnx/mail-archive/internal/imaptest"
-	"github.com/pklnx/mail-archive/internal/store/storetest"
+	"github.com/keepia/archive/internal/imaptest"
+	"github.com/keepia/archive/internal/store/storetest"
 )
 
 // delimiters returns the stored delimiter per folder of the account

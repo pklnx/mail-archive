@@ -7,7 +7,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/store/db"
+	"github.com/keepia/archive/internal/store/db"
 )
 
 // SetupTokenValidity is how long a setup token works, from the first start

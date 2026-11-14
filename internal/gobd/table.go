@@ -10,7 +10,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/pklnx/mail-archive/internal/csvsafe"
+	"github.com/keepia/archive/internal/csvsafe"
 )
 
 // scanTable reads a CSV table of format v1: the exact header line, then

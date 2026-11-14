@@ -6,7 +6,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/store/db"
+	"github.com/keepia/archive/internal/store/db"
 )
 
 // Auditor logins and the grant views of the web layer (#393, part 2).

@@ -25,8 +25,8 @@ import (
 	"github.com/emersion/go-sasl"
 	"github.com/emersion/go-smtp"
 
-	"github.com/pklnx/mail-archive/internal/alertmail"
-	"github.com/pklnx/mail-archive/internal/config"
+	"github.com/keepia/archive/internal/alertmail"
+	"github.com/keepia/archive/internal/config"
 )
 
 // Modes of the relay.

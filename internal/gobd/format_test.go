@@ -13,7 +13,7 @@ import (
 	"testing/iotest"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/attest"
+	"github.com/keepia/archive/internal/attest"
 )
 
 var update = flag.Bool("update", false, "rewrite the golden files in testdata")

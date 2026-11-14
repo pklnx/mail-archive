@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/quota"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/quota"
+	"github.com/keepia/archive/internal/store"
 )
 
 // RecurringStartHold is how long recurring fills wait after the web server

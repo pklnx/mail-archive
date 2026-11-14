@@ -14,7 +14,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
-	"github.com/pklnx/mail-archive/internal/testwait"
+	"github.com/keepia/archive/internal/testwait"
 )
 
 // runMa runs the repository's ./ma with a docker that only logs its

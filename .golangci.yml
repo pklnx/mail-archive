@@ -31,4 +31,4 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/pklnx/mail-archive
+        - github.com/keepia/archive
