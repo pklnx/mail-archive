@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/store"
 )
 
 // as returns a copy of the fixture with its own cookie jar, i.e. another

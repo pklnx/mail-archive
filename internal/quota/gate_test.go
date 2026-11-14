@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/store"
 )
 
 var th = Thresholds{WarnPercent: 80, OverflowPercent: 10}

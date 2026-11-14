@@ -3,7 +3,7 @@ package storetest
 import (
 	"fmt"
 
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/store"
 )
 
 // Entry starts an audit entry of action in the first class the store

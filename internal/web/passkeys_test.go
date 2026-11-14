@@ -18,7 +18,7 @@ import (
 
 	"github.com/fxamacker/cbor/v2"
 
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/store"
 )
 
 const (

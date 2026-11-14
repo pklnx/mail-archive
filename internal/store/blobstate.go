@@ -9,7 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/pklnx/mail-archive/internal/store/db"
+	"github.com/keepia/archive/internal/store/db"
 )
 
 // States of encryption at rest (#392). Off is no blob_encryption row, or

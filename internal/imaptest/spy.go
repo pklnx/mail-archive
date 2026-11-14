@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/testwait"
+	"github.com/keepia/archive/internal/testwait"
 )
 
 // SpyWrap returns a function for imapsync.Config.WrapConn that puts a new

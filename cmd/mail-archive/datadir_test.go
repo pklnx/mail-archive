@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pklnx/mail-archive/internal/config"
+	"github.com/keepia/archive/internal/config"
 )
 
 func TestPrepareDataDir(t *testing.T) {

@@ -89,6 +89,11 @@ jobs:
       - run: make sqlc-check
       # The Dockerfile's Go version guard must pass and fail where it should.
       - run: sh scripts/check-go-toolchain-test.sh
+      # No address from before the move to keepia outside its allowlist
+      # (#585); the test also runs the check on this repository.
+      - run: sh scripts/old-names-test.sh
+      # The release's anonymous-pull check, with a fake curl.
+      - run: sh scripts/release-image-public-test.sh
 
   vulncheck:
     runs-on: ubuntu-latest

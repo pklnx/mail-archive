@@ -1,7 +1,7 @@
 package imapsync
 
 import (
-	"github.com/pklnx/mail-archive/internal/imaptest"
+	"github.com/keepia/archive/internal/imaptest"
 )
 
 // WithSpy makes cfg's connection go through a new ConnSpy, which it

@@ -14,7 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/pklnx/mail-archive/internal/config"
+	"github.com/keepia/archive/internal/config"
 )
 
 var version = "dev"

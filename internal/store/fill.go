@@ -11,7 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/pklnx/mail-archive/internal/store/db"
+	"github.com/keepia/archive/internal/store/db"
 )
 
 // A fill copies an IMAP mailbox into an smtp account: once, the mail that

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pklnx/mail-archive/internal/csvsafe"
+	"github.com/keepia/archive/internal/csvsafe"
 )
 
 // The parsers of untrusted input never panic, and what they accept is in

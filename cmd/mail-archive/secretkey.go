@@ -8,10 +8,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/pklnx/mail-archive/internal/archive"
-	"github.com/pklnx/mail-archive/internal/config"
-	"github.com/pklnx/mail-archive/internal/crypto"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/archive"
+	"github.com/keepia/archive/internal/config"
+	"github.com/keepia/archive/internal/crypto"
+	"github.com/keepia/archive/internal/store"
 )
 
 // The secret key at start (#396, step 5). serve refuses to start without a

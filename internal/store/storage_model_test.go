@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/store"
 )
 
 // usageModel is what the storage figures must be, kept in Go: which

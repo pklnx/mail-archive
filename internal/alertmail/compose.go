@@ -9,7 +9,7 @@ import (
 
 	"github.com/emersion/go-message/mail"
 
-	"github.com/pklnx/mail-archive/internal/config"
+	"github.com/keepia/archive/internal/config"
 )
 
 // Message is one mail to compose: its texts and headers. Subject and

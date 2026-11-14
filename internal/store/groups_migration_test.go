@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pklnx/mail-archive/internal/store"
-	"github.com/pklnx/mail-archive/internal/store/storetest"
+	"github.com/keepia/archive/internal/store"
+	"github.com/keepia/archive/internal/store/storetest"
 )
 
 // TestGroupsMigration (#470, test 13): 00034 puts every user into

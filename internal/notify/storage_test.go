@@ -12,8 +12,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/pklnx/mail-archive/internal/notify"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/notify"
+	"github.com/keepia/archive/internal/store"
 )
 
 // transition records a transition of the instance (group 0) or a group to

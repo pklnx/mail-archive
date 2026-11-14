@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/pklnx/mail-archive/internal/store/db"
+	"github.com/keepia/archive/internal/store/db"
 )
 
 // Attachment text per location (#539, part 2). A location shows its

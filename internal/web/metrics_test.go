@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/store"
 )
 
 // metricsGet requests /api/metrics with key (or f's session when key is

@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/testwait"
+	"github.com/keepia/archive/internal/testwait"
 )
 
 // Script is a raw-TCP IMAP server whose every byte a test writes by hand,

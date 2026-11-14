@@ -12,11 +12,11 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/pklnx/mail-archive/internal/archive"
-	"github.com/pklnx/mail-archive/internal/blobcrypt"
-	"github.com/pklnx/mail-archive/internal/blobstore"
-	"github.com/pklnx/mail-archive/internal/config"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/archive"
+	"github.com/keepia/archive/internal/blobcrypt"
+	"github.com/keepia/archive/internal/blobstore"
+	"github.com/keepia/archive/internal/config"
+	"github.com/keepia/archive/internal/store"
 )
 
 // writeTestKey writes key to a new owner-only file outside the data

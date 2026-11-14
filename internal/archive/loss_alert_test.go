@@ -11,9 +11,9 @@ import (
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapserver/imapmemserver"
 
-	"github.com/pklnx/mail-archive/internal/archive"
-	"github.com/pklnx/mail-archive/internal/imaptest"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/archive"
+	"github.com/keepia/archive/internal/imaptest"
+	"github.com/keepia/archive/internal/store"
 )
 
 // lossFixture: account "mail" with 20 messages in INBOX and an empty Zz

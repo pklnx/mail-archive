@@ -13,12 +13,12 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/pklnx/mail-archive/internal/blobstore"
-	"github.com/pklnx/mail-archive/internal/config"
-	"github.com/pklnx/mail-archive/internal/jobs"
-	"github.com/pklnx/mail-archive/internal/store"
-	"github.com/pklnx/mail-archive/internal/store/storetest"
-	"github.com/pklnx/mail-archive/internal/testwait"
+	"github.com/keepia/archive/internal/blobstore"
+	"github.com/keepia/archive/internal/config"
+	"github.com/keepia/archive/internal/jobs"
+	"github.com/keepia/archive/internal/store"
+	"github.com/keepia/archive/internal/store/storetest"
+	"github.com/keepia/archive/internal/testwait"
 )
 
 // blockingKind registers a test kind whose handler signals that it runs

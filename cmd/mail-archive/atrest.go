@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/archive"
-	"github.com/pklnx/mail-archive/internal/blobstore"
+	"github.com/keepia/archive/internal/archive"
+	"github.com/keepia/archive/internal/blobstore"
 )
 
 // writerStopped is the cause of the root context when a writer must stop

@@ -10,7 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/pklnx/mail-archive/internal/store/db"
+	"github.com/keepia/archive/internal/store/db"
 )
 
 // retentionLockClass is the first key of the advisory locks of retention

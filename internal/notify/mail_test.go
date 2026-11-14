@@ -14,12 +14,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/alertmail"
-	"github.com/pklnx/mail-archive/internal/alertmail/mailtest"
-	"github.com/pklnx/mail-archive/internal/jobs"
-	"github.com/pklnx/mail-archive/internal/notify"
-	"github.com/pklnx/mail-archive/internal/store"
-	"github.com/pklnx/mail-archive/internal/testwait"
+	"github.com/keepia/archive/internal/alertmail"
+	"github.com/keepia/archive/internal/alertmail/mailtest"
+	"github.com/keepia/archive/internal/jobs"
+	"github.com/keepia/archive/internal/notify"
+	"github.com/keepia/archive/internal/store"
+	"github.com/keepia/archive/internal/testwait"
 )
 
 // Alert mail (#397, part 5): the notifier's mail pass enqueues one

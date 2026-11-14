@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/store"
 )
 
 // Storage levels: the quota states of a scope (#397). LevelOK is the

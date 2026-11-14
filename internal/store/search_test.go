@@ -11,9 +11,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/pklnx/mail-archive/internal/store"
-	"github.com/pklnx/mail-archive/internal/store/db"
-	"github.com/pklnx/mail-archive/internal/store/storetest"
+	"github.com/keepia/archive/internal/store"
+	"github.com/keepia/archive/internal/store/db"
+	"github.com/keepia/archive/internal/store/storetest"
 )
 
 type searchMsg struct {

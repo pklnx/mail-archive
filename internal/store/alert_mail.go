@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/store/db"
+	"github.com/keepia/archive/internal/store/db"
 )
 
 // Email alerts for admins (#397, part 5). Mail keeps its own state beside

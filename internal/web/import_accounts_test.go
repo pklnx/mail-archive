@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/store"
 )
 
 func TestImportAccountsInTheAPI(t *testing.T) {

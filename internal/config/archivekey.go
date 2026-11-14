@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/pklnx/mail-archive/internal/blobcrypt"
+	"github.com/keepia/archive/internal/blobcrypt"
 )
 
 // LoadArchiveKey reads the archive key (KEK) from the key file (preferred)

@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/notify"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/notify"
+	"github.com/keepia/archive/internal/store"
 )
 
 // leakMarkers are put into every name, host, mailbox, folder, subject,

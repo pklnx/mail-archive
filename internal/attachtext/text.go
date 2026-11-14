@@ -6,7 +6,7 @@ import (
 
 	"golang.org/x/text/encoding/charmap"
 
-	"github.com/pklnx/mail-archive/internal/mime"
+	"github.com/keepia/archive/internal/mime"
 )
 
 // plainText returns the text of a text or HTML attachment and its status.

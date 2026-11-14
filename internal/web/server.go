@@ -20,12 +20,12 @@ import (
 
 	"github.com/go-webauthn/webauthn/webauthn"
 
-	"github.com/pklnx/mail-archive/internal/archive"
-	"github.com/pklnx/mail-archive/internal/auth"
-	"github.com/pklnx/mail-archive/internal/blobstore"
-	"github.com/pklnx/mail-archive/internal/config"
-	"github.com/pklnx/mail-archive/internal/crypto"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/archive"
+	"github.com/keepia/archive/internal/auth"
+	"github.com/keepia/archive/internal/blobstore"
+	"github.com/keepia/archive/internal/config"
+	"github.com/keepia/archive/internal/crypto"
+	"github.com/keepia/archive/internal/store"
 )
 
 // DefaultAllowedHosts are the host names accepted without configuration.

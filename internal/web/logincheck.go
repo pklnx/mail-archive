@@ -11,10 +11,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/archive"
-	"github.com/pklnx/mail-archive/internal/auth"
-	"github.com/pklnx/mail-archive/internal/imapsync"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/archive"
+	"github.com/keepia/archive/internal/auth"
+	"github.com/keepia/archive/internal/imapsync"
+	"github.com/keepia/archive/internal/store"
 )
 
 // The limits of IMAP login checks (adding or changing an account, a fill's

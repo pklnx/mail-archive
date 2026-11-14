@@ -4,7 +4,7 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/store"
 )
 
 // StorageKinds are the job kinds of storage usage (#397, part 1):

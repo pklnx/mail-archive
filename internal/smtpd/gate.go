@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/auth"
+	"github.com/keepia/archive/internal/auth"
 )
 
 // gate refuses connections before go-smtp sees them: clients outside the

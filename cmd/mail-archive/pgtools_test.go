@@ -20,9 +20,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/pklnx/mail-archive/internal/blobcrypt"
-	"github.com/pklnx/mail-archive/internal/config"
-	"github.com/pklnx/mail-archive/internal/crypto"
+	"github.com/keepia/archive/internal/blobcrypt"
+	"github.com/keepia/archive/internal/config"
+	"github.com/keepia/archive/internal/crypto"
 )
 
 // The tests here set PG* variables with t.Setenv and are not parallel. No

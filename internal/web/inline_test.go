@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pklnx/mail-archive/internal/mime"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/mime"
+	"github.com/keepia/archive/internal/store"
 )
 
 // inlinePart is one leaf part of a test message built by cidMessage.

@@ -11,9 +11,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/pklnx/mail-archive/internal/store"
-	"github.com/pklnx/mail-archive/internal/store/storetest"
-	"github.com/pklnx/mail-archive/internal/testwait"
+	"github.com/keepia/archive/internal/store"
+	"github.com/keepia/archive/internal/store/storetest"
+	"github.com/keepia/archive/internal/testwait"
 )
 
 // texts stores the texts of a message as its job does: after reading the

@@ -92,10 +92,10 @@ const darkBar = { name: "theme-color", content: "#161616", media: "(prefers-colo
 if (!hasTag(index, "meta", lightBar)) fail("index.html lacks the light theme-color");
 if (!hasTag(index, "meta", darkBar)) fail("index.html lacks the dark theme-color");
 const need = {
-  "tile icon": /<link rel="icon" type="image\/svg\+xml" href="\/mail-archive\/mail-archive-tile\.svg">/,
-  "PNG favicon": /<link rel="icon" type="image\/png" sizes="32x32" href="\/mail-archive\/mail-archive-favicon-32\.png">/,
-  "footer OFL link": /href="\/mail-archive\/licenses\/IBM-Plex-OFL\.txt"/,
-  "footer notices link": /href="\/mail-archive\/licenses\/pklnx-design-system-notices\.txt"/,
+  "tile icon": /<link rel="icon" type="image\/svg\+xml" href="\/archive\/mail-archive-tile\.svg">/,
+  "PNG favicon": /<link rel="icon" type="image\/png" sizes="32x32" href="\/archive\/mail-archive-favicon-32\.png">/,
+  "footer OFL link": /href="\/archive\/licenses\/IBM-Plex-OFL\.txt"/,
+  "footer notices link": /href="\/archive\/licenses\/pklnx-design-system-notices\.txt"/,
 };
 for (const [what, re] of Object.entries(need)) if (!re.test(index)) fail(`index.html lacks the ${what}`);
 if (/name="theme-color" content="#2563eb"/.test(index)) fail("index.html still has the old theme-color");

@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/pklnx/mail-archive/internal/crypto"
+	"github.com/keepia/archive/internal/crypto"
 )
 
 // EnvSecretKeyFile is the file holding the secret key (#396); preferred

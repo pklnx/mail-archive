@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/alertmail"
-	"github.com/pklnx/mail-archive/internal/alertmail/mailtest"
+	"github.com/keepia/archive/internal/alertmail"
+	"github.com/keepia/archive/internal/alertmail/mailtest"
 )
 
 func testMessage(t *testing.T, to string) []byte {

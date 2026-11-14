@@ -10,7 +10,7 @@ import (
 	"io/fs"
 	"os"
 
-	"github.com/pklnx/mail-archive/internal/blobcrypt"
+	"github.com/keepia/archive/internal/blobcrypt"
 )
 
 // ErrNoKeys means an encrypted blob was found but the store has no keyring

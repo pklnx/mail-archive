@@ -62,7 +62,7 @@ Keep it that way instead of adding exceptions.
 The rules for UI pull requests (Carbon's install scripts and telemetry, the
 bundled fonts, lazy views and the initial-bundle budget, the pklnx design
 system and its theme) are in
-[`.claude/rules/web-ui.md`](https://github.com/pklnx/mail-archive/blob/main/.claude/rules/web-ui.md).
+[`.claude/rules/web-ui.md`](https://github.com/keepia/archive/blob/main/.claude/rules/web-ui.md).
 
 The logo (the mark per theme in the header, the empty reader and the login
 pages; the tile as favicon and app icon) and the docs logos are copied
@@ -83,7 +83,7 @@ coarse`, the iPhone's safe-area insets) and a model of Safari's and
 Firefox's focus on click (`web/e2e/clickModel.ts`). What only a real device,
 Safari, Firefox or a screen reader can show stays on the manual checklist,
 the open issue labelled
-[`device-checks`](https://github.com/pklnx/mail-archive/issues?q=is%3Aissue%20is%3Aopen%20label%3Adevice-checks).
+[`device-checks`](https://github.com/keepia/archive/issues?q=is%3Aissue%20is%3Aopen%20label%3Adevice-checks).
 It needs Go, a
 PostgreSQL user with `CREATEDB` and a Chromium:
 
@@ -172,7 +172,7 @@ blocked.
 #### WebKit
 
 The suite also runs in Playwright's WebKit
-([#398](https://github.com/pklnx/mail-archive/issues/398)). That is WebKit's
+([#398](https://github.com/keepia/archive/issues/398)). That is WebKit's
 Linux port, not Safari: it covers WebKit's layout and CSS engine, its
 JavaScript and DOM event order, CSP and sandbox enforcement, flatpickr, and
 the phone viewports with touch taps. It does not cover macOS platform
@@ -201,7 +201,7 @@ browser.
 - `@chromium-layer`: the test checks the web UI's own blocker for links in
   the mail frame. WebKit does not run the listeners the web UI adds to the
   sandboxed frame
-  ([#459](https://github.com/pklnx/mail-archive/issues/459)), so there the
+  ([#459](https://github.com/keepia/archive/issues/459)), so there the
   server's link rewrite is the protection. `web/e2e/frame-links.spec.ts`
   checks it in both engines: no link in an HTML mail leads into the app, and
   a link redirecting back to the archive is refused (its server listens on
@@ -229,7 +229,7 @@ A WebKit failure of an assertion about the app is an app bug.
 
 Playwright's trace screenshots add an inline style to the page in WebKit,
 which the app's CSP refuses
-([#343](https://github.com/pklnx/mail-archive/issues/343)), so the `webkit`
+([#343](https://github.com/keepia/archive/issues/343)), so the `webkit`
 project records traces without screenshots. In WebKit the guards'
 `securitypolicyviolation` listener is the guard of record, with a few narrow
 exceptions (`web/e2e/fixtures.ts`), each with a test in `guards.spec.ts` that
@@ -253,7 +253,7 @@ it still fails what it must:
 - WebKit refuses a fetch that a document starts while its frame has a
   navigation to a new document in flight, and logs "Fetch API cannot load
   … due to access control checks.", which Playwright's WebKit reports
-  as a page error ([#552](https://github.com/pklnx/mail-archive/issues/552)).
+  as a page error ([#552](https://github.com/keepia/archive/issues/552)).
   The guards hold that page error, by the first line of its stack and for a
   same-origin `/api/` URL only, while a main-frame document navigation of the
   page is in flight (its request seen, not yet committed), and accept it once
@@ -285,7 +285,7 @@ font, misses a logo or `theme-color`, or when the lockfile installs a
 ```sh
 cd docs
 pnpm install
-pnpm dev        # http://localhost:5173/mail-archive/
+pnpm dev        # http://localhost:5173/archive/
 ```
 
 Screenshots come from the demo server, which serves made-up mail from an

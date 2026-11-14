@@ -18,7 +18,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/pklnx/mail-archive/internal/csvsafe"
+	"github.com/keepia/archive/internal/csvsafe"
 )
 
 // Fixed file names of format v1. Paths are ASCII and use "/".

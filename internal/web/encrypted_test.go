@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/archive"
-	"github.com/pklnx/mail-archive/internal/blobcrypt"
-	"github.com/pklnx/mail-archive/internal/blobstore"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/archive"
+	"github.com/keepia/archive/internal/blobcrypt"
+	"github.com/keepia/archive/internal/blobstore"
+	"github.com/keepia/archive/internal/store"
 )
 
 // encryptedFixture is newAPIFixture with every message file encrypted, as

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pklnx/mail-archive/internal/blobcrypt"
+	"github.com/keepia/archive/internal/blobcrypt"
 )
 
 func newKEK(t *testing.T) []byte {

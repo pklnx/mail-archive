@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/store"
-	"github.com/pklnx/mail-archive/internal/store/storetest"
+	"github.com/keepia/archive/internal/store"
+	"github.com/keepia/archive/internal/store/storetest"
 )
 
 // downAlertMailMigration rolls back 00045_alert_mail.

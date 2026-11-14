@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pklnx/mail-archive/internal/testwait"
+	"github.com/keepia/archive/internal/testwait"
 )
 
 // TestStartingHandler (#396): while serve starts, /healthz answers 503

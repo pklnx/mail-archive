@@ -11,8 +11,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/pklnx/mail-archive/internal/store"
-	"github.com/pklnx/mail-archive/internal/store/storetest"
+	"github.com/keepia/archive/internal/store"
+	"github.com/keepia/archive/internal/store/storetest"
 )
 
 // purgeFixture has alice's account "old" (A) with m1 in INBOX and Archive

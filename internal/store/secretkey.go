@@ -7,8 +7,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/pklnx/mail-archive/internal/crypto"
-	"github.com/pklnx/mail-archive/internal/store/db"
+	"github.com/keepia/archive/internal/crypto"
+	"github.com/keepia/archive/internal/store/db"
 )
 
 // The check value of the secret key (#396): instance_state.secret_key_check

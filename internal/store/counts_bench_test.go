@@ -10,7 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/pklnx/mail-archive/internal/store/storetest"
+	"github.com/keepia/archive/internal/store/storetest"
 )
 
 // TestFolderCountCost compares the folder count query of the sidebar with

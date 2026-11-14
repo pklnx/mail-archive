@@ -13,14 +13,14 @@ import (
 
 	"github.com/emersion/go-imap/v2/imapserver/imapmemserver"
 
-	"github.com/pklnx/mail-archive/internal/alertmail"
-	"github.com/pklnx/mail-archive/internal/alertmail/mailtest"
-	"github.com/pklnx/mail-archive/internal/archive"
-	"github.com/pklnx/mail-archive/internal/config"
-	"github.com/pklnx/mail-archive/internal/crypto"
-	"github.com/pklnx/mail-archive/internal/imaptest"
-	"github.com/pklnx/mail-archive/internal/store"
-	"github.com/pklnx/mail-archive/internal/store/storetest"
+	"github.com/keepia/archive/internal/alertmail"
+	"github.com/keepia/archive/internal/alertmail/mailtest"
+	"github.com/keepia/archive/internal/archive"
+	"github.com/keepia/archive/internal/config"
+	"github.com/keepia/archive/internal/crypto"
+	"github.com/keepia/archive/internal/imaptest"
+	"github.com/keepia/archive/internal/store"
+	"github.com/keepia/archive/internal/store/storetest"
 )
 
 // useRelay points the alert mail settings at relay: the URL, a password

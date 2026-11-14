@@ -13,8 +13,8 @@ import (
 
 	"rsc.io/qr"
 
-	"github.com/pklnx/mail-archive/internal/auth"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/auth"
+	"github.com/keepia/archive/internal/store"
 )
 
 // Two-factor authentication with TOTP. Admins always need it; with

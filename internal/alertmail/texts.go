@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/store"
 )
 
 // Languages of alert mail.

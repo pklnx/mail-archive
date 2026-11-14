@@ -1,4 +1,4 @@
-module github.com/pklnx/mail-archive
+module github.com/keepia/archive
 
 go 1.26.0
 

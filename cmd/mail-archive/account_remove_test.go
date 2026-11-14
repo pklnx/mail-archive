@@ -7,12 +7,12 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/pklnx/mail-archive/internal/archive"
-	"github.com/pklnx/mail-archive/internal/config"
-	"github.com/pklnx/mail-archive/internal/crypto"
-	"github.com/pklnx/mail-archive/internal/store"
-	"github.com/pklnx/mail-archive/internal/store/storetest"
-	"github.com/pklnx/mail-archive/internal/testwait"
+	"github.com/keepia/archive/internal/archive"
+	"github.com/keepia/archive/internal/config"
+	"github.com/keepia/archive/internal/crypto"
+	"github.com/keepia/archive/internal/store"
+	"github.com/keepia/archive/internal/store/storetest"
+	"github.com/keepia/archive/internal/testwait"
 )
 
 // TestAccountRemoveBusy: "account remove" refuses while another session

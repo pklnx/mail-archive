@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/store"
 )
 
 // ErrPurgeRunning is returned while another process executes a purge.

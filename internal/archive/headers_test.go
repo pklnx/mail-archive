@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pklnx/mail-archive/internal/imapsync"
+	"github.com/keepia/archive/internal/imapsync"
 )
 
 func TestParseHeaders(t *testing.T) {

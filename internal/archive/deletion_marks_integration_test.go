@@ -6,9 +6,9 @@ import (
 
 	"github.com/emersion/go-imap/v2/imapserver/imapmemserver"
 
-	"github.com/pklnx/mail-archive/internal/archive"
-	"github.com/pklnx/mail-archive/internal/imaptest"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/archive"
+	"github.com/keepia/archive/internal/imaptest"
+	"github.com/keepia/archive/internal/store"
 )
 
 // Deletion marks per customer group (#539, part 1) through a sync from the

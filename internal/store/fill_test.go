@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/store"
-	"github.com/pklnx/mail-archive/internal/store/storetest"
+	"github.com/keepia/archive/internal/store"
+	"github.com/keepia/archive/internal/store/storetest"
 )
 
 func newFill(a *store.Account, username string) *store.Fill {

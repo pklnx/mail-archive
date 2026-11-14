@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/pklnx/mail-archive/internal/blobstore"
-	"github.com/pklnx/mail-archive/internal/mime"
-	"github.com/pklnx/mail-archive/internal/quota"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/blobstore"
+	"github.com/keepia/archive/internal/mime"
+	"github.com/keepia/archive/internal/quota"
+	"github.com/keepia/archive/internal/store"
 )
 
 // Sync and import store messages the same way: the raw bytes go into the

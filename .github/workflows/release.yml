@@ -6,8 +6,9 @@ name: Release
 # (breaking → major, feature or db-migration → minor, else patch); the first
 # semver release is 1.0.0. The input `version` overrides the proposal. It
 # runs two jobs. `release` builds and pushes the image for linux/amd64 and
-# linux/arm64 to ghcr.io with the exact tag X.Y.Z only, then creates the tag
-# vX.Y.Z and a GitHub release with the Docker Compose bundle
+# linux/arm64 to ghcr.io with the exact tag X.Y.Z only, checks that X.Y.Z
+# can be pulled without credentials, then creates the tag vX.Y.Z and a
+# GitHub release with the Docker Compose bundle
 # (scripts/release-bundle.sh) and notes: a head from scripts/release-notes.sh,
 # then the pull requests grouped by label (.github/release.yml). After it,
 # `floating-tags` checks that the release is published and is the highest
@@ -38,6 +39,17 @@ name: Release
 #      of the pull requests in the range are unchanged (they are read from
 #      the API again): compare the version in the re-run's summary with the
 #      first attempt.
+#
+# If the step "Image is public" fails with "the package is not public", the
+# image X.Y.Z was pushed to a package that anonymous users cannot pull; this
+# happens once, with the first release into a new package (a new package on
+# ghcr.io starts private, as ghcr.io/keepia/archive did with the first
+# release after the move to keepia). There is no release and no tag. Set the
+# package public (the package's settings on GitHub, "Danger Zone", "Change
+# visibility", Public), then use "Re-run failed jobs" on the same run, as in
+# step 4. If it says the tag is missing (HTTP 404), the push did not arrive:
+# re-run the same way.
+#
 # To abandon such a release instead, delete the new package version that
 # carries X.Y.Z (package settings on GitHub, "Manage versions"); no floating
 # tag has to move back.
@@ -52,12 +64,12 @@ name: Release
 # the new tag to the same commit is empty), so nothing is built twice. By
 # hand instead, after a `docker login ghcr.io` with a token that has
 # write:packages, for each of X.Y, X and latest:
-#   docker buildx imagetools create -t ghcr.io/pklnx/mail-archive:1.2 ghcr.io/pklnx/mail-archive:1.2.3
+#   docker buildx imagetools create -t ghcr.io/keepia/archive:1.2 ghcr.io/keepia/archive:1.2.3
 #
 # To abandon a published release, point the tags X.Y, X and latest back to
 # the previous release by hand (the same command), delete the release and
 # its tag, and delete the new package version:
-#   docker buildx imagetools create -t ghcr.io/pklnx/mail-archive:latest ghcr.io/pklnx/mail-archive:26.10-11
+#   docker buildx imagetools create -t ghcr.io/keepia/archive:latest ghcr.io/keepia/archive:26.10-11
 # For 1.0.0, move latest back to 26.10-11, then delete the package version
 # that carries 1.0.0; that removes 1.0.0, 1.0 and 1, which did not exist
 # before. For a later release, also move X and X.Y back to the previous
@@ -255,10 +267,29 @@ jobs:
             org.opencontainers.image.title=mail-archive
             org.opencontainers.image.description=Read-only archive of IMAP mailboxes with search, export and a web UI
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.url=https://pklnx.github.io/mail-archive/
+            org.opencontainers.image.url=https://keepia.github.io/archive/
             org.opencontainers.image.version=${{ steps.version.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.licenses=MIT
+
+      # A package that a release creates for the first time on ghcr.io
+      # (ghcr.io/keepia/archive with the first release after the move to
+      # keepia) starts private, and nobody could pull the released image. So
+      # the release is created only once X.Y.Z can be pulled anonymously; the
+      # runbook above says how to go on when this fails.
+      - name: Image is public
+        if: ${{ !inputs.dry_run }}
+        shell: bash
+        env:
+          IMAGE: ${{ steps.version.outputs.image }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if ! out=$(scripts/release-image-public.sh "$IMAGE" "$VERSION" 2>&1); then
+            echo "::error::$out. Set the package public (package settings, Change visibility), then use Re-run failed jobs"
+            exit 1
+          fi
+          echo "$out"
 
       # gh release create would use an existing tag as it is (--target
       # ignored), so the tag check is repeated after the build. matching-refs

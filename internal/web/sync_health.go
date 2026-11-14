@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/archive"
-	"github.com/pklnx/mail-archive/internal/quota"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/archive"
+	"github.com/keepia/archive/internal/quota"
+	"github.com/keepia/archive/internal/store"
 )
 
 // syncHealthTTL is how long /healthz/sync answers from memory, so callers

@@ -6,7 +6,7 @@ what gets planned next; an approved plan decides what gets built. The
 maintainer decides new goals, milestone scope, releases and anything that
 widens access or weakens security or privacy; UI wording, technical
 trade-offs and small product details inside an approved goal are the
-coordinator's ([`CLAUDE.md`](https://github.com/pklnx/mail-archive/blob/main/CLAUDE.md),
+coordinator's ([`CLAUDE.md`](https://github.com/keepia/archive/blob/main/CLAUDE.md),
 "Coordinator autonomy"). Labels carry these decisions.
 
 ## 1. Issue
@@ -18,7 +18,7 @@ Every change starts as a GitHub issue:
 - Findings from test reports become issues, one per topic, with a link to
   the report.
 - Security problems go to the
-  [private vulnerability report](https://github.com/pklnx/mail-archive/security/advisories/new),
+  [private vulnerability report](https://github.com/keepia/archive/security/advisories/new),
   not to a public issue.
 
 ## 2. Plan
@@ -213,9 +213,10 @@ within the range: the reverted pull request still counts. Never set it
 below the proposal for any other reason ([Milestones](#milestones)).
 
 The workflow has two jobs. The job `release` builds the image for
-`linux/amd64` and `linux/arm64`, pushes it to `ghcr.io/pklnx/mail-archive`
-with the exact tag `X.Y.Z` only, and creates the tag `vX.Y.Z` and a GitHub
-release with `mail-archive.tar.gz` (the Docker Compose bundle,
+`linux/amd64` and `linux/arm64`, pushes it to `ghcr.io/keepia/archive`
+with the exact tag `X.Y.Z` only, checks that `X.Y.Z` can be pulled without
+credentials (a package that a release creates on ghcr.io starts private), and
+creates the tag `vX.Y.Z` and a GitHub release with `mail-archive.tar.gz` (the Docker Compose bundle,
 `scripts/release-bundle.sh`) and `SHA256SUMS`. Then the job `floating-tags`
 checks that the release is published (no draft, no pre-release, its tag on
 the run's commit) and that `X.Y.Z` is the highest release, moves `X.Y`, `X`

@@ -8,8 +8,8 @@ import (
 
 	"github.com/emersion/go-imap/v2"
 
-	"github.com/pklnx/mail-archive/internal/imapsync"
-	"github.com/pklnx/mail-archive/internal/imaptest"
+	"github.com/keepia/archive/internal/imapsync"
+	"github.com/keepia/archive/internal/imaptest"
 )
 
 // The benchmarks measure how fast go-imap decodes the responses that cost

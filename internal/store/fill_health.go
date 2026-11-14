@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/store/db"
+	"github.com/keepia/archive/internal/store/db"
 )
 
 // FillHealth is the failure streak of an active recurring fill, like

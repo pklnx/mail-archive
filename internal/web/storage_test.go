@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/archive"
-	"github.com/pklnx/mail-archive/internal/quota"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/archive"
+	"github.com/keepia/archive/internal/quota"
+	"github.com/keepia/archive/internal/store"
 )
 
 // gateFigures is a storage gate's database: group A's and the instance's

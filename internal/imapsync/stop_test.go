@@ -9,8 +9,8 @@ import (
 
 	"github.com/emersion/go-imap/v2/imapserver/imapmemserver"
 
-	"github.com/pklnx/mail-archive/internal/imapsync"
-	"github.com/pklnx/mail-archive/internal/imaptest"
+	"github.com/keepia/archive/internal/imapsync"
+	"github.com/keepia/archive/internal/imaptest"
 )
 
 // A sink that stops the fetch (the storage gate, #397) ends it at once:

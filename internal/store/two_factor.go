@@ -9,9 +9,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/pklnx/mail-archive/internal/auth"
-	"github.com/pklnx/mail-archive/internal/crypto"
-	"github.com/pklnx/mail-archive/internal/store/db"
+	"github.com/keepia/archive/internal/auth"
+	"github.com/keepia/archive/internal/crypto"
+	"github.com/keepia/archive/internal/store/db"
 )
 
 // Two-factor authentication (TOTP, RFC 6238). The secret is stored encrypted

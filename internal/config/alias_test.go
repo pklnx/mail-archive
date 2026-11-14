@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/crypto"
+	"github.com/keepia/archive/internal/crypto"
 )
 
 // oldNames16 are the variables the binary of 1.6.0 read (#585): every one

@@ -3,7 +3,7 @@ package web
 import (
 	"net/http"
 
-	"github.com/pklnx/mail-archive/internal/web/ui"
+	"github.com/keepia/archive/internal/web/ui"
 )
 
 // access says who may call a route. The same table registers the routes,

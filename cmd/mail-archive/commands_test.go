@@ -3,9 +3,9 @@ package main
 import (
 	"testing"
 
-	"github.com/pklnx/mail-archive/internal/config"
-	"github.com/pklnx/mail-archive/internal/imapsync"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/config"
+	"github.com/keepia/archive/internal/imapsync"
+	"github.com/keepia/archive/internal/store"
 )
 
 func TestShellQuote(t *testing.T) {

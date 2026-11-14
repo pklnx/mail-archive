@@ -4,8 +4,8 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/pklnx/mail-archive/internal/auth"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/auth"
+	"github.com/keepia/archive/internal/store"
 )
 
 // setupPath creates the first admin with the setup token (#396, part 3).

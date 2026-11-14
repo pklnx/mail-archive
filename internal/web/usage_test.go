@@ -14,10 +14,10 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/pklnx/mail-archive/internal/archive"
-	"github.com/pklnx/mail-archive/internal/config"
-	"github.com/pklnx/mail-archive/internal/quota"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/archive"
+	"github.com/keepia/archive/internal/config"
+	"github.com/keepia/archive/internal/quota"
+	"github.com/keepia/archive/internal/store"
 )
 
 // usageWorld is a groupWorld (a, b and the admin x in "Default", k in

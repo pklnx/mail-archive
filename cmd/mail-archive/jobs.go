@@ -11,12 +11,12 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/pklnx/mail-archive/internal/archive"
-	"github.com/pklnx/mail-archive/internal/attachtext"
-	"github.com/pklnx/mail-archive/internal/blobstore"
-	"github.com/pklnx/mail-archive/internal/config"
-	"github.com/pklnx/mail-archive/internal/jobs"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/archive"
+	"github.com/keepia/archive/internal/attachtext"
+	"github.com/keepia/archive/internal/blobstore"
+	"github.com/keepia/archive/internal/config"
+	"github.com/keepia/archive/internal/jobs"
+	"github.com/keepia/archive/internal/store"
 )
 
 // testJobKinds are registered in every pool; only tests set them.

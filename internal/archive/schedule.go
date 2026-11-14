@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/config"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/config"
+	"github.com/keepia/archive/internal/store"
 )
 
 // Schedule is the web server's sync schedule. An account's own interval

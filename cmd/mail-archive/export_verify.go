@@ -10,7 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/pklnx/mail-archive/internal/gobd"
+	"github.com/keepia/archive/internal/gobd"
 )
 
 func newExportVerifyCmd() *cobra.Command {

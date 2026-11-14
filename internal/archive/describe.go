@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/pklnx/mail-archive/internal/imapsync"
+	"github.com/keepia/archive/internal/imapsync"
 )
 
 // categoryText is the fixed sentence of each IMAP error category. It is

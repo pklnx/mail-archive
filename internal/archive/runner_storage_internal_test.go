@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/quota"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/quota"
+	"github.com/keepia/archive/internal/store"
 )
 
 // figures is a storage gate's database: group 1's bytes are set by the

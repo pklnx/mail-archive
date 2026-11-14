@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/archive"
-	"github.com/pklnx/mail-archive/internal/config"
-	"github.com/pklnx/mail-archive/internal/imapsync"
-	"github.com/pklnx/mail-archive/internal/imaptest"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/archive"
+	"github.com/keepia/archive/internal/config"
+	"github.com/keepia/archive/internal/imapsync"
+	"github.com/keepia/archive/internal/imaptest"
+	"github.com/keepia/archive/internal/store"
 )
 
 // upstream is text only the IMAP server or the network could have written;

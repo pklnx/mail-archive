@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pklnx/mail-archive/internal/blobcrypt"
+	"github.com/keepia/archive/internal/blobcrypt"
 )
 
 // TestLoadSetupToken (#396, part 3): the setup token from its file

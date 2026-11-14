@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/store"
 )
 
 // grantBody is a POST /api/auditor-grants body of a's for auditor.

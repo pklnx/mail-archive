@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/blobstore"
-	"github.com/pklnx/mail-archive/internal/config"
-	"github.com/pklnx/mail-archive/internal/crypto"
-	"github.com/pklnx/mail-archive/internal/store"
-	"github.com/pklnx/mail-archive/internal/store/storetest"
+	"github.com/keepia/archive/internal/blobstore"
+	"github.com/keepia/archive/internal/config"
+	"github.com/keepia/archive/internal/crypto"
+	"github.com/keepia/archive/internal/store"
+	"github.com/keepia/archive/internal/store/storetest"
 )
 
 // archiveSetup is a test database with users anna and bob, who both have an

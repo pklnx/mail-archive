@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/auth"
-	"github.com/pklnx/mail-archive/internal/quota"
-	"github.com/pklnx/mail-archive/internal/store"
-	"github.com/pklnx/mail-archive/internal/store/storetest"
-	"github.com/pklnx/mail-archive/internal/testwait"
+	"github.com/keepia/archive/internal/auth"
+	"github.com/keepia/archive/internal/quota"
+	"github.com/keepia/archive/internal/store"
+	"github.com/keepia/archive/internal/store/storetest"
+	"github.com/keepia/archive/internal/testwait"
 )
 
 // gateDB is the storage gate's database in these tests: the states come

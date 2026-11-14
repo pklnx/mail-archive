@@ -17,7 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/blobcrypt"
+	"github.com/keepia/archive/internal/blobcrypt"
 )
 
 // Store is a content-addressed file store rooted at a directory.

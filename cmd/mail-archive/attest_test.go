@@ -12,9 +12,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/pklnx/mail-archive/internal/attest"
-	"github.com/pklnx/mail-archive/internal/config"
-	"github.com/pklnx/mail-archive/internal/testwait"
+	"github.com/keepia/archive/internal/attest"
+	"github.com/keepia/archive/internal/config"
+	"github.com/keepia/archive/internal/testwait"
 )
 
 func runAttestCmd(t *testing.T, args ...string) (string, error) {

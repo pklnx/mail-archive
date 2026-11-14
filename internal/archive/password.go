@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/pklnx/mail-archive/internal/crypto"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/crypto"
+	"github.com/keepia/archive/internal/store"
 )
 
 // Stored IMAP passwords are encrypted with AES-GCM and the account ID as

@@ -11,8 +11,8 @@ import (
 
 	"github.com/emersion/go-imap/v2"
 
-	"github.com/pklnx/mail-archive/internal/imapsync"
-	"github.com/pklnx/mail-archive/internal/imaptest"
+	"github.com/keepia/archive/internal/imapsync"
+	"github.com/keepia/archive/internal/imaptest"
 )
 
 // dialScript dials s without TLS, after edit changes the Config.

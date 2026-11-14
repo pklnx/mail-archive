@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/archive"
-	"github.com/pklnx/mail-archive/internal/store"
-	"github.com/pklnx/mail-archive/internal/testwait"
+	"github.com/keepia/archive/internal/archive"
+	"github.com/keepia/archive/internal/store"
+	"github.com/keepia/archive/internal/testwait"
 )
 
 // waitFill waits until the fill has the status. ran is the runner's

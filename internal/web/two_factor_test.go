@@ -9,8 +9,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/pklnx/mail-archive/internal/auth"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/auth"
+	"github.com/keepia/archive/internal/store"
 )
 
 // passwordStep logs in with the password and returns the 2FA challenge.

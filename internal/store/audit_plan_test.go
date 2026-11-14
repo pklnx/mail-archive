@@ -11,8 +11,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/pklnx/mail-archive/internal/store/db"
-	"github.com/pklnx/mail-archive/internal/store/storetest"
+	"github.com/keepia/archive/internal/store/db"
+	"github.com/keepia/archive/internal/store/storetest"
 )
 
 // auditPlanBase is where the seeded audit log of the plan tests starts: a

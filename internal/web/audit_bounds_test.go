@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/store/storetest"
+	"github.com/keepia/archive/internal/store/storetest"
 )
 
 // The Log page sends its local days as RFC 3339 instants of local midnight,

@@ -15,13 +15,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/archive"
-	"github.com/pklnx/mail-archive/internal/archive/gobdtest"
-	"github.com/pklnx/mail-archive/internal/blobcrypt"
-	"github.com/pklnx/mail-archive/internal/config"
-	"github.com/pklnx/mail-archive/internal/gobd"
-	"github.com/pklnx/mail-archive/internal/store"
-	"github.com/pklnx/mail-archive/internal/testwait"
+	"github.com/keepia/archive/internal/archive"
+	"github.com/keepia/archive/internal/archive/gobdtest"
+	"github.com/keepia/archive/internal/blobcrypt"
+	"github.com/keepia/archive/internal/config"
+	"github.com/keepia/archive/internal/gobd"
+	"github.com/keepia/archive/internal/store"
+	"github.com/keepia/archive/internal/testwait"
 )
 
 // gobdCLI is the fixture of internal/archive/gobdtest behind the command

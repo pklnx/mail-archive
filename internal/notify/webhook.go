@@ -18,7 +18,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/pklnx/mail-archive/internal/config"
+	"github.com/keepia/archive/internal/config"
 )
 
 // RequestTimeout bounds one webhook request, including reading the answer.

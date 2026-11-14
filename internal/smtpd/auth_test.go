@@ -30,9 +30,9 @@ import (
 
 	"github.com/emersion/go-smtp"
 
-	"github.com/pklnx/mail-archive/internal/auth"
-	"github.com/pklnx/mail-archive/internal/store"
-	"github.com/pklnx/mail-archive/internal/testwait"
+	"github.com/keepia/archive/internal/auth"
+	"github.com/keepia/archive/internal/store"
+	"github.com/keepia/archive/internal/testwait"
 )
 
 // fakeClock is the server's and the limiter's clock in the AUTH tests.

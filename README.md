@@ -15,7 +15,7 @@
 deduplicated archive, with full-text search and a web UI. It is a **read-only
 copy**: the servers are never modified.
 
-**Documentation: <https://pklnx.github.io/mail-archive/>**
+**Documentation: <https://keepia.github.io/archive/>**
 
 ![The mail-archive web UI](docs/public/screenshots/mail-light.png)
 
@@ -42,7 +42,7 @@ copy**: the servers are never modified.
 ## Quick start
 
 ```sh
-curl -fsSL https://github.com/pklnx/mail-archive/releases/latest/download/mail-archive.tar.gz | tar -xz
+curl -fsSL https://github.com/keepia/archive/releases/latest/download/mail-archive.tar.gz | tar -xz
 cd mail-archive
 cp .env.example .env    # set POSTGRES_PASSWORD and KEEPIA_ARCHIVE_SECRET_KEY
 ./ma migrate
@@ -52,14 +52,14 @@ docker compose up -d web
 
 Open <http://localhost:8080>, log in and add an account under **Manage
 accounts**. The web UI is only reachable from your own computer; read
-[Security](https://pklnx.github.io/mail-archive/reference/security) before
+[Security](https://keepia.github.io/archive/reference/security) before
 opening it to your network or a VPN.
 
-More in the [getting started guide](https://pklnx.github.io/mail-archive/guide/getting-started).
+More in the [getting started guide](https://keepia.github.io/archive/guide/getting-started).
 
 ## Development
 
-See [Contributing](https://pklnx.github.io/mail-archive/development/) for
+See [Contributing](https://keepia.github.io/archive/development/) for
 the toolchain, tests, migrations and the documentation workflow. The
 documentation sources are in [`docs/`](docs/).
 

@@ -8,7 +8,7 @@
 #
 # Usage: scripts/release-notes.sh VERSION IMAGE LAST
 #   VERSION  X.Y.Z, for example 1.0.0
-#   IMAGE    for example ghcr.io/pklnx/mail-archive
+#   IMAGE    for example ghcr.io/keepia/archive
 #   LAST     the last semver version; empty for the first semver release
 set -eu
 
@@ -22,9 +22,9 @@ minor=${version%.*} major=${version%%.*}
 cat << EOF
 Image: \`$image:$version\` (linux/amd64, linux/arm64), also tagged \`$minor\`, \`$major\` and \`latest\`.
 
-**New installation:** download \`mail-archive.tar.gz\` below, extract it and follow \`README.txt\` or the [getting started guide](https://pklnx.github.io/mail-archive/guide/getting-started).
+**New installation:** download \`mail-archive.tar.gz\` below, extract it and follow \`README.txt\` or the [getting started guide](https://keepia.github.io/archive/guide/getting-started).
 
-**Upgrade:** back up, extract \`mail-archive.tar.gz\` in the directory above your \`mail-archive/\` directory (it keeps \`.env\` and \`data/\`), then \`./ma migrate\` and \`docker compose up -d web\`. Read the database migrations and breaking changes below first; see [Upgrades](https://pklnx.github.io/mail-archive/guide/operations#upgrades).
+**Upgrade:** back up, extract \`mail-archive.tar.gz\` in the directory above your \`mail-archive/\` directory (it keeps \`.env\` and \`data/\`), then \`./ma migrate\` and \`docker compose up -d web\`. Read the database migrations and breaking changes below first; see [Upgrades](https://keepia.github.io/archive/guide/operations#upgrades).
 EOF
 
 [ -z "$last" ] || exit 0

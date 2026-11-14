@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/auth"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/auth"
+	"github.com/keepia/archive/internal/store"
 )
 
 // Retention rules and legal holds (#55). Admins only. Rules, accounts,

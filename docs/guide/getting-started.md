@@ -93,17 +93,17 @@ can also get an individual instance on request, set up the same way.
 ### Install
 
 Download and extract the Docker Compose bundle of the latest
-[release](https://github.com/pklnx/mail-archive/releases):
+[release](https://github.com/keepia/archive/releases):
 
 ```sh
-curl -fsSL https://github.com/pklnx/mail-archive/releases/latest/download/mail-archive.tar.gz | tar -xz
+curl -fsSL https://github.com/keepia/archive/releases/latest/download/mail-archive.tar.gz | tar -xz
 cd mail-archive
 cp .env.example .env
 ```
 
 The bundle holds `docker-compose.yml`, the `./ma` wrapper, `.env.example`
 and a `README.txt`. Its `docker-compose.yml` uses the release's image,
-`ghcr.io/pklnx/mail-archive:<version>`; nothing is built. See
+`ghcr.io/keepia/archive:<version>`; nothing is built. See
 [Versions](./operations#versions).
 
 There are two ways to set the instance up: from configuration alone, the
@@ -207,7 +207,7 @@ To run or change the code of a branch, clone the repository. Its
 code changes (about a second when nothing changed):
 
 ```sh
-git clone https://github.com/pklnx/mail-archive.git
+git clone https://github.com/keepia/archive.git
 cd mail-archive
 cp .env.example .env
 ```

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"strconv"
 
-	"github.com/pklnx/mail-archive/internal/store/db"
+	"github.com/keepia/archive/internal/store/db"
 )
 
 // Storage quotas (#397, part 2). The gate of every process (internal/quota)

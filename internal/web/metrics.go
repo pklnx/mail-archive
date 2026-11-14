@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/store"
 )
 
 // GET /api/metrics (#397, part 3) gives the instance's figures in the

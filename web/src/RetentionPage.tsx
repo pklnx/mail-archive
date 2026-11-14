@@ -152,7 +152,7 @@ const tabKey = (tab: TabName) => (tab === "rules" ? "" : tab);
 /** The URL of a page under Retention. */
 const hrefOf = (patch: Partial<ViewState> = {}) => formatState({ ...parseState(""), view: "retention", ...patch });
 
-const guide = "https://pklnx.github.io/mail-archive/guide/retention";
+const guide = "https://keepia.github.io/archive/guide/retention";
 
 /**
  * Retention rules, legal holds and deletion runs, for admins (#285 part 3):

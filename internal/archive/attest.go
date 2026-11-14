@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/attest"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/attest"
+	"github.com/keepia/archive/internal/store"
 )
 
 // ErrAttestRunning is returned by Attest while another attestation is

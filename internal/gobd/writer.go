@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/attest"
+	"github.com/keepia/archive/internal/attest"
 )
 
 // MaxZIPMessages is the most messages a ZIP export holds: archive/zip

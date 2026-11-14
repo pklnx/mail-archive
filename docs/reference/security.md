@@ -1104,5 +1104,5 @@ in [Tamper evidence](../guide/tamper-evidence).
 ## Reporting a vulnerability
 
 Please use GitHub's private vulnerability reporting on the
-[repository](https://github.com/pklnx/mail-archive/security) instead of a
+[repository](https://github.com/keepia/archive/security) instead of a
 public issue.

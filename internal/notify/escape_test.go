@@ -11,8 +11,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/pklnx/mail-archive/internal/notify"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/notify"
+	"github.com/keepia/archive/internal/store"
 )
 
 // hostile are values that would be markup, a mention, a link, a new line

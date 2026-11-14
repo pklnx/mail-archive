@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/auth"
-	"github.com/pklnx/mail-archive/internal/crypto"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/auth"
+	"github.com/keepia/archive/internal/crypto"
+	"github.com/keepia/archive/internal/store"
 )
 
 // makeAdmin turns the fixture's user into an admin with 2FA on, which

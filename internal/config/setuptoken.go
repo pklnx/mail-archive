@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/pklnx/mail-archive/internal/crypto"
+	"github.com/keepia/archive/internal/crypto"
 )
 
 // The setup token of a new instance (#396, part 3): the first admin is

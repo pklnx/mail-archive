@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/auth"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/auth"
+	"github.com/keepia/archive/internal/store"
 )
 
 // SMTP credentials (#395) are the user name and secrets a mail server logs

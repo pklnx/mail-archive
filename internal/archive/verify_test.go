@@ -15,11 +15,11 @@ import (
 	"github.com/emersion/go-imap/v2/imapserver/imapmemserver"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/pklnx/mail-archive/internal/archive"
-	"github.com/pklnx/mail-archive/internal/blobstore"
-	"github.com/pklnx/mail-archive/internal/store"
-	"github.com/pklnx/mail-archive/internal/store/storetest"
-	"github.com/pklnx/mail-archive/internal/testwait"
+	"github.com/keepia/archive/internal/archive"
+	"github.com/keepia/archive/internal/blobstore"
+	"github.com/keepia/archive/internal/store"
+	"github.com/keepia/archive/internal/store/storetest"
+	"github.com/keepia/archive/internal/testwait"
 )
 
 // archiveEnv is a database and blob store with one user, account and folder.

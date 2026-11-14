@@ -11,11 +11,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/pklnx/mail-archive/internal/alertmail"
-	"github.com/pklnx/mail-archive/internal/config"
-	"github.com/pklnx/mail-archive/internal/jobs"
-	"github.com/pklnx/mail-archive/internal/notify"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/alertmail"
+	"github.com/keepia/archive/internal/config"
+	"github.com/keepia/archive/internal/jobs"
+	"github.com/keepia/archive/internal/notify"
+	"github.com/keepia/archive/internal/store"
 )
 
 // syncDeliveryBudget bounds the delivery pass at the end of `sync`. It does

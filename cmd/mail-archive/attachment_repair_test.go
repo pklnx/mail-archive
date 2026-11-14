@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/blobstore"
-	"github.com/pklnx/mail-archive/internal/config"
-	"github.com/pklnx/mail-archive/internal/store"
-	"github.com/pklnx/mail-archive/internal/testwait"
+	"github.com/keepia/archive/internal/blobstore"
+	"github.com/keepia/archive/internal/config"
+	"github.com/keepia/archive/internal/store"
+	"github.com/keepia/archive/internal/testwait"
 )
 
 // TestAttachmentRepairSchedule (#539, part 2): the repair runs at start

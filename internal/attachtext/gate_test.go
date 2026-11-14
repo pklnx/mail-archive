@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/attachtext/pdftest"
+	"github.com/keepia/archive/internal/attachtext/pdftest"
 )
 
 // TestGateMeasurements prints the measurements of the gate in #390

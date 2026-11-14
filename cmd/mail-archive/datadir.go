@@ -12,8 +12,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/pklnx/mail-archive/internal/blobstore"
-	"github.com/pklnx/mail-archive/internal/config"
+	"github.com/keepia/archive/internal/blobstore"
+	"github.com/keepia/archive/internal/config"
 )
 
 // containerUID and containerGID are the image's user (Dockerfile: USER 65532:65532).
@@ -23,7 +23,7 @@ const containerUID, containerGID = 65532, 65532
 // directory the process cannot write to.
 const exitNotWritable = 3
 
-const linuxHostsURL = "https://pklnx.github.io/mail-archive/guide/getting-started#linux-hosts"
+const linuxHostsURL = "https://keepia.github.io/archive/guide/getting-started#linux-hosts"
 
 func newPrepareDataCmd() *cobra.Command {
 	var check bool

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/config"
-	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/keepia/archive/internal/config"
+	"github.com/keepia/archive/internal/store"
 )
 
 // Customer groups for admins (#470): the operator creates, renames and

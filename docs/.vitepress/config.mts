@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { defineConfig } from "vitepress";
 
-const repo = "https://github.com/pklnx/mail-archive";
+const repo = "https://github.com/keepia/archive";
 
 // The licence texts of what the pklnx theme puts into the built site: the IBM
 // Plex fonts (SIL OFL 1.1) and the Carbon icons in its CSS (Apache-2.0, in the
@@ -19,15 +19,15 @@ export default defineConfig({
   title: "mail-archive",
   description: "A read-only, deduplicated archive of your IMAP mailboxes, with full-text search and a web UI.",
   lang: "en",
-  base: "/mail-archive/",
+  base: "/archive/",
   cleanUrls: true,
   lastUpdated: true,
   // Fail the build on broken internal links; links to the local UI are fine.
   ignoreDeadLinks: "localhostLinks",
   // The mail-archive tile as favicon (BRAND-ASSETS.md): PNG for Safari, SVG for the rest.
   head: [
-    ["link", { rel: "icon", type: "image/png", sizes: "32x32", href: "/mail-archive/mail-archive-favicon-32.png" }],
-    ["link", { rel: "icon", type: "image/svg+xml", href: "/mail-archive/mail-archive-tile.svg" }],
+    ["link", { rel: "icon", type: "image/png", sizes: "32x32", href: "/archive/mail-archive-favicon-32.png" }],
+    ["link", { rel: "icon", type: "image/svg+xml", href: "/archive/mail-archive-tile.svg" }],
     // media first: VitePress merges meta tags by their first attribute other
     // than content, so with name first the second would replace the first.
     ["meta", { media: "(prefers-color-scheme: light)", name: "theme-color", content: "#ffffff" }],
@@ -95,8 +95,8 @@ export default defineConfig({
     footer: {
       message: "Entirely vibe-coded: written by an AI under human direction. Review before trusting it with important data.",
       copyright:
-        'Fonts: IBM Plex, <a href="/mail-archive/licenses/IBM-Plex-OFL.txt">SIL Open Font License 1.1</a>. ' +
-        'Icons: Carbon, <a href="/mail-archive/licenses/pklnx-design-system-notices.txt">Apache-2.0</a>.',
+        'Fonts: IBM Plex, <a href="/archive/licenses/IBM-Plex-OFL.txt">SIL Open Font License 1.1</a>. ' +
+        'Icons: Carbon, <a href="/archive/licenses/pklnx-design-system-notices.txt">Apache-2.0</a>.',
     },
   },
 });

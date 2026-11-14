@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/attest"
-	"github.com/pklnx/mail-archive/internal/crypto"
+	"github.com/keepia/archive/internal/attest"
+	"github.com/keepia/archive/internal/crypto"
 )
 
 // Environment variable names.

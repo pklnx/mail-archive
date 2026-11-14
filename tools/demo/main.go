@@ -36,17 +36,17 @@ import (
 	"github.com/emersion/go-imap/v2/imapserver/imapmemserver"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/pklnx/mail-archive/internal/archive"
-	"github.com/pklnx/mail-archive/internal/attachtext"
-	"github.com/pklnx/mail-archive/internal/attachtext/pdftest"
-	"github.com/pklnx/mail-archive/internal/auth"
-	"github.com/pklnx/mail-archive/internal/blobstore"
-	"github.com/pklnx/mail-archive/internal/config"
-	"github.com/pklnx/mail-archive/internal/crypto"
-	"github.com/pklnx/mail-archive/internal/jobs"
-	"github.com/pklnx/mail-archive/internal/quota"
-	"github.com/pklnx/mail-archive/internal/store"
-	"github.com/pklnx/mail-archive/internal/web"
+	"github.com/keepia/archive/internal/archive"
+	"github.com/keepia/archive/internal/attachtext"
+	"github.com/keepia/archive/internal/attachtext/pdftest"
+	"github.com/keepia/archive/internal/auth"
+	"github.com/keepia/archive/internal/blobstore"
+	"github.com/keepia/archive/internal/config"
+	"github.com/keepia/archive/internal/crypto"
+	"github.com/keepia/archive/internal/jobs"
+	"github.com/keepia/archive/internal/quota"
+	"github.com/keepia/archive/internal/store"
+	"github.com/keepia/archive/internal/web"
 )
 
 // The demo login, also used by docs/scripts/screenshots.mjs.
