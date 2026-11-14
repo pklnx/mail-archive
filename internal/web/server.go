@@ -101,10 +101,10 @@ type Server struct {
 	// shareOnlyFails, for tests, makes the share-only lookup of shared
 	// reads fail with its error when it returns one.
 	shareOnlyFails func() error
-	// smtpListen is MAIL_ARCHIVE_SMTP_LISTEN; empty when the SMTP server
+	// smtpListen is KEEPIA_ARCHIVE_SMTP_LISTEN; empty when the SMTP server
 	// is off.
 	smtpListen string
-	// smtpAuth is MAIL_ARCHIVE_SMTP_AUTH=required.
+	// smtpAuth is KEEPIA_ARCHIVE_SMTP_AUTH=required.
 	smtpAuth bool
 	// forwardedProtoWarned is set once warnUntrustedForwardedProto has
 	// logged.
@@ -136,23 +136,23 @@ type Options struct {
 	Require2FA bool
 	// Now is injectable for authentication tests.
 	Now func() time.Time
-	// PublicURL is the address users open (MAIL_ARCHIVE_PUBLIC_URL). It
+	// PublicURL is the address users open (KEEPIA_ARCHIVE_PUBLIC_URL). It
 	// turns passkeys on; its host is accepted in addition to AllowedHosts.
 	PublicURL string
 	// AlertAfterFailures is how many failed syncs in a row make an account
-	// failing (MAIL_ARCHIVE_ALERT_AFTER_FAILURES); zero means the default.
+	// failing (KEEPIA_ARCHIVE_ALERT_AFTER_FAILURES); zero means the default.
 	AlertAfterFailures int
 	// TrustedProxies are reverse proxies whose X-Forwarded-For names the
-	// client (MAIL_ARCHIVE_TRUSTED_PROXIES), for the audit log and the
+	// client (KEEPIA_ARCHIVE_TRUSTED_PROXIES), for the audit log and the
 	// login limits.
 	TrustedProxies []netip.Prefix
 	// Retention executes deletion runs and account purges confirmed in the
 	// web UI.
 	Retention *archive.Retention
 	// SMTPListen is where the SMTP server receives mail for smtp accounts
-	// (MAIL_ARCHIVE_SMTP_LISTEN); empty when it is off.
+	// (KEEPIA_ARCHIVE_SMTP_LISTEN); empty when it is off.
 	SMTPListen string
-	// SMTPAuth is MAIL_ARCHIVE_SMTP_AUTH=required: mail servers log in with
+	// SMTPAuth is KEEPIA_ARCHIVE_SMTP_AUTH=required: mail servers log in with
 	// an SMTP secret over STARTTLS.
 	SMTPAuth bool
 	// Version is the binary's version, shown in /api/metrics.
@@ -167,7 +167,7 @@ type Options struct {
 	// storage since the start (#397, part 2), for /api/metrics.
 	SMTPStorageDeferrals func() uint64
 	// AlertMail mails the confirmation codes of admins' notification
-	// addresses (#397, part 5); nil when MAIL_ARCHIVE_MAIL_URL is not set,
+	// addresses (#397, part 5); nil when KEEPIA_ARCHIVE_MAIL_URL is not set,
 	// which hides Profile → Notifications.
 	AlertMail AlertMailer
 }

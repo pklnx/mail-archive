@@ -451,9 +451,9 @@ func exclusionHint(acc *store.Account, folders []imapsync.Folder) string {
 }
 
 // commandName is how the user invokes this tool, for copy-paste hints.
-// The ./ma wrapper sets MAIL_ARCHIVE_COMMAND.
+// The ./ma wrapper sets KEEPIA_ARCHIVE_COMMAND.
 func commandName() string {
-	if c := os.Getenv("MAIL_ARCHIVE_COMMAND"); c != "" {
+	if c := config.Getenv(config.EnvCommand); c != "" {
 		return c
 	}
 	return "mail-archive"
@@ -1165,8 +1165,8 @@ it, LAST SYNC is when it last received a message. "import" holds mail
 imported from files.
 
 For IMAP accounts, EVERY is how often the web server's schedule syncs it:
-"(default)" for MAIL_ARCHIVE_SYNC_INTERVAL, "(min)" when the account's own
-interval is below MAIL_ARCHIVE_SYNC_INTERVAL_MIN, "manual" when it is not on
+"(default)" for KEEPIA_ARCHIVE_SYNC_INTERVAL, "(min)" when the account's own
+interval is below KEEPIA_ARCHIVE_SYNC_INTERVAL_MIN, "manual" when it is not on
 the schedule, "off" when the schedule is off. NEXT SYNC is when the
 schedule syncs it next ("due" when that has passed). HEALTH is "ok",
 "failing" or "stale", as in /healthz/sync; this command cannot see the web

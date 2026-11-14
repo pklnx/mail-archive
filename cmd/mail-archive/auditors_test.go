@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/store/storetest"
 )
@@ -20,7 +21,7 @@ import (
 // a grant.
 func TestAuditorCommands(t *testing.T) {
 	st, url := storetest.NewWithURL(t)
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
+	t.Setenv(config.EnvDatabaseURL, url)
 	ctx := context.Background()
 	out := func(fn func() error) string {
 		t.Helper()

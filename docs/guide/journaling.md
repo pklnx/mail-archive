@@ -38,18 +38,18 @@ message.
 
 1. **The operator** turns the SMTP server on in the instance's `.env` and
    restarts the web server. By default mail servers log in over TLS
-   (`MAIL_ARCHIVE_SMTP_AUTH=required`), which a hosted instance needs: its
+   (`KEEPIA_ARCHIVE_SMTP_AUTH=required`), which a hosted instance needs: its
    customers' mail servers connect over the internet. That needs a
    certificate for the name they connect to (see
    [The hosted SMTP port](./operations#the-hosted-smtp-port) and
    [SMTP certificate](./operations#smtp-certificate)):
 
    ```sh
-   MAIL_ARCHIVE_SMTP_LISTEN=:2525
-   MAIL_ARCHIVE_SMTP_HOSTNAME=archive.customer.example
-   MAIL_ARCHIVE_SMTP_TLS_CERT=/tls/fullchain.pem
-   MAIL_ARCHIVE_SMTP_TLS_KEY=/tls/privkey.pem
-   MAIL_ARCHIVE_SMTP_MAX_SIZE=50M
+   KEEPIA_ARCHIVE_SMTP_LISTEN=:2525
+   KEEPIA_ARCHIVE_SMTP_HOSTNAME=archive.customer.example
+   KEEPIA_ARCHIVE_SMTP_TLS_CERT=/tls/fullchain.pem
+   KEEPIA_ARCHIVE_SMTP_TLS_KEY=/tls/privkey.pem
+   KEEPIA_ARCHIVE_SMTP_MAX_SIZE=50M
    SMTP_BIND=0.0.0.0
    SMTP_PORT=587
    COMPOSE_FILE=docker-compose.yml:docker-compose.smtp.yml
@@ -60,10 +60,10 @@ message.
    (`off`):
 
    ```sh
-   MAIL_ARCHIVE_SMTP_LISTEN=:2525
-   MAIL_ARCHIVE_SMTP_AUTH=off
-   MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS=172.16.0.0/12
-   MAIL_ARCHIVE_SMTP_MAX_SIZE=50M
+   KEEPIA_ARCHIVE_SMTP_LISTEN=:2525
+   KEEPIA_ARCHIVE_SMTP_AUTH=off
+   KEEPIA_ARCHIVE_SMTP_ALLOWED_NETWORKS=172.16.0.0/12
+   KEEPIA_ARCHIVE_SMTP_MAX_SIZE=50M
    ```
 
    ```sh
@@ -125,14 +125,14 @@ message.
 
 ### Who may connect
 
-With `MAIL_ARCHIVE_SMTP_AUTH=required` (the default), a mail server may
+With `KEEPIA_ARCHIVE_SMTP_AUTH=required` (the default), a mail server may
 connect from any address. It has to switch to TLS with `STARTTLS` and log in
 with the user name and a secret of one smtp account, and it hands over mail
 only for that account's addresses. If the operator also sets
-`MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS`, a mail server must be in it as well.
+`KEEPIA_ARCHIVE_SMTP_ALLOWED_NETWORKS`, a mail server must be in it as well.
 
-With `MAIL_ARCHIVE_SMTP_AUTH=off`, the archive accepts connections only from
-`MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS` and answers everyone else with `554`.
+With `KEEPIA_ARCHIVE_SMTP_AUTH=off`, the archive accepts connections only from
+`KEEPIA_ARCHIVE_SMTP_ALLOWED_NETWORKS` and answers everyone else with `554`.
 Your mail server connects from its own address: tell the operator exactly
 that one, and tell them when it changes.
 
@@ -148,7 +148,7 @@ and allow it, or allow `172.16.0.0/12`, Docker's default range. A Postfix on
 another machine connects from its own address; allow exactly that one
 (`SMTP_BIND` publishes the port for it).
 
-STARTTLS is on when `MAIL_ARCHIVE_SMTP_TLS_CERT` and `MAIL_ARCHIVE_SMTP_TLS_KEY`
+STARTTLS is on when `KEEPIA_ARCHIVE_SMTP_TLS_CERT` and `KEEPIA_ARCHIVE_SMTP_TLS_KEY`
 name a certificate and key. With `off` there is no SMTP login: keep the port
 off the internet. The allowlist is the only gate.
 
@@ -226,7 +226,7 @@ stored message with all recipients.
 
 ### Log in with an SMTP secret
 
-With `MAIL_ARCHIVE_SMTP_AUTH=required` (the default), Postfix logs in with
+With `KEEPIA_ARCHIVE_SMTP_AUTH=required` (the default), Postfix logs in with
 the user name and the secret from your operator. It needs the SASL modules
 for `PLAIN` and `LOGIN` (Debian and Ubuntu: `apt install libsasl2-modules`).
 A transport of its own keeps the login and the strict TLS to the archive:
@@ -304,7 +304,7 @@ legal.archive.local   archive_legal:[archive.customer.example]:587
 ```
 
 Each transport opens at most 2 connections. The archive takes at most 8 from
-one address (`MAIL_ARCHIVE_SMTP_MAX_CONNS_PER_ADDR`): for more than 4 smtp
+one address (`KEEPIA_ARCHIVE_SMTP_MAX_CONNS_PER_ADDR`): for more than 4 smtp
 accounts, ask the operator to raise it.
 
 ## When a copy is refused
@@ -322,7 +322,7 @@ level:
 |---|---|---|
 | `554` | The client is not in the allowlist. | Postfix drops the copy. |
 | `550` | No smtp account receives for the address. | Postfix drops the copy. |
-| `552` | The message is larger than `MAIL_ARCHIVE_SMTP_MAX_SIZE`. | Postfix drops the copy. Postfix usually checks the size the archive announces itself and drops the copy without connecting: then only the Postfix log has it (`exceeds size limit`). |
+| `552` | The message is larger than `KEEPIA_ARCHIVE_SMTP_MAX_SIZE`. | Postfix drops the copy. Postfix usually checks the size the archive announces itself and drops the copy without connecting: then only the Postfix log has it (`exceeds size limit`). |
 | `535` | The login failed: an unknown, revoked or expired secret, or a user name that does not belong to the secret. | Postfix keeps the copy queued and retries (`smtp_sasl_auth_soft_bounce`, on by default). |
 | `454` | 20 failed logins from the mail server's address within 15 minutes: no login from it for 15 minutes. Also when the archive could not check a login. | Postfix keeps the copy queued and retries. |
 | `451` | With a login required: no `STARTTLS` (`4.7.0`), no login, or a secret revoked or expired since the login (`4.7.0`), or an address of another smtp account than the login's (`4.7.1`). Always: the account is disabled (`4.2.1`), or storing failed. | Postfix keeps the copy queued and retries. |
@@ -334,7 +334,7 @@ seconds is closed without an answer; Postfix retries later as well.
 
 So:
 
-- `MAIL_ARCHIVE_SMTP_MAX_SIZE` must be at least Postfix's
+- `KEEPIA_ARCHIVE_SMTP_MAX_SIZE` must be at least Postfix's
   `message_size_limit` (`postconf message_size_limit`; 10 MB by default).
 - Disabling an smtp account keeps its copies in the Postfix queue for
   `maximal_queue_lifetime`, 5 days by default. Then Postfix drops them:
@@ -361,7 +361,7 @@ transport map.
 When the operator sets [storage quotas](./operations#storage-and-quotas),
 the archive defers new journal mail of a customer group whose quota is
 exceeded beyond the SMTP overflow share (`overflow`: 100 % plus
-`MAIL_ARCHIVE_STORAGE_SMTP_OVERFLOW_PERCENT`, 10 % by default), of every
+`KEEPIA_ARCHIVE_STORAGE_SMTP_OVERFLOW_PERCENT`, 10 % by default), of every
 group when the instance's quota is, and of every group while the disk is
 below its reserve (`disk_low`). From 100 % to the overflow, mail is still
 accepted, with a warning in the archive's log, so that the operator has
@@ -370,7 +370,7 @@ that headroom to react to the `full` alert. A storage limit always gets
 Postfix keeps the copy queued and retries.
 
 - **Per recipient.** The answer comes at `RCPT`, for that recipient only.
-  With `MAIL_ARCHIVE_SMTP_AUTH=required` (the default) a transaction holds
+  With `KEEPIA_ARCHIVE_SMTP_AUTH=required` (the default) a transaction holds
   the login's smtp account only, so the `452` defers the whole message.
   With `off`, a recipient of another group in the same transaction is
   accepted and stored, and Postfix retries only the deferred one.

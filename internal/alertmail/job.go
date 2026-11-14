@@ -38,7 +38,7 @@ type Service struct {
 	Mailer Mailer
 	// From is the From header (config.Mail.FromHeader).
 	From string
-	// PublicURL is MAIL_ARCHIVE_PUBLIC_URL, for links and Message-IDs.
+	// PublicURL is KEEPIA_ARCHIVE_PUBLIC_URL, for links and Message-IDs.
 	PublicURL string
 	Logger    *slog.Logger
 	// Now is injectable for tests.

@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/store/storetest"
 	"github.com/pklnx/mail-archive/internal/testwait"
@@ -25,7 +26,7 @@ import (
 // status gets a storage line.
 func TestUsageCommand(t *testing.T) {
 	st, url := storetest.NewWithURL(t)
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
+	t.Setenv(config.EnvDatabaseURL, url)
 	ctx := context.Background()
 	run := func(args ...string) string {
 		t.Helper()

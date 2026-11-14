@@ -99,7 +99,7 @@ func runServe(parent context.Context, cfg *config.Config, log *slog.Logger, ln n
 		log.Info("alerts off", "reason", config.EnvNotifyWebhookURL+" and "+config.EnvMailURL+" are not set")
 	}
 	// Alert mail (#397, part 5): its own pool of one, beside the
-	// notifier, whatever MAIL_ARCHIVE_JOB_WORKERS says; and the codes of
+	// notifier, whatever KEEPIA_ARCHIVE_JOB_WORKERS says; and the codes of
 	// Profile → Notifications.
 	if svc := newAlertMail(a, log); svc != nil {
 		pool, err := mailPool(a, svc, log, false)

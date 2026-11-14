@@ -173,7 +173,7 @@ the **Storage** page in the navigation, which shows:
 - **Instance:** the usage against the instance quota as a bar, the state
   and since when, the free space of the data disk and the reserve, the
   database, the last backup and encryption at rest. The instance quota is
-  set by the operator (`MAIL_ARCHIVE_STORAGE_QUOTA`).
+  set by the operator (`KEEPIA_ARCHIVE_STORAGE_QUOTA`).
 - **Customer groups** (with two or more): each group's usage against its
   quota, its state, and **Edit quota**. The dialog takes a size in MiB, GiB
   or TiB, or *No quota*; it refuses a quota above the instance quota or

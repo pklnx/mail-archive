@@ -212,7 +212,7 @@ func attachmentsAtStart(ctx context.Context, st *store.Store, log *slog.Logger) 
 }
 
 // startJobs runs the job pool of serve in the background, unless
-// MAIL_ARCHIVE_JOB_WORKERS is 0. The returned stop cancels it and waits
+// KEEPIA_ARCHIVE_JOB_WORKERS is 0. The returned stop cancels it and waits
 // until its jobs are released or recorded; call it before the store
 // closes.
 func startJobs(ctx context.Context, a *app, blobs *blobstore.Store, log *slog.Logger) (stop func(), err error) {

@@ -31,7 +31,7 @@ Rules alone delete nothing. Deletion is a reviewed run: "retention preview"
 lists what may be deleted now, "retention show" shows it, "retention confirm"
 deletes it. A message goes only when every location of it, in every user's
 account, has a rule whose period ended and no legal hold. Its file is
-removed after MAIL_ARCHIVE_RETENTION_FILE_GRACE (default 7 days), by the web
+removed after KEEPIA_ARCHIVE_RETENTION_FILE_GRACE (default 7 days), by the web
 server or "retention sweep".`,
 	}
 	rule := &cobra.Command{Use: "rule", Short: "Add, list and remove retention rules"}

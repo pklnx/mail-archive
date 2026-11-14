@@ -23,7 +23,7 @@ import (
 //
 // The tools get their whole environment from this process (config.ChildEnv),
 // so no PG* variable of the process reaches them. Host, port, user, database
-// and password come from the app's own parse of MAIL_ARCHIVE_DATABASE_URL
+// and password come from the app's own parse of KEEPIA_ARCHIVE_DATABASE_URL
 // (pgconn.ParseConfig, which reads PGHOST, PGPORT, PGUSER, PGDATABASE,
 // PGPASSWORD and the passfile as the app's connection does). The TLS and
 // authentication settings come from the connection string only. Where the

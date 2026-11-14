@@ -31,7 +31,7 @@ In scope, for example:
 
 - Bypassing login, sessions, TOTP, passkeys or the failed-login limits
 - Accessing another user's accounts or mail
-- Recovering IMAP passwords or TOTP secrets without `MAIL_ARCHIVE_SECRET_KEY`
+- Recovering IMAP passwords or TOTP secrets without `KEEPIA_ARCHIVE_SECRET_KEY`
 - Any write access to the IMAP servers (the archive must stay read-only)
 
 Out of scope:

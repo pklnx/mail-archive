@@ -7,8 +7,23 @@
 #
 # With SMOKE_DIR set to an extracted release bundle (scripts/release-bundle.sh),
 # it tests the bundle instead: its docker-compose.yml and ./ma, with the image
-# in MAIL_ARCHIVE_IMAGE, which must exist locally (the bundle builds nothing).
+# in KEEPIA_ARCHIVE_IMAGE (or MAIL_ARCHIVE_IMAGE), which must exist locally
+# (the bundle builds nothing).
+#
+# With SMOKE_ENV_NAMES=old it writes .env with the old variable names
+# (MAIL_ARCHIVE_*, until 1.6), as an installation upgraded from 1.6 has it
+# (#585): everything works the same, and the web server and ./ma warn about
+# the old names. Default: the new names (KEEPIA_ARCHIVE_*), without warning.
 set -eu
+
+case ${SMOKE_ENV_NAMES:-new} in
+new) p=KEEPIA_ARCHIVE_ ;;
+old) p=MAIL_ARCHIVE_ ;;
+*)
+	echo "SMOKE_ENV_NAMES must be new or old" >&2
+	exit 2
+	;;
+esac
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
 cd "${SMOKE_DIR:-$repo}"
@@ -23,8 +38,12 @@ work=$(mktemp -d)
 # Own Compose project, image tag, test container and random host ports, so
 # the test does not touch a local mail-archive installation.
 COMPOSE_PROJECT_NAME=mail-archive-smoke
-MAIL_ARCHIVE_IMAGE=${MAIL_ARCHIVE_IMAGE:-mail-archive:smoke}
-export COMPOSE_PROJECT_NAME MAIL_ARCHIVE_IMAGE
+export COMPOSE_PROJECT_NAME
+# The image under the name SMOKE_ENV_NAMES chooses; the other is unset.
+image=${KEEPIA_ARCHIVE_IMAGE:-${MAIL_ARCHIVE_IMAGE:-mail-archive:smoke}}
+unset KEEPIA_ARCHIVE_IMAGE MAIL_ARCHIVE_IMAGE
+eval "${p}IMAGE=\$image"
+export "${p}IMAGE"
 imap=mail-archive-smoke-imap
 
 # Archive files belong to the container user (UID 65532, mode 0600/0700), so
@@ -60,22 +79,22 @@ trap cleanup EXIT
 
 # No data directory: the first ./ma migrate creates it, as on a real first start.
 # A test instance: the web server's first start finds no user yet, and
-# MAIL_ARCHIVE_ENCRYPTION_AT_SETUP=off lets it start without an archive key;
+# ENCRYPTION_AT_SETUP=off lets it start without an archive key;
 # the encryption commands are tested further down.
 mkdir -p "$work/import"
 cp -R "$repo/internal/archive/testdata/import/thunderbird" "$work/import/"
 chmod -R a+rX "$work/import"
 cat > .env <<ENV
 POSTGRES_PASSWORD=smoke-test
-MAIL_ARCHIVE_SECRET_KEY=$(openssl rand -base64 32)
+${p}SECRET_KEY=$(openssl rand -base64 32)
 ARCHIVE_DIR=$work/data
 IMPORT_DIR=$work/import
 ARCHIVE_KEY_DIR=$work/keys
 SECRET_KEY_DIR=$work/secret-key
 POSTGRES_PORT=${SMOKE_POSTGRES_PORT:-0}
 WEB_PORT=${SMOKE_WEB_PORT:-0}
-MAIL_ARCHIVE_PUBLIC_URL=http://localhost
-MAIL_ARCHIVE_ENCRYPTION_AT_SETUP=off
+${p}PUBLIC_URL=http://localhost
+${p}ENCRYPTION_AT_SETUP=off
 ENV
 
 # Remove what an interrupted previous run left behind.
@@ -90,9 +109,27 @@ expect() { # expect <file> <extended regex>
 	fi
 }
 
+# The deprecation warning about old variable names (#585), on stderr: each
+# service names the old names it gets (web and the CLI the secret key).
+expect_warning() { # expect_warning <file>: as SMOKE_ENV_NAMES says, and never a value
+	if [ "$p" = MAIL_ARCHIVE_ ]; then
+		expect "$1" 'level=WARN msg="old environment variable names in use: .*MAIL_ARCHIVE_SECRET_KEY \(now KEEPIA_ARCHIVE_SECRET_KEY\).*will be removed in a later major release"'
+	elif grep -q 'old environment variable names' "$1"; then
+		echo "a warning about old variable names without any in .env" >&2
+		cat "$1" >&2
+		exit 1
+	fi
+	if grep -qF "$(grep "^${p}SECRET_KEY=" .env | cut -d= -f2-)" "$1"; then
+		echo "the output contains the secret key" >&2
+		exit 1
+	fi
+}
+
 echo "== migrate"
-./ma migrate | tee "$work/out"
+./ma migrate > "$work/out" 2> "$work/err" || { cat "$work/out" "$work/err" >&2; exit 1; }
+cat "$work/out" "$work/err"
 expect "$work/out" "applied 00001_initial.sql"
+expect_warning "$work/err"
 if [ "$(uname -s)" = Linux ]; then
 	owner=$(in_data 'stat -c %u:%g /data' | tr -d '\r')
 	if [ "$owner" != 65532:65532 ]; then
@@ -135,6 +172,34 @@ expect "$work/out" '^0$'
 # By default the web server runs the background jobs itself.
 docker compose --progress quiet logs web > "$work/out" 2>&1
 expect "$work/out" 'msg="jobs on" workers=1'
+expect_warning "$work/out"
+# The data directory is the image's default, /data, the bind mount of
+# ARCHIVE_DIR: no variable sets it (#585, -X main.defaultDataDir in the
+# Dockerfile). The message files the sync writes into $work/data below
+# prove it.
+docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$web_id" > "$work/out"
+if grep -q '_DATA_DIR=' "$work/out"; then
+	echo "a variable sets the data directory of web:" >&2
+	grep '_DATA_DIR=' "$work/out" >&2
+	exit 1
+fi
+
+echo "== both names set to different values"
+# A variable under its new and its old name with two values: web refuses to
+# start, naming both and neither value (#585).
+status=0
+KEEPIA_ARCHIVE_SYNC_INTERVAL=7h MAIL_ARCHIVE_SYNC_INTERVAL=8h \
+	docker compose --progress quiet run --rm --no-deps -T web > "$work/out" 2>&1 || status=$?
+if [ "$status" -ne 4 ]; then
+	cat "$work/out" >&2
+	echo "expected web to refuse with exit code 4, got $status" >&2
+	exit 1
+fi
+expect "$work/out" '^error: KEEPIA_ARCHIVE_SYNC_INTERVAL and its old name MAIL_ARCHIVE_SYNC_INTERVAL are both set, to different values: remove MAIL_ARCHIVE_SYNC_INTERVAL$'
+if grep -Eq '7h|8h' "$work/out"; then
+	echo "the refusal shows a value" >&2
+	exit 1
+fi
 
 echo "== worker service"
 # The optional worker for background jobs, under its profile: its limits, its
@@ -145,9 +210,10 @@ docker inspect -f '{{.HostConfig.Memory}} {{.HostConfig.NanoCpus}} {{.Config.Sto
 expect "$work/out" '^805306368 1000000000 20 \[no-new-privileges:true\]$'
 docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$worker_id" > "$work/out"
 expect "$work/out" '^GOMEMLIMIT=576MiB$'
-expect "$work/out" '^MAIL_ARCHIVE_JOB_WORKERS=1$'
-# The worker seals and opens no password: it gets no secret key (#396).
-if grep -q '^MAIL_ARCHIVE_SECRET_KEY' "$work/out"; then
+expect "$work/out" '^KEEPIA_ARCHIVE_JOB_WORKERS=1$'
+# The worker seals and opens no password: it gets no secret key (#396),
+# under neither name (#585).
+if grep -Eq '^(KEEPIA|MAIL)_ARCHIVE_SECRET_KEY' "$work/out"; then
 	echo "the worker gets the secret key" >&2
 	exit 1
 fi
@@ -183,8 +249,15 @@ echo "== sync again"
 expect "$work/out" "test +fetched=0 +new=0 +ok"
 
 echo "== status"
-./ma status | tee "$work/out"
+./ma status > "$work/out" 2> "$work/err" || { cat "$work/out" "$work/err" >&2; exit 1; }
+cat "$work/out" "$work/err"
 expect "$work/out" "unique messages in archive: 3"
+# The warning goes to stderr only, so the output of a command stays clean.
+expect_warning "$work/err"
+if grep -q 'old environment variable names' "$work/out"; then
+	echo "the warning is on stdout" >&2
+	exit 1
+fi
 
 echo "== user add"
 echo 'smoke test password' | ./ma user add smoke --password-stdin | tee "$work/out"
@@ -257,7 +330,7 @@ expect "$work/out" 'must lie in /keys'
 ./ma encryption keygen | tee "$work/out"
 expect "$work/out" '^wrote archive key /keys/archive\.key \(fingerprint [0-9a-f]{16}\)$'
 expect "$work/out" '^  [A-Za-z0-9+/]{43}=$'
-echo 'MAIL_ARCHIVE_ARCHIVE_KEY_FILE=/keys/archive.key' >> .env
+echo "${p}ARCHIVE_KEY_FILE=/keys/archive.key" >> .env
 ./ma encryption status | tee "$work/out"
 expect "$work/out" 'archive key: file /keys/archive\.key, fingerprint [0-9a-f]{16}: opens the keyring'
 if [ "$(uname -s)" = Linux ]; then
@@ -305,11 +378,11 @@ if [ "$(head -c 7 "$dump")" != MA-ENC1 ]; then
 	echo "the dump is not encrypted" >&2
 	exit 1
 fi
-expect "$work/backups/BACKUP-NOTE.txt" 'MAIL_ARCHIVE_SECRET_KEY'
+expect "$work/backups/BACKUP-NOTE.txt" 'KEEPIA_ARCHIVE_SECRET_KEY'
 expect "$work/backups/BACKUP-NOTE.txt" "Database dump: $(basename "$dump")"
 expect "$work/backups/BACKUP-NOTE.txt" '[0-9a-f]{16}  archive key \(the configured archive key\)'
 expect "$work/backups/BACKUP-NOTE.txt" 'restore-dump'
-if grep -qF "$(grep MAIL_ARCHIVE_SECRET_KEY .env | cut -d= -f2-)" "$work/backups/BACKUP-NOTE.txt"; then
+if grep -qF "$(grep "^${p}SECRET_KEY=" .env | cut -d= -f2-)" "$work/backups/BACKUP-NOTE.txt"; then
 	echo "the backup note contains the secret key" >&2
 	exit 1
 fi

@@ -36,7 +36,7 @@ func Language(setting, atCode string) string {
 type Alert struct {
 	store.AlertMailPayload
 	Account, Owner, Group string
-	// PublicURL is MAIL_ARCHIVE_PUBLIC_URL; empty leaves the link out.
+	// PublicURL is KEEPIA_ARCHIVE_PUBLIC_URL; empty leaves the link out.
 	PublicURL string
 }
 

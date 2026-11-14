@@ -38,7 +38,7 @@ func TestSyncIntervalMin(t *testing.T) {
 		t.Setenv(EnvSyncIntervalMin, floor)
 		return Load()
 	}
-	if _, err := load("30m", "1h"); err == nil || err.Error() != "MAIL_ARCHIVE_SYNC_INTERVAL: 30m is below MAIL_ARCHIVE_SYNC_INTERVAL_MIN (1h)" {
+	if _, err := load("30m", "1h"); err == nil || err.Error() != "KEEPIA_ARCHIVE_SYNC_INTERVAL: 30m is below KEEPIA_ARCHIVE_SYNC_INTERVAL_MIN (1h)" {
 		t.Errorf("default below the floor: %v", err)
 	}
 	if cfg, err := load("0", "1h"); err != nil || cfg.SyncInterval != 0 || cfg.SyncIntervalMin != time.Hour {
@@ -264,7 +264,7 @@ func TestParseSMTP(t *testing.T) {
 	}
 	// The default without a certificate names the way out.
 	_, err = ParseSMTP(SMTPEnv{Listen: ":2525", AllowedNetworks: "127.0.0.1"})
-	if err == nil || !strings.Contains(err.Error(), "MAIL_ARCHIVE_SMTP_AUTH=off") || !strings.Contains(err.Error(), EnvSMTPTLSCert) {
+	if err == nil || !strings.Contains(err.Error(), "KEEPIA_ARCHIVE_SMTP_AUTH=off") || !strings.Contains(err.Error(), EnvSMTPTLSCert) {
 		t.Errorf("required without a certificate: %v", err)
 	}
 

@@ -426,7 +426,7 @@ Only the Go standard library is used (`crypto/aes`, `crypto/cipher` GCM,
 ### Key hierarchy
 
 - **Archive key (KEK):** 32 random bytes, base64, from
-  `MAIL_ARCHIVE_ARCHIVE_KEY_FILE` or `MAIL_ARCHIVE_ARCHIVE_KEY` (see
+  `KEEPIA_ARCHIVE_ARCHIVE_KEY_FILE` or `KEEPIA_ARCHIVE_ARCHIVE_KEY` (see
   [Configuration](../reference/configuration#encryption-at-rest)). Never
   stored by the app. Its **fingerprint** is the first 8 bytes of
   HMAC-SHA256(KEK, `"mail-archive kek fingerprint v1"`), in hex.
@@ -828,7 +828,7 @@ guarantees the same.
 |---|---|
 | `recurring_since` | Set when the fill became recurring (created so, or switched on); never cleared. The fill then uses the two-hour rule instead of the cut-off, and a resume makes it recurring again. |
 | `keep_running` | Recurring and not stopped. Stopping clears it and the password. |
-| `interval_seconds` | `NULL` for `MAIL_ARCHIVE_SYNC_INTERVAL`; otherwise whole minutes from 5m to 720h. The floor `MAIL_ARCHIVE_SYNC_INTERVAL_MIN` applies when reading. |
+| `interval_seconds` | `NULL` for `KEEPIA_ARCHIVE_SYNC_INTERVAL`; otherwise whole minutes from 5m to 720h. The floor `KEEPIA_ARCHIVE_SYNC_INTERVAL_MIN` applies when reading. |
 | `run_started_at` | Start of the current or last run, by the runner's clock. The next run is due an interval later (`Schedule.NextFill`). |
 | `status` | `running` during a run, or while a new or resumed fill waits for its first; afterwards the run's outcome `ok`, `partial` or `failed`, with `finished_at` and `error`. A stopped fill is `cancelled`. |
 
@@ -843,7 +843,7 @@ error and counts, so the counts are those of one run.
 from the sync `Runner`) queues running fills every minute, as before, and
 the recurring fills whose next run is due (`RecurringFills`: active, between
 runs, account enabled and not removed). It uses the sync runner's
-`Schedule`; `MAIL_ARCHIVE_SYNC_INTERVAL=0` turns the scheduled runs off (a
+`Schedule`; `KEEPIA_ARCHIVE_SYNC_INTERVAL=0` turns the scheduled runs off (a
 run in status `running` is still finished). For
 `RecurringStartHold` (70 minutes) after the web server started
 (`HoldUntil`) it starts no run of a recurring fill: after an outage the mail
@@ -1123,7 +1123,7 @@ folder's `EXAMINE`, and the same account lock as the sync.
    empty folder) and fails with `ErrIncomplete` if fewer messages came back
    than the folder holds after the command (`EXISTS`, kept current by the
    client). Folders above `MaxReconcileMessages` (2,000,000 by default,
-   `MAIL_ARCHIVE_RECONCILE_MAX_MESSAGES`) are refused. The two slices are
+   `KEEPIA_ARCHIVE_RECONCILE_MAX_MESSAGES`) are refused. The two slices are
    allocated once for EXISTS + 1,000 messages, at most the limit, which is
    all `ListFlags` accepts; distinct flag combinations may take 4 MiB,
    each charged its bytes plus 88 B for its map entry (`flagSetOverhead`).
@@ -1492,7 +1492,7 @@ implementation, no library; it generalizes the leases of `loss_alerts` and
 - **At least once.** A job can run twice (a lease that expired while its
   handler still worked, a crash after the work but before the finish).
   Handlers must be idempotent.
-- **The pool.** One dispatcher and at most `MAIL_ARCHIVE_JOB_WORKERS`
+- **The pool.** One dispatcher and at most `KEEPIA_ARCHIVE_JOB_WORKERS`
   handlers (0-8, default 1); it claims only as many jobs as it has free
   slots. It sleeps until a notification, a free slot, the next due time
   (`NextJobDue`: the next `run_after`, or the next lease of its kinds that
@@ -1741,15 +1741,15 @@ plan of #396:
 
 | # | Step | serve | worker | other commands |
 |---|---|---|---|---|
-| 0 | Load the configuration; the secret key from `MAIL_ARCHIVE_SECRET_KEY_FILE` or `MAIL_ARCHIVE_SECRET_KEY` (`config.LoadSecretKey`). A refused key configuration is a `config.SecretKeyError` (exit 4). `serve` refuses without a key here, before it listens or migrates. | yes | yes | yes |
+| 0 | Load the configuration; the secret key from `KEEPIA_ARCHIVE_SECRET_KEY_FILE` or `KEEPIA_ARCHIVE_SECRET_KEY` (`config.LoadSecretKey`). A refused key configuration is a `config.SecretKeyError` (exit 4). `serve` refuses without a key here, before it listens or migrates. | yes | yes | yes |
 | 1 | Listen, and answer with the starting handler (`web.Starting`): `/healthz` 503 `{"status":"starting"}`, everything else 503 with `Retry-After`, behind `protect`. | yes | no | no |
 | 2 | Open a short-lived store with `ForMigrations` and take the migration command lock (`LockMigrations`), logging once if it has to wait. | yes | yes | no |
-| 3 | With `MAIL_ARCHIVE_MIGRATE_ON_START=on`: refuse a migration whose failure is recorded with the same file (exit 3), log the pending migrations and the last `data.backup` audit entry (a warning when none is younger than 26 h), then run `applyMigrations`, the sequence `migrate` runs too (index rebuild, audit partitions, `Store.Migrate`, password upgrade). | yes | yes | `migrate` only, without the record check |
+| 3 | With `KEEPIA_ARCHIVE_MIGRATE_ON_START=on`: refuse a migration whose failure is recorded with the same file (exit 3), log the pending migrations and the last `data.backup` audit entry (a warning when none is younger than 26 h), then run `applyMigrations`, the sequence `migrate` runs too (index rebuild, audit partitions, `Store.Migrate`, password upgrade). | yes | yes | `migrate` only, without the record check |
 | 4 | Schema check (`Store.SchemaState`): refuse when migrations are pending or the database has a newer migration than the binary (exit 4). | yes | yes | yes, in `openApp`; `backup` and `status` only warn |
-| 3b | Encryption at setup (`encryptionAtSetup`, `archive.EnableAtSetup`), on a current schema: on a new instance (`Store.FreshInstance`: setup not complete, no user, no message, no `blob_encryption` row) it runs `encryption enable` on the empty archive, creating a keyring with a slot for the archive key when there is no keyring file. It takes the writers lock and the blob lock exclusively without waiting, as `enable` does, so a command-line writer (an import before the first user) makes it refuse with exit 4 and the holder; under those locks it checks again that the instance is new. Every writer of this version takes the writers lock only at step 8, so it starts with state `on`. Without an archive key it refuses (exit 4), unless `MAIL_ARCHIVE_ENCRYPTION_AT_SETUP=off` (test instances). | yes | yes | no |
+| 3b | Encryption at setup (`encryptionAtSetup`, `archive.EnableAtSetup`), on a current schema: on a new instance (`Store.FreshInstance`: setup not complete, no user, no message, no `blob_encryption` row) it runs `encryption enable` on the empty archive, creating a keyring with a slot for the archive key when there is no keyring file. It takes the writers lock and the blob lock exclusively without waiting, as `enable` does, so a command-line writer (an import before the first user) makes it refuse with exit 4 and the holder; under those locks it checks again that the instance is new. Every writer of this version takes the writers lock only at step 8, so it starts with state `on`. Without an archive key it refuses (exit 4), unless `KEEPIA_ARCHIVE_ENCRYPTION_AT_SETUP=off` (test instances). | yes | yes | no |
 | 5 | Secret key (`checkSecretKey`): refuse another key than the one whose check value `instance_state.secret_key_check` holds (HMAC-SHA256 with the key over `mail-archive secret key check v1`, `crypto.KeyCheck`), exit 4 with both fingerprints. Without a check value, the key must open one of up to 5 sealed account passwords and 5 TOTP secrets if there are any; then the value is recorded. `secret-key accept` replaces it. | yes | no | no |
 | 6 | The start-up checks of encryption at rest (`archive.OpenAtRest`), when the process opens its store after step 8. | yes | yes | writers and readers of message files |
-| 7 | Setup token (`recordSetupToken`): while setup is not complete, store the SHA-256 of the configured token (`MAIL_ARCHIVE_SETUP_TOKEN_FILE`, loaded at step 0 by `config.SetupTokenFromEnv`, a `config.SetupTokenError` is exit 4) with the time of the first start with it, or clear a stored one when none is configured. | yes | no | no |
+| 7 | Setup token (`recordSetupToken`): while setup is not complete, store the SHA-256 of the configured token (`KEEPIA_ARCHIVE_SETUP_TOKEN_FILE`, loaded at step 0 by `config.SetupTokenFromEnv`, a `config.SetupTokenError` is exit 4) with the time of the first start with it, or clear a stored one when none is configured. | yes | no | no |
 | 8 | Release the lock, close the store, then `openApp` and the process's own start; `serve` swaps the handler of its HTTP server to `web.Server`'s (`web.Swap`). | yes | yes | – |
 
 `serve` has one `http.Server` and one listener for its whole run
@@ -1762,8 +1762,8 @@ Child processes get an environment built by `config.ChildEnv`: only the
 variables of an allowlist (`pgToolEnvNames` for `pg_dump` and `pg_restore`,
 `containerCheckEnvNames` for `prepare-data --check`) and what the caller
 adds (the libpq variables of the database connection, the data
-directory). A `MAIL_ARCHIVE_*` or `PG*` variable of the process is never
-passed on. For `pg_dump` and `pg_restore`, `pgToolConn` (`pgtools.go`,
+directory). A `KEEPIA_ARCHIVE_*`, `MAIL_ARCHIVE_*` (the old names) or `PG*`
+variable of the process is never passed on. For `pg_dump` and `pg_restore`, `pgToolConn` (`pgtools.go`,
 #540) builds those variables and a keyword/value string from one map: host,
 port, user, database and password from the app's `pgconn.ParseConfig`, the
 TLS and authentication keys from the connection string only, every one
@@ -1808,7 +1808,7 @@ read or written. A successful `applyMigrations` clears the record.
 `Store.InstanceStatus` reports the binary and schema versions, the pending
 migrations, the record, the setup state with its times and the state of
 encryption at rest (numbers, enums and times only, no error texts); the
-caller adds whether `MAIL_ARCHIVE_ENCRYPTION_AT_SETUP=off` is configured.
+caller adds whether `KEEPIA_ARCHIVE_ENCRYPTION_AT_SETUP=off` is configured.
 
 Exit codes come from `codedError` in `main`: `3` for a failed migration
 (also `migrate`), `4` for a refused start-up check (also any command that

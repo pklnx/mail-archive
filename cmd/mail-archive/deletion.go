@@ -214,7 +214,7 @@ batch checks every candidate again: a rule removed, a legal hold added or a
 new location since the preview keeps it. Deleted messages leave a record
 (hash, size, dates, no subject or sender) and a signed deletion entry in
 the next attestation. Their files are removed after
-MAIL_ARCHIVE_RETENTION_FILE_GRACE.
+KEEPIA_ARCHIVE_RETENTION_FILE_GRACE.
 
 It asks for the number of messages unless --yes is given. An interrupted
 run resumes with the same command, or when the web server starts.`,
@@ -337,7 +337,7 @@ func newRetentionSweepCmd() *cobra.Command {
 		Use:   "sweep",
 		Short: "Remove the files of deleted messages whose grace period ended",
 		Long: `Remove the files of messages deleted by retention or an account purge once
-MAIL_ARCHIVE_RETENTION_FILE_GRACE has passed. The web server does this every
+KEEPIA_ARCHIVE_RETENTION_FILE_GRACE has passed. The web server does this every
 hour. A file whose message was archived again stays.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {

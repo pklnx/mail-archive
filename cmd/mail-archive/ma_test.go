@@ -33,7 +33,7 @@ func runMa(t *testing.T, args ...string) (int, string, []string) {
 	// MA_TEST_HOLDER_READY set, it says "ready" and reads to the end of its
 	// input, so that the restore runs.
 	shim := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + log + "'\n" +
-		"case \"$*\" in *' --hold '*) printf 'keyring-copy=%s\\n' \"${MAIL_ARCHIVE_KEYRING_COPY:-}\" >> '" + log + "'\n" +
+		"case \"$*\" in *' --hold '*) printf 'keyring-copy=%s\\n' \"${KEEPIA_ARCHIVE_KEYRING_COPY:-}\" >> '" + log + "'\n" +
 		"  if [ -n \"${MA_TEST_HOLDER_READY:-}\" ]; then echo ready; cat >/dev/null; fi ;; esac\nexit 0\n"
 	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(shim), 0o700); err != nil { //nolint:gosec // an executable test script
 		t.Fatal(err)

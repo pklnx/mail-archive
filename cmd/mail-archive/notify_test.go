@@ -16,6 +16,7 @@ import (
 	"github.com/emersion/go-imap/v2/imapserver/imapmemserver"
 
 	"github.com/pklnx/mail-archive/internal/archive"
+	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/crypto"
 	"github.com/pklnx/mail-archive/internal/imaptest"
 	"github.com/pklnx/mail-archive/internal/store"
@@ -36,7 +37,7 @@ func runNotifyTest(t *testing.T) (int, string) {
 }
 
 func TestNotifyTestCommand(t *testing.T) {
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", "postgres://unused")
+	t.Setenv(config.EnvDatabaseURL, "postgres://unused")
 	status := http.StatusOK
 	var got map[string]any
 	var auth string
@@ -48,13 +49,13 @@ func TestNotifyTestCommand(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL", "")
+	t.Setenv(config.EnvNotifyWebhookURL, "")
 	if code, out := runNotifyTest(t); code == 0 || !strings.Contains(out, "is not set") {
 		t.Fatalf("without a URL: %d %s", code, out)
 	}
 
-	t.Setenv("MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL", srv.URL+"/secret-topic")
-	t.Setenv("MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION", "Bearer tk_123")
+	t.Setenv(config.EnvNotifyWebhookURL, srv.URL+"/secret-topic")
+	t.Setenv(config.EnvNotifyWebhookAuthorization, "Bearer tk_123")
 	code, out := runNotifyTest(t)
 	if code != 0 || !strings.Contains(out, "HTTP 200") || got["event"] != "test" || auth != "Bearer tk_123" {
 		t.Fatalf("ok: %d %s %v", code, out, got)
@@ -90,11 +91,11 @@ func TestSyncSendsOneAlert(t *testing.T) {
 	imaptest.CreateMailboxes(t, user, "INBOX")
 	host, port := imaptest.Start(t, user)
 	st, url := storetest.NewWithURL(t)
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
-	t.Setenv("MAIL_ARCHIVE_DATA_DIR", t.TempDir())
-	t.Setenv("MAIL_ARCHIVE_LOG_LEVEL", "error")
+	t.Setenv(config.EnvDatabaseURL, url)
+	t.Setenv(config.EnvDataDir, t.TempDir())
+	t.Setenv(config.EnvLogLevel, "error")
 	keyStr, _ := crypto.GenerateKey()
-	t.Setenv("MAIL_ARCHIVE_SECRET_KEY", keyStr)
+	t.Setenv(config.EnvSecretKey, keyStr)
 	key, _ := crypto.ParseKey(keyStr)
 	sealer, _ := crypto.NewSealer(key)
 	acc := &store.Account{Name: "work", Host: host, Port: port, TLSMode: store.TLSModeNone, Username: "alice", Enabled: true}
@@ -112,7 +113,7 @@ func TestSyncSendsOneAlert(t *testing.T) {
 		mu.Unlock()
 	}))
 	defer srv.Close()
-	t.Setenv("MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL", srv.URL)
+	t.Setenv(config.EnvNotifyWebhookURL, srv.URL)
 
 	for range 4 {
 		if err := runCmd(t, newSyncCmd(), ""); exitCodeOf(err) == 0 {
@@ -136,11 +137,11 @@ func TestSyncSendsLossAlert(t *testing.T) {
 	}
 	host, port := imaptest.Start(t, user)
 	st, url := storetest.NewWithURL(t)
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
-	t.Setenv("MAIL_ARCHIVE_DATA_DIR", t.TempDir())
-	t.Setenv("MAIL_ARCHIVE_LOG_LEVEL", "error")
+	t.Setenv(config.EnvDatabaseURL, url)
+	t.Setenv(config.EnvDataDir, t.TempDir())
+	t.Setenv(config.EnvLogLevel, "error")
 	keyStr, _ := crypto.GenerateKey()
-	t.Setenv("MAIL_ARCHIVE_SECRET_KEY", keyStr)
+	t.Setenv(config.EnvSecretKey, keyStr)
 	key, _ := crypto.ParseKey(keyStr)
 	sealer, _ := crypto.NewSealer(key)
 	acc := &store.Account{Name: "work", Host: host, Port: port, TLSMode: store.TLSModeNone, Username: "alice", Enabled: true}
@@ -158,7 +159,7 @@ func TestSyncSendsLossAlert(t *testing.T) {
 		mu.Unlock()
 	}))
 	defer srv.Close()
-	t.Setenv("MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL", srv.URL)
+	t.Setenv(config.EnvNotifyWebhookURL, srv.URL)
 
 	// The first sync reconciles INBOX for the first time: no alert.
 	if err := runCmd(t, newSyncCmd(), ""); err != nil {

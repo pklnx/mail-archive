@@ -53,7 +53,7 @@ func (k testKey) forms() []string {
 		base64.RawURLEncoding.EncodeToString(k.raw), hex.EncodeToString(k.raw), string(k.raw)}
 }
 
-// useKey configures k through MAIL_ARCHIVE_SECRET_KEY.
+// useKey configures k through KEEPIA_ARCHIVE_SECRET_KEY.
 func useKey(t *testing.T, k testKey) {
 	t.Helper()
 	t.Setenv(config.EnvSecretKeyFile, "")
@@ -333,9 +333,8 @@ func TestComposeSecretKey(t *testing.T) {
 	const mount = "${SECRET_KEY_DIR:-./secret-key}:/secret-key:ro"
 	for _, name := range []string{"web", "mail-archive"} {
 		svc := file.Services[name]
-		if svc.Environment[config.EnvSecretKey] != "${MAIL_ARCHIVE_SECRET_KEY:-}" ||
-			svc.Environment[config.EnvSecretKeyFile] != "${MAIL_ARCHIVE_SECRET_KEY_FILE:-}" {
-			t.Errorf("%s: %v / %v", name, svc.Environment[config.EnvSecretKey], svc.Environment[config.EnvSecretKeyFile])
+		for _, v := range []string{config.EnvSecretKey, config.EnvSecretKeyFile} {
+			checkComposeAlias(t, name, svc.Environment, v)
 		}
 		if !slices.Contains(svc.Volumes, mount) {
 			t.Errorf("%s volumes %v", name, svc.Volumes)
@@ -346,7 +345,7 @@ func TestComposeSecretKey(t *testing.T) {
 		t.Fatal("no worker environment")
 	}
 	for name := range worker.Environment {
-		if strings.HasPrefix(name, config.EnvSecretKey) {
+		if strings.HasPrefix(name, config.EnvSecretKey) || strings.HasPrefix(name, config.OldName(config.EnvSecretKey)) {
 			t.Errorf("the worker gets %s", name)
 		}
 	}
@@ -376,23 +375,34 @@ func TestComposeSetupToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	web := file.Services["web"].Environment
-	if web[config.EnvSetupTokenFile] != "${MAIL_ARCHIVE_SETUP_TOKEN_FILE:-}" || web[config.EnvSetupToken] != "${MAIL_ARCHIVE_SETUP_TOKEN:-}" {
-		t.Errorf("web: %v / %v", web[config.EnvSetupTokenFile], web[config.EnvSetupToken])
-	}
+	checkComposeAlias(t, "web", web, config.EnvSetupTokenFile)
+	checkComposeAlias(t, "web", web, config.EnvSetupToken)
 	for name, svc := range file.Services {
 		if name == "web" {
 			continue
 		}
 		for v := range svc.Environment {
-			if strings.HasPrefix(v, config.EnvSetupToken) {
+			if strings.HasPrefix(v, config.EnvSetupToken) || strings.HasPrefix(v, config.OldName(config.EnvSetupToken)) {
 				t.Errorf("%s gets %s", name, v)
 			}
 		}
 	}
 	for _, name := range []string{"web", "worker", "mail-archive"} {
-		if v := file.Services[name].Environment[config.EnvEncryptionAtSetup]; v != "${MAIL_ARCHIVE_ENCRYPTION_AT_SETUP:-}" {
-			t.Errorf("%s: %s = %v", name, config.EnvEncryptionAtSetup, v)
-		}
+		checkComposeAlias(t, name, file.Services[name].Environment, config.EnvEncryptionAtSetup)
+	}
+}
+
+// checkComposeAlias: the service passes the variable name of .env, without
+// a default, under its new name with the old one as fallback, and under its
+// old name raw, so that the app warns about it (#585).
+func checkComposeAlias(t *testing.T, service string, env map[string]any, name string) {
+	t.Helper()
+	old := config.OldName(name)
+	if got, want := env[name], "${"+name+":-${"+old+":-}}"; got != want {
+		t.Errorf("%s: %s = %v, want %s", service, name, got, want)
+	}
+	if got, want := env[old], "${"+old+":-}"; got != want {
+		t.Errorf("%s: %s = %v, want %s", service, old, got, want)
 	}
 }
 

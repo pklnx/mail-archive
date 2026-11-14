@@ -83,7 +83,7 @@ const (
 )
 
 func main() {
-	dbURL := flag.String("db", os.Getenv("MAIL_ARCHIVE_DATABASE_URL"), "PostgreSQL URL of a user with CREATEDB")
+	dbURL := flag.String("db", config.Getenv(config.EnvDatabaseURL), "PostgreSQL URL of a user with CREATEDB")
 	listen := flag.String("listen", "127.0.0.1:18080", "address of the web UI")
 	imapListen := flag.String("imap-listen", "127.0.0.1:0", "address of the demo IMAP server (port 0: a free port)")
 	nowFlag := flag.String("now", "", "RFC 3339 instant the demo mail is dated from (empty: the current time); for reproducible screenshots")
@@ -120,7 +120,7 @@ func parseNow(s string, wall func() time.Time) (time.Time, error) {
 // setupListen it also serves a new instance there (setupDemo).
 func run(dbURL, listen, imapListen, setupListen string, now time.Time, log *slog.Logger) error {
 	if dbURL == "" {
-		return errors.New("set -db or MAIL_ARCHIVE_DATABASE_URL")
+		return errors.New("set -db or KEEPIA_ARCHIVE_DATABASE_URL")
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

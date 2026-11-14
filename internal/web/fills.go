@@ -211,7 +211,7 @@ func (s *Server) requireFills(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	if s.fills == nil {
-		s.fail(w, r, http.StatusServiceUnavailable, "fills need MAIL_ARCHIVE_SECRET_KEY on the server", nil)
+		s.fail(w, r, http.StatusServiceUnavailable, "fills need KEEPIA_ARCHIVE_SECRET_KEY on the server", nil)
 		return false
 	}
 	return true

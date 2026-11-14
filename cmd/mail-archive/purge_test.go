@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
@@ -67,7 +68,7 @@ func purgeOut(t *testing.T, stdin string, args ...string) (string, error) {
 func TestAccountPurgeCommand(t *testing.T) {
 	s, acc := newPurgeCLISetup(t)
 	ctx := context.Background()
-	t.Setenv("MAIL_ARCHIVE_OPERATOR", "patrick")
+	t.Setenv(config.EnvOperator, "patrick")
 
 	out, err := purgeOut(t, "", "old", "--dry-run")
 	if err != nil || !strings.Contains(out, `account "old" (owner anna, imap)`) || !strings.Contains(out, "locations to remove:   2") ||

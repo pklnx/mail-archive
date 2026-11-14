@@ -72,7 +72,7 @@ func UpgradePasswords(ctx context.Context, st *store.Store, sealer *crypto.Seale
 		}
 		pw, err := sealer.Open(a.PasswordEnc, legacyPasswordContext(a.Name))
 		if err != nil {
-			return n, fmt.Errorf("account %q: cannot decrypt the stored password (wrong %s?)", a.Name, "MAIL_ARCHIVE_SECRET_KEY")
+			return n, fmt.Errorf("account %q: cannot decrypt the stored password (wrong %s?)", a.Name, "KEEPIA_ARCHIVE_SECRET_KEY")
 		}
 		enc, err := SealPassword(sealer, a.ID, string(pw))
 		if err != nil {

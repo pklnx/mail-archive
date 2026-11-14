@@ -17,7 +17,7 @@ import (
 // Profile → Notifications (#397, part 5): each admin may set one address
 // for alert mail and confirms it with a code mailed to it. Only admins get
 // alert mail, so every handler answers 403 to anyone else before it reads
-// the body or looks anything up. Without MAIL_ARCHIVE_MAIL_URL the GET
+// the body or looks anything up. Without KEEPIA_ARCHIVE_MAIL_URL the GET
 // says so and the UI hides the tab. The audit entries never carry the
 // address.
 
@@ -39,7 +39,7 @@ const (
 )
 
 type notificationsJSON struct {
-	// Available is false without MAIL_ARCHIVE_MAIL_URL; then nothing else
+	// Available is false without KEEPIA_ARCHIVE_MAIL_URL; then nothing else
 	// is set.
 	Available bool `json:"available"`
 	// Email is the address, null without one.

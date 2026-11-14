@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/pklnx/mail-archive/internal/blobstore"
+	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/crypto"
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/store/storetest"
@@ -32,9 +33,9 @@ func newArchiveSetup(t *testing.T) *archiveSetup {
 	t.Helper()
 	st, url := storetest.NewWithURL(t)
 	dataDir := t.TempDir()
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
-	t.Setenv("MAIL_ARCHIVE_DATA_DIR", dataDir)
-	t.Setenv("MAIL_ARCHIVE_LOG_LEVEL", "error")
+	t.Setenv(config.EnvDatabaseURL, url)
+	t.Setenv(config.EnvDataDir, dataDir)
+	t.Setenv(config.EnvLogLevel, "error")
 	blobs, err := blobstore.New(dataDir)
 	if err != nil {
 		t.Fatal(err)
@@ -136,7 +137,7 @@ func TestVerifyExitCodes(t *testing.T) {
 	if code, _ := runVerifyCmd(t, "--jobs", "many"); code != 2 {
 		t.Errorf("--jobs many: exit %d", code)
 	}
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", "postgres://nobody:x@127.0.0.1:1/none?sslmode=disable&connect_timeout=1")
+	t.Setenv(config.EnvDatabaseURL, "postgres://nobody:x@127.0.0.1:1/none?sslmode=disable&connect_timeout=1")
 	if code, out := runVerifyCmd(t); code != 2 || !strings.Contains(out, "error:") {
 		t.Errorf("no database: exit %d\n%s", code, out)
 	}
@@ -282,10 +283,10 @@ func TestBackup(t *testing.T) {
 
 func TestBackupNote(t *testing.T) {
 	_, url := storetest.NewWithURL(t)
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
+	t.Setenv(config.EnvDatabaseURL, url)
 	key, _ := crypto.GenerateKey()
-	t.Setenv("MAIL_ARCHIVE_SECRET_KEY", key)
-	t.Setenv("MAIL_ARCHIVE_DATA_DIR", "/srv/archive")
+	t.Setenv(config.EnvSecretKey, key)
+	t.Setenv(config.EnvDataDir, "/srv/archive")
 	a, err := openApp(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -301,7 +302,7 @@ func TestBackupNote(t *testing.T) {
 	if !regexpMatch(`Last migration: \d{5}_\w+\.sql\n`, note) {
 		t.Errorf("note lacks the last migration:\n%s", note)
 	}
-	for _, want := range []string{"mailarchive-x.dump", "2026-10-07T19:01:02Z", "/srv/archive", "MAIL_ARCHIVE_SECRET_KEY", "pg_restore --no-owner --single-transaction --exit-on-error", "create an empty database"} {
+	for _, want := range []string{"mailarchive-x.dump", "2026-10-07T19:01:02Z", "/srv/archive", config.EnvSecretKey, "pg_restore --no-owner --single-transaction --exit-on-error", "create an empty database"} {
 		if !strings.Contains(note, want) {
 			t.Errorf("note lacks %q:\n%s", want, note)
 		}
@@ -318,8 +319,8 @@ func setEnvMarkers(t *testing.T) []string {
 	t.Helper()
 	tmp := t.TempDir() // TMPDIR must stay a usable directory
 	var basics []string
-	for _, name := range []string{"MAIL_ARCHIVE_SECRET_KEY", "MAIL_ARCHIVE_ARCHIVE_KEY", "MAIL_ARCHIVE_DATABASE_URL",
-		"MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION", "MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL", "UNRELATED_L15", "PGPASSWORD", "PGAPPNAME"} {
+	for _, name := range []string{config.EnvSecretKey, config.EnvArchiveKey, config.EnvDatabaseURL,
+		config.EnvNotifyWebhookAuthorization, config.EnvNotifyWebhookURL, "UNRELATED_L15", "PGPASSWORD", "PGAPPNAME"} {
 		t.Setenv(name, envMarker+"-"+name)
 	}
 	for _, name := range pgToolEnvNames {
@@ -390,8 +391,8 @@ func assertPgToolEnv(t *testing.T, what, path string, want ...string) {
 }
 
 // TestPgEnvAllowlist: pg_dump and pg_restore get the libpq variables of the
-// URL and the allowlisted basics, never a MAIL_ARCHIVE_* variable, an
-// unrelated one or a PG* variable of this process.
+// URL and the allowlisted basics, never a KEEPIA_ARCHIVE_* or MAIL_ARCHIVE_*
+// variable, an unrelated one or a PG* variable of this process.
 func TestPgEnvAllowlist(t *testing.T) {
 	// The allowlist is fixed; a change here is a security change.
 	if got, want := strings.Join(pgToolEnvNames, " "), "PATH HOME TMPDIR TZ LANG LC_ALL LC_CTYPE LC_MESSAGES LD_LIBRARY_PATH "+

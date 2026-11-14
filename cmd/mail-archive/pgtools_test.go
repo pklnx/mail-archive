@@ -154,7 +154,7 @@ func TestBackupRefusesTLSEnv(t *testing.T) {
 	t.Setenv(config.EnvSecretKey, secret)
 	pgDump, logDir := fakePgDump(t, "18.1")
 	t.Setenv("PATH", filepath.Dir(pgDump)+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", withoutSSLMode(t, s.url))
+	t.Setenv(config.EnvDatabaseURL, withoutSSLMode(t, s.url))
 	t.Setenv("PGSSLMODE", "disable")
 	before := len(auditLog(t, s.st))
 	dir := filepath.Join(t.TempDir(), "b")
@@ -186,7 +186,7 @@ func TestRestoreDumpRefusesTLSEnv(t *testing.T) {
 	secret, _ := crypto.GenerateKey()
 	t.Setenv(config.EnvSecretKey, secret)
 	switchDatabase(t)
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", withoutSSLMode(t, os.Getenv("MAIL_ARCHIVE_DATABASE_URL")))
+	t.Setenv(config.EnvDatabaseURL, withoutSSLMode(t, os.Getenv(config.EnvDatabaseURL)))
 	pgRestore, logDir := fakePgRestore(t, "18.0")
 	t.Setenv("PATH", filepath.Dir(pgRestore)+string(os.PathListSeparator)+os.Getenv("PATH"))
 	opened := false
@@ -461,11 +461,11 @@ func TestPgToolVersionGate(t *testing.T) {
 		url, version string
 		want         string // "" accepts
 	}{
-		{"postgres://u@h/db?sslnegotiation=direct", "16.4", "pg_dump is version 16, but sslnegotiation=direct in MAIL_ARCHIVE_DATABASE_URL needs 17 or newer"},
+		{"postgres://u@h/db?sslnegotiation=direct", "16.4", "pg_dump is version 16, but sslnegotiation=direct in KEEPIA_ARCHIVE_DATABASE_URL needs 17 or newer"},
 		{"postgres://u@h/db?sslnegotiation=direct", "17.2", ""},
-		{"postgres://u@h/db?require_auth=scram-sha-256", "15.8", "require_auth in MAIL_ARCHIVE_DATABASE_URL needs 16"},
+		{"postgres://u@h/db?require_auth=scram-sha-256", "15.8", "require_auth in KEEPIA_ARCHIVE_DATABASE_URL needs 16"},
 		{"postgres://u@h/db?require_auth=scram-sha-256", "16.0", ""},
-		{"postgres://u@h/db?sslrootcert=system", "15.8", "sslrootcert=system in MAIL_ARCHIVE_DATABASE_URL needs 16"},
+		{"postgres://u@h/db?sslrootcert=system", "15.8", "sslrootcert=system in KEEPIA_ARCHIVE_DATABASE_URL needs 16"},
 		{"postgres://u@h/db?sslnegotiation=postgres&sslrootcert=&require_auth=", "14.1", ""},
 	} {
 		pgDump, logDir := fakePgDump(t, c.version)

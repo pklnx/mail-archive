@@ -121,23 +121,23 @@ command line of the instance.
    - The secret key, which encrypts the stored IMAP passwords and TOTP
      secrets: `secret-key/secret.key` (`SECRET_KEY_DIR`), created with
      `openssl rand -base64 32`, owned by the container user (UID 65532) with
-     mode 0400, and `MAIL_ARCHIVE_SECRET_KEY_FILE=/secret-key/secret.key`.
+     mode 0400, and `KEEPIA_ARCHIVE_SECRET_KEY_FILE=/secret-key/secret.key`.
      **Back it up** (see [Backups](./operations#backups)).
-   - `MAIL_ARCHIVE_PUBLIC_URL`: the address users open, like
+   - `KEEPIA_ARCHIVE_PUBLIC_URL`: the address users open, like
      `https://archive.example.com`. Behind a reverse proxy also
-     `MAIL_ARCHIVE_TRUSTED_PROXIES` (see [Security](../reference/security#login)).
+     `KEEPIA_ARCHIVE_TRUSTED_PROXIES` (see [Security](../reference/security#login)).
 2. The archive key, from your key custody: `keys/archive.key`
    (`ARCHIVE_KEY_DIR`, outside `data/`), owned by UID 65532 with mode 0400,
-   and `MAIL_ARCHIVE_ARCHIVE_KEY_FILE=/keys/archive.key`. A new instance does
+   and `KEEPIA_ARCHIVE_ARCHIVE_KEY_FILE=/keys/archive.key`. A new instance does
    not start without it. `./ma encryption keygen` creates one, with a
    recovery key (see [The archive key](#the-archive-key)); without a keyring,
    the first start creates one with a slot for the archive key alone, and
    `./ma encryption add-key` adds a recovery key later.
 3. A setup token: the output of `./ma setup token` as
    `secret-key/setup.token`, owned by UID 65532 with mode 0400, and
-   `MAIL_ARCHIVE_SETUP_TOKEN_FILE=/secret-key/setup.token`.
+   `KEEPIA_ARCHIVE_SETUP_TOKEN_FILE=/secret-key/setup.token`.
 4. Start: `docker compose up -d`. The web server (and the worker, if you run
-   it) applies the migrations (`MAIL_ARCHIVE_MIGRATE_ON_START=on` is the
+   it) applies the migrations (`KEEPIA_ARCHIVE_MIGRATE_ON_START=on` is the
    default in the bundled `docker-compose.yml`), turns encryption at rest on
    and logs `waiting for the first admin`.
 5. Send the link `https://archive.example.com/#setup=<token>` to the
@@ -159,7 +159,7 @@ is logged in; two-factor authentication follows at once.
   `setup: complete since …`, and the [audit log](./audit-log) has
   `user.setup` with the client address. Then remove the token from `.env`
   and `secret-key/`.
-- `MAIL_ARCHIVE_ENCRYPTION_AT_SETUP=off` starts a new instance without
+- `KEEPIA_ARCHIVE_ENCRYPTION_AT_SETUP=off` starts a new instance without
   encryption at rest: for test instances only, never for a customer's.
 
 What the setup link guarantees, and the risk that remains, is in
@@ -170,11 +170,11 @@ What the setup link guarantees, and the risk that remains, is in
 Edit `.env`:
 
 - `POSTGRES_PASSWORD`: any long random password.
-- `MAIL_ARCHIVE_SECRET_KEY`: encrypts the stored IMAP passwords and TOTP
+- `KEEPIA_ARCHIVE_SECRET_KEY`: encrypts the stored IMAP passwords and TOTP
   secrets; the web server does not start without it. Create one with
   `openssl rand -base64 32` and **back it up** (see
   [Backups](./operations#backups)). It can come from a file instead
-  (`MAIL_ARCHIVE_SECRET_KEY_FILE`, see
+  (`KEEPIA_ARCHIVE_SECRET_KEY_FILE`, see
   [Configuration](../reference/configuration#mail-archive)).
 
 Create the schema and your own admin user, then start the web server. The
@@ -246,10 +246,10 @@ It writes `keys/archive.key` (`ARCHIVE_KEY_DIR` in `.env` moves it; keep it
 outside `data/`) and the keyring `data/keys/keyring`, and prints a
 **recovery key** once. Then:
 
-- Add `MAIL_ARCHIVE_ARCHIVE_KEY_FILE=/keys/archive.key` to `.env`.
+- Add `KEEPIA_ARCHIVE_ARCHIVE_KEY_FILE=/keys/archive.key` to `.env`.
 - Keep the recovery key offline, apart from this host and from the backups
   (a password manager, or paper in a safe). It opens the keyring when the
-  key file is lost: set it as `MAIL_ARCHIVE_ARCHIVE_KEY` instead.
+  key file is lost: set it as `KEEPIA_ARCHIVE_ARCHIVE_KEY` instead.
 - Back up `keys/archive.key` apart from `data/` and its backups. On Linux it
   belongs to the container user: `sudo cp keys/archive.key /safe/place/`.
 - Check with `./ma encryption status`.
@@ -273,7 +273,7 @@ recovered, backups included. See [Encryption](../reference/cli#encryption).
 ### After the install
 
 - The web server syncs every enabled account every 6 hours
-  (`MAIL_ARCHIVE_SYNC_INTERVAL`); see [Syncing](./syncing#the-schedule).
+  (`KEEPIA_ARCHIVE_SYNC_INTERVAL`); see [Syncing](./syncing#the-schedule).
 - Archived messages appear in `./data` (`ARCHIVE_DIR` in `.env` moves it).
 - Set up [backups](./operations#backups),
   [monitoring](./operations#monitoring-and-alerts) and, as needed,

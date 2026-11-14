@@ -4,14 +4,14 @@
 
 | Asset | Protection |
 |---|---|
-| IMAP passwords | Encrypted in PostgreSQL with AES-256-GCM, bound to the account's internal ID (so a stored password cannot be moved to another account), using `MAIL_ARCHIVE_SECRET_KEY`. API responses never contain them. |
+| IMAP passwords | Encrypted in PostgreSQL with AES-256-GCM, bound to the account's internal ID (so a stored password cannot be moved to another account), using `KEEPIA_ARCHIVE_SECRET_KEY`. API responses never contain them. |
 | Archived mail (message files) | With [encryption at rest](#the-archive-key) on, every message file is stored encrypted with AES-256-GCM (`<sha256>.enc`) and written encrypted from the first byte, so no plaintext of it reaches the disk; the key is kept apart from the data. A key file on the same disk as the data protects copies and backups of the data directory, not snapshots of that disk. Without encryption at rest, plain `.eml` files, **not encrypted**: use an encrypted disk. |
 | Archived mail (database) | PostgreSQL rows **are not encrypted**, also with encryption at rest: subjects, addresses, body text, the text extracted from attachments for search, attachment names, Message-IDs, envelopes, folder names, account and user names, the audit log and legal holds. Use an encrypted disk; a hosted instance must keep PostgreSQL on an encrypted volume whose key is kept away from its snapshots. |
-| Exports and backups | `export` and `backup` write files with mode 0600 in directories with mode 0700. Exports are unencrypted, also with encryption at rest (an export is meant for a mail client: delete it once used); an export inside the data directory gets a warning while encryption at rest is on. Without encryption at rest the database dump is unencrypted; with it, `backup` encrypts the dump while `pg_dump` writes it (`*.dump.enc`, the plaintext only passes through a pipe), next to a copy of the keyring wrapped under the archive keys, and refuses without the archive key. A dump opens only with a key of its time. On an archive with any sign of encryption at rest, `restore-dump` writes only authenticated data into `pg_restore` unless the operator passes `--plaintext`. On an archive that never used encryption, dumps are not authenticated: whoever can write the backup location can run SQL as the database superuser on the next restore, so protect it like the database. `restore-dump` runs `pg_restore` in one transaction, so a damaged dump changes nothing. `BACKUP-NOTE.txt` names the secret key and the fingerprints of the archive keys but never contains a key, and `pg_dump` and `pg_restore` get the database password in their environment, not on the command line. That environment holds nothing else of the app: without Docker Compose, `backup` and `restore-dump` give them only the libpq variables of the app's connection (`PGHOST`, `PGPORT`, `PGUSER`, `PGDATABASE` and `PGPASSWORD` as the app resolves them, which counts `PGHOST`, `PGPORT`, `PGUSER`, `PGDATABASE`, `PGPASSWORD` and `PGPASSFILE` of the process where the URL leaves them out; and, from `MAIL_ARCHIVE_DATABASE_URL` only, `PGSSLMODE`, `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY`, `PGSSLSNI`, `PGSSLNEGOTIATION`, `PGTARGETSESSIONATTRS`, `PGCHANNELBINDING` and `PGREQUIREAUTH`, each with the value the app takes where the URL leaves it out, the certificate files under `$HOME/.postgresql` included, and an empty `PGREQUIREAUTH` left out; and always `PGGSSENCMODE=disable`) and, when set, `PATH`, `HOME`, `TMPDIR`, `TZ`, `LANG`, `LC_ALL`, `LC_CTYPE`, `LC_MESSAGES`, `LD_LIBRARY_PATH`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `OPENSSL_CONF`, `KRB5CCNAME` and `KRB5_CONFIG`, never a `MAIL_ARCHIVE_*` variable or another variable of the process. `pg_dump` and `pg_restore` get the TLS and authentication settings of the app's connection, with GSSAPI encryption off (`PGGSSENCMODE=disable`, which the app never uses), or the commands refuse to run; libpq and OpenSSL apply these settings in the tools, Go's TLS in the app. A TLS or authentication `PG*` variable of the process that the URL does not override, a service (`PGSERVICE`, `PGSERVICEFILE`, `service`), a client key password (`PGSSLPASSWORD`, `sslpassword`), settings that do not give the app's connection attempts, or a tool too old for a setting make both commands refuse before `backup` writes its audit entry or the dump, before `restore-dump` decrypts the dump, and before either runs `pg_dump` or `pg_restore` ([Backups without Docker](../guide/operations#backups-without-docker)); `./ma` runs them in the database container with `docker compose exec`, which passes on no variable of the host. A copy of the data directory holds the message files as they are stored, and the keyring only wrapped under the archive keys. A [GoBD export](./cli#export-format-gobd) is plaintext too, outside any encryption at rest: with Docker Compose it goes to `/export` (`EXPORT_DIR`, outside the data directory), and an output inside the data directory gets a warning while encryption at rest is on. Its `STATEMENT.txt` is signed with the attestation key, never with the archive key or `MAIL_ARCHIVE_SECRET_KEY`, under its own header, so it never passes for an attestation nor an attestation for it. |
+| Exports and backups | `export` and `backup` write files with mode 0600 in directories with mode 0700. Exports are unencrypted, also with encryption at rest (an export is meant for a mail client: delete it once used); an export inside the data directory gets a warning while encryption at rest is on. Without encryption at rest the database dump is unencrypted; with it, `backup` encrypts the dump while `pg_dump` writes it (`*.dump.enc`, the plaintext only passes through a pipe), next to a copy of the keyring wrapped under the archive keys, and refuses without the archive key. A dump opens only with a key of its time. On an archive with any sign of encryption at rest, `restore-dump` writes only authenticated data into `pg_restore` unless the operator passes `--plaintext`. On an archive that never used encryption, dumps are not authenticated: whoever can write the backup location can run SQL as the database superuser on the next restore, so protect it like the database. `restore-dump` runs `pg_restore` in one transaction, so a damaged dump changes nothing. `BACKUP-NOTE.txt` names the secret key and the fingerprints of the archive keys but never contains a key, and `pg_dump` and `pg_restore` get the database password in their environment, not on the command line. That environment holds nothing else of the app: without Docker Compose, `backup` and `restore-dump` give them only the libpq variables of the app's connection (`PGHOST`, `PGPORT`, `PGUSER`, `PGDATABASE` and `PGPASSWORD` as the app resolves them, which counts `PGHOST`, `PGPORT`, `PGUSER`, `PGDATABASE`, `PGPASSWORD` and `PGPASSFILE` of the process where the URL leaves them out; and, from `KEEPIA_ARCHIVE_DATABASE_URL` only, `PGSSLMODE`, `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY`, `PGSSLSNI`, `PGSSLNEGOTIATION`, `PGTARGETSESSIONATTRS`, `PGCHANNELBINDING` and `PGREQUIREAUTH`, each with the value the app takes where the URL leaves it out, the certificate files under `$HOME/.postgresql` included, and an empty `PGREQUIREAUTH` left out; and always `PGGSSENCMODE=disable`) and, when set, `PATH`, `HOME`, `TMPDIR`, `TZ`, `LANG`, `LC_ALL`, `LC_CTYPE`, `LC_MESSAGES`, `LD_LIBRARY_PATH`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `OPENSSL_CONF`, `KRB5CCNAME` and `KRB5_CONFIG`, never a `KEEPIA_ARCHIVE_*` or `MAIL_ARCHIVE_*` variable or another variable of the process. `pg_dump` and `pg_restore` get the TLS and authentication settings of the app's connection, with GSSAPI encryption off (`PGGSSENCMODE=disable`, which the app never uses), or the commands refuse to run; libpq and OpenSSL apply these settings in the tools, Go's TLS in the app. A TLS or authentication `PG*` variable of the process that the URL does not override, a service (`PGSERVICE`, `PGSERVICEFILE`, `service`), a client key password (`PGSSLPASSWORD`, `sslpassword`), settings that do not give the app's connection attempts, or a tool too old for a setting make both commands refuse before `backup` writes its audit entry or the dump, before `restore-dump` decrypts the dump, and before either runs `pg_dump` or `pg_restore` ([Backups without Docker](../guide/operations#backups-without-docker)); `./ma` runs them in the database container with `docker compose exec`, which passes on no variable of the host. A copy of the data directory holds the message files as they are stored, and the keyring only wrapped under the archive keys. A [GoBD export](./cli#export-format-gobd) is plaintext too, outside any encryption at rest: with Docker Compose it goes to `/export` (`EXPORT_DIR`, outside the data directory), and an output inside the data directory gets a warning while encryption at rest is on. Its `STATEMENT.txt` is signed with the attestation key, never with the archive key or `KEEPIA_ARCHIVE_SECRET_KEY`, under its own header, so it never passes for an attestation nor an attestation for it. |
 | Your mail servers | Only read: `EXAMINE`, `BODY.PEEK[]` and, to [reconcile](../guide/syncing#reconcile), `UID FETCH 1:* (UID FLAGS)`. Never `STORE`, `EXPUNGE` or a read-write `SELECT`. |
 | The web UI | Login with user name and password, sessions in PostgreSQL, limits on failed logins, and the browser protections below. |
 | User passwords | Only stored as Argon2id hashes (64 MiB, 3 passes). |
-| TOTP secrets | Encrypted with AES-256-GCM using `MAIL_ARCHIVE_SECRET_KEY`, bound to the user ID. Recovery codes are stored only as keyed HMAC-SHA-256 hashes. |
+| TOTP secrets | Encrypted with AES-256-GCM using `KEEPIA_ARCHIVE_SECRET_KEY`, bound to the user ID. Recovery codes are stored only as keyed HMAC-SHA-256 hashes. |
 | Passkeys | Only the public keys are stored; the private keys never leave the user's devices. |
 | API keys | Only their SHA-256 and last 4 characters are stored; the key is shown once. A `read` or `sync` key reaches only the read and sync endpoints of its owner and the accounts shared with them. A `metrics` key, which only an admin can create and which has no other scope, reaches only `GET /api/metrics` (IDs and counts, no names). See [Login](#login). |
 | The setup token | Only its SHA-256 is stored, with the time of the first start with it. It creates the first admin once, only while no user exists and for 7 days, and is compared in constant time. It is never logged, never in the audit log, and never reaches the server in a URL. See [Login](#login). |
@@ -20,7 +20,7 @@
 | Removal of archived mail | Daily signed [attestations](./cli#attest) record which messages were archived; see [The attestation key](#the-attestation-key). Tamper-evident, not tamper-proof. |
 | SMTP secrets | Only their SHA-256 and last 4 characters are stored; the secret is shown once, like an API key. A secret lets a mail server hand over mail for its one smtp account, nothing else: it reads nothing. See [The SMTP server](#the-smtp-server). |
 | Alert mail | Only to admins who confirmed their address with a mailed code (SHA-256 of the code stored, 30 minutes, 5 tries, 3 codes per hour); only over TLS to the one relay the operator configured, its password read from a file and never logged. A mail names accounts, owners and customer groups, never error texts, folders, server names or mail data. See [Alert mail](#alert-mail). |
-| The SMTP port | Off by default. With `MAIL_ARCHIVE_SMTP_AUTH=required` (the default once it is on) a mail server must log in over TLS with a secret of the smtp account it delivers for; the port may then face the internet. With `off`, only clients in `MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS` may connect, and the port must never face the internet. See [The SMTP server](#the-smtp-server). |
+| The SMTP port | Off by default. With `KEEPIA_ARCHIVE_SMTP_AUTH=required` (the default once it is on) a mail server must log in over TLS with a secret of the smtp account it delivers for; the port may then face the internet. With `off`, only clients in `KEEPIA_ARCHIVE_SMTP_ALLOWED_NETWORKS` may connect, and the port must never face the internet. See [The SMTP server](#the-smtp-server). |
 
 ## Login
 
@@ -42,7 +42,7 @@ login.
   other rules, so a long passphrase is fine.
 - **The setup link** creates the first admin of a new instance from
   configuration ([Start from configuration](../guide/getting-started#start-from-configuration)).
-  The operator sets a setup token (`MAIL_ARCHIVE_SETUP_TOKEN_FILE`: 32 to 256
+  The operator sets a setup token (`KEEPIA_ARCHIVE_SETUP_TOKEN_FILE`: 32 to 256
   printable characters, `./ma setup token` makes one of 256 random bits, not
   one of the instance's keys) and sends the link `<public URL>/#setup=<token>`.
   The token sits in the fragment, which browsers never send: it reaches no
@@ -72,7 +72,7 @@ login.
   sessions.
 - **Two-factor authentication:** TOTP uses 6-digit RFC 6238 codes with a 30-second period and one-step clock tolerance. Administrators must have TOTP enabled and cannot disable it. A user with mandatory TOTP enabled but without setup is restricted to completing setup. TOTP challenges expire after 5 minutes, are single-use, accept at most 3 codes, and include a version check so resets win over in-flight logins. Recovery codes are shown once, are one-use, and are stored only as keyed hashes. The PDF and text downloads are made in the browser from the codes on screen; the server does not send the codes again.
 - **Passkeys** (WebAuthn) replace password and TOTP at the login. They are
-  bound to the host of `MAIL_ARCHIVE_PUBLIC_URL`, so a look-alike site cannot
+  bound to the host of `KEEPIA_ARCHIVE_PUBLIC_URL`, so a look-alike site cannot
   use them. Every passkey login needs user verification (Face ID, Touch ID,
   Windows Hello or the security key's PIN). Any authenticator is accepted
   (attestation `none`). A sign count that does not go up rejects the login,
@@ -105,7 +105,7 @@ login.
   name is blocked for 1 minute, then 2, 4, 8 and at most 15 minutes for every
   further failure. 20 failures from one address (IPv6: per `/64`) within 15
   minutes block that address for 15 minutes. Behind a reverse proxy, set
-  `MAIL_ARCHIVE_TRUSTED_PROXIES` to it: otherwise every client counts as the
+  `KEEPIA_ARCHIVE_TRUSTED_PROXIES` to it: otherwise every client counts as the
   proxy's address, and 20 failures from anyone block every login through
   the proxy for 15 minutes, and wrong setup tokens block the setup link for
   everyone. Failed passkey logins and wrong setup tokens count for
@@ -316,7 +316,7 @@ individual instance is one group, with the operator as its only admin.
   match its fixed pattern is not written. The answer is cached for 15
   seconds. See [Metrics](../guide/operations#metrics).
 - **Webhook alerts** carry IDs only by default
-  (`MAIL_ARCHIVE_NOTIFY_WEBHOOK_DETAIL=ids`; see
+  (`KEEPIA_ARCHIVE_NOTIFY_WEBHOOK_DETAIL=ids`; see
   [Health endpoints and alerts](#health-endpoints-and-alerts)): webhook
   receivers are often third parties.
 - **Alert mail** goes to admins only, with account, owner and group
@@ -328,7 +328,7 @@ individual instance is one group, with the operator as its only admin.
   [archive key](#the-archive-key) does not protect against the operator.
   Exports and imports at the command line are audited, but someone with the
   shell can bypass that. Command-line entries in the audit log carry the
-  operating system user and `MAIL_ARCHIVE_OPERATOR`, which the app does not
+  operating system user and `KEEPIA_ARCHIVE_OPERATOR`, which the app does not
   verify.
 - **Support.** The operator has no support access to customers' mail in the
   app. A [GoBD export](../guide/gobd-export) is run by the operator at the
@@ -355,12 +355,12 @@ reach it. To use it from your home network or a VPN:
    `__Host-mail_archive_session` with `Secure` and sends
    `Strict-Transport-Security: max-age=31536000` (HSTS: the browser uses
    only HTTPS for this host name for a year). The header counts only from a
-   loopback address or from an address in `MAIL_ARCHIVE_TRUSTED_PROXIES`;
+   loopback address or from an address in `KEEPIA_ARCHIVE_TRUSTED_PROXIES`;
    from anybody else it is ignored, so a client cannot choose how the cookie
    is set. Under Docker Compose a proxy or `tailscale serve` on the same
    computer does not connect from loopback: Docker's port publishing hands
    its requests to the container from the gateway of the Compose network.
-   Set `MAIL_ARCHIVE_TRUSTED_PROXIES` to that address, as in the examples
+   Set `KEEPIA_ARCHIVE_TRUSTED_PROXIES` to that address, as in the examples
    below ([Behind a reverse proxy](../guide/audit-log#behind-a-reverse-proxy)
    shows how to find it). Until then logging in works, but the cookie lacks
    `Secure` and the `__Host-` prefix and no HSTS is sent; the server logs a
@@ -376,12 +376,12 @@ reach it. To use it from your home network or a VPN:
    This protection works only where requests count as HTTPS: with
    `X-Forwarded-Proto: https` from loopback (a proxy or `tailscale serve` on
    the same computer, with the server run without Docker) or from an address
-   in `MAIL_ARCHIVE_TRUSTED_PROXIES`. In Docker Compose, `tailscale serve`
+   in `KEEPIA_ARCHIVE_TRUSTED_PROXIES`. In Docker Compose, `tailscale serve`
    included, that needs the variable. Without it every request is plain,
    whatever the proxy is, so a planted plain cookie can still log a browser
    in as the planter.
 
-   Setting, removing or changing `MAIL_ARCHIVE_TRUSTED_PROXIES` later, in a
+   Setting, removing or changing `KEEPIA_ARCHIVE_TRUSTED_PROXIES` later, in a
    way that changes whether requests count as HTTPS, makes the cookie each
    browser holds the wrong one, so every user logs in once more. A login and
    a logout end the sessions of both cookies the browser sends.
@@ -394,7 +394,7 @@ reach it. To use it from your home network or a VPN:
    plain-HTTP-only service under that name becomes unreachable in those
    browsers until the year is over.
 2. **Allow the host name** you type in the browser in
-   `MAIL_ARCHIVE_ALLOWED_HOSTS` (comma-separated, without port). Requests with
+   `KEEPIA_ARCHIVE_ALLOWED_HOSTS` (comma-separated, without port). Requests with
    other names are rejected with `host not allowed` and logged.
 3. **Publish the port** only as far as needed with `WEB_BIND`. With a proxy
    or `tailscale serve` on the same computer, keep the default `127.0.0.1`.
@@ -407,10 +407,10 @@ Do not forward the port from the internet to the web UI.
 your tailnet and forwards to the local port. In `.env`:
 
 ```sh
-MAIL_ARCHIVE_ALLOWED_HOSTS=localhost,127.0.0.1,mac.example-tailnet.ts.net
-MAIL_ARCHIVE_PUBLIC_URL=https://mac.example-tailnet.ts.net
+KEEPIA_ARCHIVE_ALLOWED_HOSTS=localhost,127.0.0.1,mac.example-tailnet.ts.net
+KEEPIA_ARCHIVE_PUBLIC_URL=https://mac.example-tailnet.ts.net
 # The gateway of the Compose network, which tailscale serve connects from.
-MAIL_ARCHIVE_TRUSTED_PROXIES=172.18.0.1
+KEEPIA_ARCHIVE_TRUSTED_PROXIES=172.18.0.1
 ```
 
 Use your Compose network's gateway address; [Behind a reverse
@@ -437,17 +437,17 @@ archive.home.example {
 }
 ```
 
-With `MAIL_ARCHIVE_ALLOWED_HOSTS=localhost,127.0.0.1,archive.home.example`
-and, for passkeys, `MAIL_ARCHIVE_PUBLIC_URL=https://archive.home.example`.
+With `KEEPIA_ARCHIVE_ALLOWED_HOSTS=localhost,127.0.0.1,archive.home.example`
+and, for passkeys, `KEEPIA_ARCHIVE_PUBLIC_URL=https://archive.home.example`.
 The proxy must pass the original `Host` header (Caddy does by default);
 otherwise the server's same-origin check rejects changes.
 
 Caddy sends `X-Forwarded-Proto` and `X-Forwarded-For`. Under Docker Compose
 it connects from the gateway of the Compose network, so set
-`MAIL_ARCHIVE_TRUSTED_PROXIES` to that address, for example
-`MAIL_ARCHIVE_TRUSTED_PROXIES=172.18.0.1`. Then the session cookie is
+`KEEPIA_ARCHIVE_TRUSTED_PROXIES` to that address, for example
+`KEEPIA_ARCHIVE_TRUSTED_PROXIES=172.18.0.1`. Then the session cookie is
 `Secure`, HSTS is sent, and the audit log and the login limits see the
-clients instead of the proxy. `MAIL_ARCHIVE_TRUSTED_PROXIES` names the
+clients instead of the proxy. `KEEPIA_ARCHIVE_TRUSTED_PROXIES` names the
 proxies whose `X-Forwarded-Proto` and `X-Forwarded-For` headers are
 believed; list only the proxy, and only if all access goes through it. See
 [Behind a reverse proxy](../guide/audit-log#behind-a-reverse-proxy).
@@ -455,7 +455,7 @@ believed; list only the proxy, and only if all access goes through it. See
 ### Plain LAN access
 
 `WEB_BIND=0.0.0.0` and the computer's LAN address or name in
-`MAIL_ARCHIVE_ALLOWED_HOSTS` work without a proxy, but without HTTPS anyone in
+`KEEPIA_ARCHIVE_ALLOWED_HOSTS` work without a proxy, but without HTTPS anyone in
 the network who can read the traffic can take over a session. Use this only
 in a network you fully trust. Browsers offer passkeys only over HTTPS or on
 `localhost`, so they do not work this way.
@@ -490,9 +490,9 @@ counts.
 
 ## The SMTP server
 
-With `MAIL_ARCHIVE_SMTP_LISTEN` set, the web server accepts mail for
+With `KEEPIA_ARCHIVE_SMTP_LISTEN` set, the web server accepts mail for
 [smtp accounts](../guide/journaling) from a mail server. How it decides who
-may hand over mail depends on `MAIL_ARCHIVE_SMTP_AUTH`.
+may hand over mail depends on `KEEPIA_ARCHIVE_SMTP_AUTH`.
 
 **`required` (the default).** Port 587 may be public, for customers' mail
 servers that connect over the internet from changing addresses. The gate is:
@@ -519,10 +519,10 @@ servers that connect over the internet from changing addresses. The gate is:
   and such a limit would let anyone who knows a user name stop that
   customer's journaling.
 - **Connection caps and a deadline:** at most 16 connections, at most 8 from
-  one address (`MAIL_ARCHIVE_SMTP_MAX_CONNS_PER_ADDR`, IPv6 per `/64`), and 60
+  one address (`KEEPIA_ARCHIVE_SMTP_MAX_CONNS_PER_ADDR`, IPv6 per `/64`), and 60
   seconds to log in; then the connection is closed. More connections get
   `421`.
-- **The allowlist is optional:** with `MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS`
+- **The allowlist is optional:** with `KEEPIA_ARCHIVE_SMTP_ALLOWED_NETWORKS`
   set, a client must be in it **and** log in.
 - **Logged without secrets.** A login is logged at info level with the
   client address, the user name and the secret's ID; a failed one at warning
@@ -539,7 +539,7 @@ servers that connect over the internet from changing addresses. The gate is:
 **`off`.** For a mail server on a network you control:
 
 - **The allowlist is the only gate.** There is no SMTP login. Clients outside
-  `MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS` get `554` before they can send
+  `KEEPIA_ARCHIVE_SMTP_ALLOWED_NETWORKS` get `554` before they can send
   anything. Allow the mail server's address, not a whole network the
   internet can reach. Compose publishes the port on `127.0.0.1` unless
   `SMTP_BIND` says otherwise; never forward it from the internet.
@@ -549,7 +549,7 @@ servers that connect over the internet from changing addresses. The gate is:
 In both modes:
 
 - **Limits:** at most 16 connections (more get `421`), 100 recipients per
-  message, `MAIL_ARCHIVE_SMTP_MAX_SIZE` per message (`50M`), lines up to 1 MiB,
+  message, `KEEPIA_ARCHIVE_SMTP_MAX_SIZE` per message (`50M`), lines up to 1 MiB,
   5 minutes to send a command or a whole message, 1 minute for each answer
   to be read. A message is acknowledged only after it is stored.
 - **Storage limits never drop mail.** When a recipient's customer group or
@@ -615,7 +615,7 @@ session. The server therefore adds:
 A malicious website can point its own domain at `127.0.0.1` and then read
 responses from local servers. Such requests carry the attacker's domain in
 the `Host` header. The server only answers requests whose `Host` is in
-`MAIL_ARCHIVE_ALLOWED_HOSTS` (default `localhost`, `127.0.0.1`, `::1`) and
+`KEEPIA_ARCHIVE_ALLOWED_HOSTS` (default `localhost`, `127.0.0.1`, `::1`) and
 rejects everything else with `403`.
 
 ### Cross-site requests
@@ -682,8 +682,8 @@ IMAP connections. These layers stop them:
   it. Every `href` and `xlink:href` attribute, on every element, keeps its
   value only if the markup spells out, without character references, an
   `http:` or `https:` URL (or one starting with `//`) to a plain host name
-  that is not one of the server's own (`MAIL_ARCHIVE_ALLOWED_HOSTS`, the host
-  of `MAIL_ARCHIVE_PUBLIC_URL`, the request's `Host`; any port, either
+  that is not one of the server's own (`KEEPIA_ARCHIVE_ALLOWED_HOSTS`, the host
+  of `KEEPIA_ARCHIVE_PUBLIC_URL`, the request's `Host`; any port, either
   scheme), or a `mailto:` or `tel:` URL. Every other one gets `data-` in
   front of its name, so the element is no longer a link: relative links,
   in-page anchors, links to the archive's own address, IP-address forms
@@ -901,20 +901,20 @@ seconds. Counts are shown only to admins (`GET /api/status`) and in
 The alert webhook comes from the environment only, never from the web UI, so
 users cannot make the server send requests to addresses of their choice.
 There is no block of private addresses: ntfy or Gotify on the LAN is a main
-use. The webhook URL and `MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION` are
+use. The webhook URL and `KEEPIA_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION` are
 secrets (topic names and tokens): they are never logged, and error messages
 name only the scheme and host. Redirects are not followed, so the
 authorization and the message never reach another host. A request times out
 after 10 seconds and at most 4 KiB of the answer is read.
 
-By default (`MAIL_ARCHIVE_NOTIFY_WEBHOOK_DETAIL=ids`) alerts name accounts,
+By default (`KEEPIA_ARCHIVE_NOTIFY_WEBHOOK_DETAIL=ids`) alerts name accounts,
 recurring fills and customer groups by their ID only: no account, owner or
 group names, no IMAP user names, no folder names and no error texts, and
 their title and text are fixed text with IDs. The JSON entries have no field
 that could hold such a value. Storage alerts carry the level, the group ID,
 the bytes used, the quota and the percentage, in every mode.
 
-With `MAIL_ARCHIVE_NOTIFY_WEBHOOK_DETAIL=full`, which sends customer data to
+With `KEEPIA_ARCHIVE_NOTIFY_WEBHOOK_DETAIL=full`, which sends customer data to
 the receiver and is meant for receivers the operator runs, alerts name the
 account, its owner, its ID and the last sync error (up to
 200 characters). For an error from the IMAP server or the network, that is a
@@ -953,7 +953,7 @@ nothing tells one group about another group's usage or state.
   breaks and control characters replaced, so a name cannot add a header or
   a line; a non-ASCII subject is encoded (RFC 2047). The queued jobs hold
   IDs, figures and levels only; the names are read when the mail is sent.
-- **The relay** comes from the environment only (`MAIL_ARCHIVE_MAIL_URL`):
+- **The relay** comes from the environment only (`KEEPIA_ARCHIVE_MAIL_URL`):
   no user input chooses a host or a sender. The connection is TLS from the
   start or upgraded with STARTTLS, which must be offered, with the relay's
   certificate verified; nothing is sent in the clear. Its password comes
@@ -986,14 +986,14 @@ addresses or UIDs.
 
 ## The secret key
 
-`MAIL_ARCHIVE_SECRET_KEY` encrypts the stored IMAP passwords and TOTP
+`KEEPIA_ARCHIVE_SECRET_KEY` encrypts the stored IMAP passwords and TOTP
 secrets. Keep it outside the archive backup's location or protect both
 equally. If it is lost, archived mail stays readable, but every account
 needs its password again and every user with TOTP a new setup. If it leaks
 together with the database, the IMAP passwords are exposed: change them at
 the providers.
 
-- **From a file.** `MAIL_ARCHIVE_SECRET_KEY_FILE` names a file that holds the
+- **From a file.** `KEEPIA_ARCHIVE_SECRET_KEY_FILE` names a file that holds the
   key, preferred over the variable; both set is refused. The file has the
   rules of the archive key file: refused when group or others have any
   permission on it, when it is not a regular file, and when it lies inside
@@ -1021,8 +1021,8 @@ the providers.
   ([Backups without Docker](../guide/operations#backups-without-docker)),
   and the write check of the data directory that `./ma migrate` runs as the
   container user (`prepare-data --check`) only the data directory and
-  `PATH`, `TZ`, `LANG` and `LC_ALL`. No `MAIL_ARCHIVE_*` or `PG*` variable of
-  the app reaches a child process, apart from what it is given on purpose;
+  `PATH`, `TZ`, `LANG` and `LC_ALL`. No `KEEPIA_ARCHIVE_*`, `MAIL_ARCHIVE_*` (the old names) or `PG*`
+  variable of the app reaches a child process, apart from what it is given on purpose;
   that includes the setup token.
 
 ## The archive key
@@ -1034,7 +1034,7 @@ instance: root on the host, the process memory, a modified binary, and the
 operator of a hosted instance, who holds the key. The format and the key
 hierarchy are in [Architecture](../development/architecture#encryption-at-rest).
 
-- **Hierarchy.** The archive key (`MAIL_ARCHIVE_ARCHIVE_KEY_FILE`, 32 random
+- **Hierarchy.** The archive key (`KEEPIA_ARCHIVE_ARCHIVE_KEY_FILE`, 32 random
   bytes) and every recovery key open the keyring; the keyring holds the data
   keys, and each file is encrypted under a key derived from a data key and a
   random salt. The keyring is kept twice, as `data/keys/keyring` and in the
@@ -1042,7 +1042,7 @@ hierarchy are in [Architecture](../development/architecture#encryption-at-rest).
   either one is safe in a backup and enough, with a key, to recover.
 - **Custody.** The operator holds one archive key per instance. The app
   never stores it and refuses it inside the data directory, when the group
-  or others can read its file, and when it equals `MAIL_ARCHIVE_SECRET_KEY`.
+  or others can read its file, and when it equals `KEEPIA_ARCHIVE_SECRET_KEY`.
   Keep the key file and the recovery key that `encryption keygen` prints
   apart from the data directory, its snapshots and its backups.
 - **New instances.** A new instance (no user, no message, no state of
@@ -1050,7 +1050,7 @@ hierarchy are in [Architecture](../development/architecture#encryption-at-rest).
   start, before anything is archived, and refuses to start without an
   archive key (exit code 4). Without a keyring file it creates one with a
   slot for the configured archive key alone; add a recovery key with
-  `./ma encryption add-key`. `MAIL_ARCHIVE_ENCRYPTION_AT_SETUP=off` starts a
+  `./ma encryption add-key`. `KEEPIA_ARCHIVE_ENCRYPTION_AT_SETUP=off` starts a
   new instance without encryption: for test instances only, never for a
   customer's; `./ma status` says so.
 - **Loss.** Without the archive key and every recovery key, no encrypted
@@ -1079,7 +1079,7 @@ hierarchy are in [Architecture](../development/architecture#encryption-at-rest).
 ## The attestation key
 
 Attestations are signed with an Ed25519 key, by default
-`MAIL_ARCHIVE_DATA_DIR/attest/signing.key` (mode 0600; a key file that the
+`KEEPIA_ARCHIVE_DATA_DIR/attest/signing.key` (mode 0600; a key file that the
 group or others can read is refused). Its public key is in
 `attest/signing.pub`.
 
@@ -1090,7 +1090,7 @@ host. The evidence therefore rests on copies kept elsewhere, not on the key
 staying secret: copy `attest/signing.pub` off the host once, and
 `attest/attestations.jsonl` (ideally with `attest/leaves/`) regularly, to a
 place the archive host cannot write. To keep the key out of the data
-directory, point `MAIL_ARCHIVE_ATTEST_KEY_FILE` at a separate mount.
+directory, point `KEEPIA_ARCHIVE_ATTEST_KEY_FILE` at a separate mount.
 
 If the key is lost or may be known to others, run
 `./ma attest keygen --rotate`: older attestations stay trusted through

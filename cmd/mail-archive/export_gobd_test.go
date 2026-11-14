@@ -29,9 +29,9 @@ import (
 func gobdCLI(t *testing.T) *gobdtest.Fixture {
 	t.Helper()
 	f := gobdtest.New(t)
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", f.URL)
-	t.Setenv("MAIL_ARCHIVE_DATA_DIR", f.DataDir)
-	t.Setenv("MAIL_ARCHIVE_LOG_LEVEL", "error")
+	t.Setenv(config.EnvDatabaseURL, f.URL)
+	t.Setenv(config.EnvDataDir, f.DataDir)
+	t.Setenv(config.EnvLogLevel, "error")
 	return f
 }
 

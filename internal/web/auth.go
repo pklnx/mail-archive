@@ -65,7 +65,7 @@ func userID(r *http.Request) int64 {
 
 // secureRequest reports whether the browser reached the server over HTTPS,
 // directly or through a reverse proxy or `tailscale serve`. X-Forwarded-Proto
-// counts only from a trusted proxy (MAIL_ARCHIVE_TRUSTED_PROXIES) or from
+// counts only from a trusted proxy (KEEPIA_ARCHIVE_TRUSTED_PROXIES) or from
 // loopback, where `tailscale serve` and a proxy on the same host connect
 // from: anybody else could set it.
 func (s *Server) secureRequest(r *http.Request) bool {
@@ -84,7 +84,7 @@ func (s *Server) secureRequest(r *http.Request) bool {
 // that is neither loopback nor a trusted proxy: the header does not count
 // (secureRequest), so the session cookie is not __Host-/Secure and no HSTS
 // is sent. Behind a proxy that does not connect from loopback, such as one
-// on the host of a Docker Compose installation, MAIL_ARCHIVE_TRUSTED_PROXIES
+// on the host of a Docker Compose installation, KEEPIA_ARCHIVE_TRUSTED_PROXIES
 // must name it. Only the peer is logged; headers come from the client.
 func (s *Server) warnUntrustedForwardedProto(r *http.Request) {
 	if s.forwardedProtoWarned.Load() || r.TLS != nil || r.Header.Get("X-Forwarded-Proto") != "https" {

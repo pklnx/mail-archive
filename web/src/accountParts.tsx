@@ -417,7 +417,7 @@ const guideURL = "https://pklnx.github.io/mail-archive/guide/journaling";
 export function NewAccount({ admin, smtpOn, login = true, onCancel, onCreated, onSaved, onFill }: {
   admin: boolean;
   smtpOn: boolean;
-  /** Mail servers log in (MAIL_ARCHIVE_SMTP_AUTH=required, the default): the setup lines log in. */
+  /** Mail servers log in (KEEPIA_ARCHIVE_SMTP_AUTH=required, the default): the setup lines log in. */
   login?: boolean;
   onCancel: () => void;
   /** An smtp account exists; its form still shows the mail server setup. */
@@ -492,7 +492,7 @@ export function SMTPAccountForm({ account, section = false, locked, admin, smtpO
   locked?: boolean;
   admin: boolean;
   smtpOn: boolean;
-  /** Mail servers log in (MAIL_ARCHIVE_SMTP_AUTH=required, the default): the setup lines log in. */
+  /** Mail servers log in (KEEPIA_ARCHIVE_SMTP_AUTH=required, the default): the setup lines log in. */
   login?: boolean;
   onCancel: () => void;
   onCreated?: () => void;
@@ -613,7 +613,7 @@ function NewAccountSetup({ name, addresses, login }: { name: string; addresses: 
 /**
  * What Postfix needs to send an smtp account its copies, with Carbon's copy
  * button. Inside a section named for it, it is no region of its own. login:
- * mail servers log in (MAIL_ARCHIVE_SMTP_AUTH=required), as the account's
+ * mail servers log in (KEEPIA_ARCHIVE_SMTP_AUTH=required), as the account's
  * user name (a placeholder while it is not known); the secret is always a
  * placeholder, since it is shown only once.
  */

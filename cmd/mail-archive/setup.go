@@ -53,7 +53,7 @@ See ` + setupDoc + `.`,
 // encryptionAtSetup is step 3b of the start of serve and worker (#396,
 // revision 1): on a new instance (store.FreshInstance) it turns encryption
 // at rest on before anything is archived (archive.EnableAtSetup), or
-// refuses the start without an archive key. MAIL_ARCHIVE_ENCRYPTION_AT_SETUP
+// refuses the start without an archive key. KEEPIA_ARCHIVE_ENCRYPTION_AT_SETUP
 // =off skips it, for test instances only. On an instance that is not new
 // it does nothing: the start-up checks of encryption at rest come when the
 // process opens its store (archive.OpenAtRest).

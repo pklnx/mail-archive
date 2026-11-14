@@ -18,7 +18,7 @@ import (
 )
 
 // Two-factor authentication with TOTP. Admins always need it; with
-// MAIL_ARCHIVE_REQUIRE_2FA everybody does. Users who need it but have not
+// KEEPIA_ARCHIVE_REQUIRE_2FA everybody does. Users who need it but have not
 // set it up yet can only use the setup endpoints (see authenticate). Users
 // who turned it on voluntarily are asked for a code at every login too.
 
@@ -53,7 +53,7 @@ func twoFactorSetupPathAllowed(method, path string) bool {
 
 func (s *Server) twoFactorReady(w http.ResponseWriter, r *http.Request) bool {
 	if s.sealer == nil || len(s.secretKey) == 0 {
-		s.fail(w, r, http.StatusServiceUnavailable, "two-factor authentication needs MAIL_ARCHIVE_SECRET_KEY on the server", nil)
+		s.fail(w, r, http.StatusServiceUnavailable, "two-factor authentication needs KEEPIA_ARCHIVE_SECRET_KEY on the server", nil)
 		return false
 	}
 	return true

@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/pklnx/mail-archive/internal/attest"
+	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/testwait"
 )
 
@@ -206,7 +207,7 @@ func TestAttestCheckAndVerify(t *testing.T) {
 		!strings.Contains(out, "no problems") {
 		t.Fatalf("check --file: %v\n%s", err, out)
 	}
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", "postgres://nobody@127.0.0.1:1/none")
+	t.Setenv(config.EnvDatabaseURL, "postgres://nobody@127.0.0.1:1/none")
 	if out, err := runAttestCmd(t, "check", "--offline", "--file", copyFile); err != nil ||
 		!strings.Contains(out, "checked 1 attestation(s) offline: no problems") {
 		t.Fatalf("check --offline: %v\n%s", err, out)
@@ -215,7 +216,7 @@ func TestAttestCheckAndVerify(t *testing.T) {
 	if out, err := runAttestCmd(t, "check", "--offline", "--file", copyFile); exitCodeOf(err) != 1 || !strings.Contains(out, "missing") {
 		t.Fatalf("check --offline without leaves: %v\n%s", err, out)
 	}
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", s.url)
+	t.Setenv(config.EnvDatabaseURL, s.url)
 
 	// Another key than the one that signed: findings, exit 1.
 	otherDir := t.TempDir()
