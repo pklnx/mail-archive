@@ -23,7 +23,7 @@ const containerUID, containerGID = 65532, 65532
 // directory the process cannot write to.
 const exitNotWritable = 3
 
-const linuxHostsURL = "https://pklnx.github.io/mail-archive/guide/getting-started#linux-hosts"
+const linuxHostsURL = "https://keepia.github.io/archive/guide/getting-started#linux-hosts"
 
 func newPrepareDataCmd() *cobra.Command {
 	var check bool

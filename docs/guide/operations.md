@@ -694,7 +694,7 @@ version you skip: they list database migrations and manual steps. Also check
 that holds your `mail-archive/` directory:
 
 ```sh
-curl -fsSL https://github.com/pklnx/mail-archive/releases/latest/download/mail-archive.tar.gz | tar -xz
+curl -fsSL https://github.com/keepia/archive/releases/latest/download/mail-archive.tar.gz | tar -xz
 cd mail-archive
 ./ma migrate              # apply new database migrations with the new image
 docker compose up -d web  # restart the web server with the new image
@@ -732,7 +732,7 @@ starts only `postgres`.
 The new bundle replaces `docker-compose.yml`, `docker-compose.smtp.yml`,
 `./ma`, `.env.example` and `README.txt` and keeps `.env` and `data/`. Compare `.env.example` with your
 `.env` for new settings. A specific version instead of the latest:
-`https://github.com/pklnx/mail-archive/releases/download/v1.0.0/mail-archive.tar.gz`.
+`https://github.com/keepia/archive/releases/download/v1.0.0/mail-archive.tar.gz`.
 
 A `KEEPIA_ARCHIVE_IMAGE` line in the kept `.env` (see [Versions](#versions))
 overrides the new bundle's image: the web server and the CLI (`./ma`) go on
@@ -740,12 +740,12 @@ using the image it names, and `./ma --version` shows that image's version.
 Check it before `./ma migrate`:
 
 - Keep the line if it names a newer build of your own than the new release.
-- Otherwise, if it names an `X.Y` tag of `ghcr.io/pklnx/mail-archive`, set it to the
-  new release's `X.Y` tag, for example `ghcr.io/pklnx/mail-archive:1.2`, and
+- Otherwise, if it names an `X.Y` tag of `ghcr.io/keepia/archive`, set it to the
+  new release's `X.Y` tag, for example `ghcr.io/keepia/archive:1.2`, and
   run `docker compose pull web` (it restarts nothing; migrate before starting
   web): a tag that is already on the machine is not pulled again.
 - In any other case, remove the line or set it to the new release's exact
-  image, for example `ghcr.io/pklnx/mail-archive:X.Y.Z`.
+  image, for example `ghcr.io/keepia/archive:X.Y.Z`.
 
 If you ran the steps above with the line in place, change it as described
 and repeat the upgrade from `./ma migrate` on, with the manual steps from
@@ -942,7 +942,7 @@ read the release notes: they list database migrations and breaking changes
 under their own headings.
 
 Releases are tagged `v1.0.0` in the repository. Each release publishes
-`ghcr.io/pklnx/mail-archive` for `linux/amd64` and `linux/arm64` with four
+`ghcr.io/keepia/archive` for `linux/amd64` and `linux/arm64` with four
 tags:
 
 | Tag | Points to | Brings |
@@ -964,7 +964,10 @@ breaking changes without their upgrade steps. If a tool updates the image anyway
 version or an `X.Y` tag such as `1.4`, which gets patch releases only. The
 images carry a provenance attestation and an SBOM.
 
-The tags and images of releases before 1.0.0 stay available.
+The tags and images of releases before 1.0.0 stay available. Releases up to
+1.6.1 were published as `ghcr.io/pklnx/mail-archive`; their tags stay there,
+but that image gets no newer releases, so change a `KEEPIA_ARCHIVE_IMAGE` or
+`MAIL_ARCHIVE_IMAGE` line in `.env` that names it (see [Upgrades](#upgrades)).
 
 Pull requests that change the database schema carry the label
 `db-migration`. Back up the database before you upgrade past one of them.
@@ -974,10 +977,10 @@ Pull requests that change the database schema carry the label
 ### One-time steps
 
 Upgrading from a version before 1.0.0: the
-[release notes](https://github.com/pklnx/mail-archive/releases) of the
+[release notes](https://github.com/keepia/archive/releases) of the
 releases after yours up to 1.0.0 name their breaking changes and database
 migrations; the one-time steps of those versions are in the
-[docs of version 1.0.0](https://github.com/pklnx/mail-archive/blob/v1.0.0/docs/guide/operations.md#one-time-steps).
+[docs of version 1.0.0](https://github.com/keepia/archive/blob/v1.0.0/docs/guide/operations.md#one-time-steps).
 
 | When upgrading from | Run |
 |---|---|

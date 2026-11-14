@@ -6,12 +6,12 @@
 #
 # Usage: scripts/release-bundle.sh VERSION OUTDIR [IMAGE]
 #   VERSION  X.Y.Z, for example 1.0.0
-#   IMAGE    default ghcr.io/pklnx/mail-archive
+#   IMAGE    default ghcr.io/keepia/archive
 set -eu
 
 version=${1:?usage: release-bundle.sh VERSION OUTDIR [IMAGE]}
 out=${2:?usage: release-bundle.sh VERSION OUTDIR [IMAGE]}
-image=${3:-ghcr.io/pklnx/mail-archive}
+image=${3:-ghcr.io/keepia/archive}
 # The case rejects newlines, which grep would treat as separate lines.
 case $version in
 '' | *[!0-9.]*) bad=1 ;;
@@ -33,7 +33,7 @@ mkdir "$dir"
 # The services pull the released image; the build sections go. A build
 # section is the "build:" line of a service and the lines indented deeper.
 {
-	echo "# mail-archive $version: https://github.com/pklnx/mail-archive/releases/tag/v$version"
+	echo "# mail-archive $version: https://github.com/keepia/archive/releases/tag/v$version"
 	echo "# Upgrade: extract a newer release's mail-archive.tar.gz in the directory"
 	echo "# above this one (it keeps .env and data/), then ./ma migrate and"
 	echo "# docker compose up -d web (web worker with the worker profile on)."
@@ -63,8 +63,8 @@ cat > "$dir/README.txt" <<EOF
 mail-archive $version
 
 Image:   $image:$version (linux/amd64, linux/arm64)
-Docs:    https://pklnx.github.io/mail-archive/
-Release: https://github.com/pklnx/mail-archive/releases/tag/v$version
+Docs:    https://keepia.github.io/archive/
+Release: https://github.com/keepia/archive/releases/tag/v$version
 
 First start:
   cp .env.example .env     # set POSTGRES_PASSWORD and KEEPIA_ARCHIVE_SECRET_KEY

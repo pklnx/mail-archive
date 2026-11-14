@@ -66,7 +66,7 @@ info:
     identifier: MIT
 externalDocs:
   description: Documentation
-  url: https://pklnx.github.io/mail-archive/reference/api
+  url: https://keepia.github.io/archive/reference/api
 
 servers:
   - url: http://localhost:8080

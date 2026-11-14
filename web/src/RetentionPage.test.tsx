@@ -359,7 +359,7 @@ describe("RetentionPage", () => {
     expect(tabs[0]!.className).toContain("cds--tabs__nav-item");
     // One helper line, with the guide for the rest.
     expect(screen.getByText(s.rulesHelp, { exact: false })).toBeTruthy();
-    expect(screen.getByRole("link", { name: s.guideLink }).getAttribute("href")).toBe("https://pklnx.github.io/mail-archive/guide/retention#rules");
+    expect(screen.getByRole("link", { name: s.guideLink }).getAttribute("href")).toBe("https://keepia.github.io/archive/guide/retention#rules");
     expect(requests.some((r) => r.url.startsWith("/api/legal-holds") || r.url.startsWith("/api/retention/runs"))).toBe(false);
     const length = window.history.length;
     fireEvent.click(tab(t.retentionHoldsTab));

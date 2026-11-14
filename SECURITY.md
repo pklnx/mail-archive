@@ -3,7 +3,7 @@
 ## Reporting a vulnerability
 
 Please report security problems **privately** through
-[GitHub's private vulnerability reporting](https://github.com/pklnx/mail-archive/security/advisories/new).
+[GitHub's private vulnerability reporting](https://github.com/keepia/archive/security/advisories/new).
 Do not open a public issue.
 
 Include what you found, how to reproduce it and what an attacker could do with it.
@@ -37,7 +37,7 @@ In scope, for example:
 Out of scope:
 
 - Setups that go against the
-  [security documentation](https://pklnx.github.io/mail-archive/reference/security),
+  [security documentation](https://keepia.github.io/archive/reference/security),
   for example exposing the web UI to the internet or running it without HTTPS
 - Unencrypted archive data on disk (documented: use an encrypted disk)
 - Vulnerabilities in dependencies without a demonstrated impact on this project

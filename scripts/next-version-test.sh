@@ -340,27 +340,33 @@ if out=$(sh "$bundle_script" 99.0.0 "$tmp/dist" 2>&1); then
 	passed=$((passed + 1))
 	contains "release-bundle: README names the version" "mail-archive 99.0.0" \
 		"$(tar -xzOf "$tmp/dist/mail-archive.tar.gz" mail-archive/README.txt)"
+	contains "release-bundle: README names the docs site" "Docs:    https://keepia.github.io/archive/" \
+		"$(tar -xzOf "$tmp/dist/mail-archive.tar.gz" mail-archive/README.txt)"
+	contains "release-bundle: default image" "\${KEEPIA_ARCHIVE_IMAGE:-\${MAIL_ARCHIVE_IMAGE:-ghcr.io/keepia/archive:99.0.0}}" \
+		"$(tar -xzOf "$tmp/dist/mail-archive.tar.gz" mail-archive/docker-compose.yml)"
 else
 	fail "release-bundle: accepts 99.0.0" "$out"
 fi
 
 # --- release-notes.sh -----------------------------------------------------
 
-if out=$(sh "$notes_script" 1.0.0 ghcr.io/pklnx/mail-archive "" 2>&1); then
+if out=$(sh "$notes_script" 1.0.0 ghcr.io/keepia/archive "" 2>&1); then
 	contains "release-notes: first, image line" \
-		"\`ghcr.io/pklnx/mail-archive:1.0.0\` (linux/amd64, linux/arm64), also tagged \`1.0\`, \`1\` and \`latest\`." "$out"
+		"\`ghcr.io/keepia/archive:1.0.0\` (linux/amd64, linux/arm64), also tagged \`1.0\`, \`1\` and \`latest\`." "$out"
 	contains "release-notes: first, updater paragraph" "\`26.10\` stays on \`26.10-11\`" "$out"
 	contains "release-notes: first, trusted proxies" "MAIL_ARCHIVE_TRUSTED_PROXIES" "$out"
 else
 	fail "release-notes: first release" "$out"
 fi
-if out=$(sh "$notes_script" 1.0.1 ghcr.io/pklnx/mail-archive 1.0.0 2>&1); then
+if out=$(sh "$notes_script" 1.0.1 ghcr.io/keepia/archive 1.0.0 2>&1); then
 	lacks "release-notes: later, no updater paragraph" "26.10" "$out"
 	contains "release-notes: later, upgrade paragraph" "./ma migrate" "$out"
+	contains "release-notes: getting started on the docs site" "(https://keepia.github.io/archive/guide/getting-started)" "$out"
+	contains "release-notes: upgrades on the docs site" "(https://keepia.github.io/archive/guide/operations#upgrades)" "$out"
 else
 	fail "release-notes: later release" "$out"
 fi
-if out=$(sh "$notes_script" 1.0.0 ghcr.io/pklnx/mail-archive 2>&1); then
+if out=$(sh "$notes_script" 1.0.0 ghcr.io/keepia/archive 2>&1); then
 	fail "release-notes: two arguments" "accepted: $out"
 else
 	contains "release-notes: two arguments" "usage" "$out"

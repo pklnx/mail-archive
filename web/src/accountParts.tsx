@@ -408,7 +408,7 @@ export function AccountForm({ account, section = false, locked, onCancel, onSave
   );
 }
 
-const guideURL = "https://pklnx.github.io/mail-archive/guide/journaling";
+const guideURL = "https://keepia.github.io/archive/guide/journaling";
 
 /**
  * The "Add account" form: admins first choose where the mail comes from,
